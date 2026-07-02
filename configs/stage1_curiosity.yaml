@@ -1,0 +1,46 @@
+# Stage 1 · Curiosity + Bounded Replay
+# PPO baseline + RND intrinsic reward + three-tier BoundedReplayBuffer.
+# 在 Stage 0 PPO baseline 上叠加 RND 好奇心奖励 + 有界三层回放缓冲。
+
+stage: 1
+name: "stage1_curiosity"
+
+# --- Stage 1 sub-block: intrinsic motivation ---
+intrinsic:
+  # Random Network Distillation configuration.
+  embed_dim: 128          # target/predictor output dim
+  lr: 1.0e-4              # predictor Adam LR
+  reward_clip: 5.0        # clamp normalized reward to ±clip
+  reward_coef: 0.1        # weight when adding to extrinsic reward
+  update_every_steps: 1   # RND predictor SGD every N env steps
+
+# --- Stage 1 sub-block: replay buffer (bounded, 3-tier) ---
+replay:
+  # Total capacity across tiers is (hot + warm + cold_shards * shard_size).
+  # Sample from hot+warm only; cold is archive.
+  hot_capacity: 4096
+  warm_capacity: 32768
+  cold_max_shards: 8
+  cold_shard_size: 4096
+  # Prioritized experience replay
+  per_alpha: 0.6
+  min_size_to_sample: 1024   # don't sample until buffer has this many transitions
+  sample_every_steps: 4      # off-policy update every N env steps
+  batch_size_offpolicy: 128  # batch size for the value-model update
+  archive_subdir: "replay"   # under DEVAGI_DATA_DIR
+
+# --- Bounded coverage metric (Axiom 1) ---
+coverage:
+  # Track state-visitation entropy using an FP-hash bucket count.
+  # Bucket count fixed; no per-run growth.
+  num_buckets: 4096
+  log_every_steps: 5000
+
+# --- PPO hyperparams (inherit from Stage 0 style) ---
+train:
+  ppo_clip: 0.2
+  ppo_epochs: 4
+  entropy_coef: 0.01
+  value_coef: 0.5
+  gamma: 0.99
+  gae_lambda: 0.95

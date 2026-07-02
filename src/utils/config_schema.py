@@ -133,6 +133,11 @@ class TopLevelSchema:
     train: TrainSchema
     monitor: MonitorSchema
     name: str = ""
+    # Stage 1+ optional sub-blocks. Validated permissively — deep validation
+    # happens inside the trainer once the modules are wired.
+    intrinsic: dict | None = None
+    replay: dict | None = None
+    coverage: dict | None = None
 
     def _validate(self) -> None:
         if not self.preset:

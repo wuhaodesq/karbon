@@ -1,19 +1,24 @@
-"""Stage 0 baseline trainer.
+"""devagi trainer.
 
-Minimal PPO on MiniGrid. Not tuned for performance — this exists to validate:
+Stage 0 baseline: PPO on MiniGrid to validate the skeleton.
+Stage 1 (this file also): PPO + RND intrinsic reward + Bounded 3-tier Replay.
 
-- Preset system (local_smoke / cloud_24g / home_64g)
-- Platform abstraction (device/paths/memory_probe)
-- Monitoring stack (memory_watcher, longevity_test, health_check)
-- Checkpoint schema
-- End-to-end wiring so subsequent stages can plug in
+Backward-compat: Stage 0 configs skip Stage 1 blocks; behaviour is identical
+to the earlier Stage-0-only trainer.
 
-用于验证 preset / 平台层 / 监控栈 / checkpoint schema 的最简 PPO baseline。
+Bounded design axioms enforced throughout — see DESIGN_PRINCIPLES.md.
 
 Usage:
+    # Stage 0
     python -m src.train --stage 0 --preset local_smoke --smoke-only
-    python -m src.train --stage 0 --preset cloud_24g
-    python -m src.train --stage 0 --preset cloud_24g --resume checkpoints/ckpt_stage0_000010000.pt
+    python -m src.train --stage 0 --preset cloud_5090
+
+    # Stage 1 (adds RND + Bounded Replay)
+    python -m src.train --stage 1 --preset cloud_5090
+
+    # Resume from any ckpt
+    python -m src.train --stage 1 --preset cloud_5090 \
+        --resume checkpoints/ckpt_stage0_003000000.pt
 """
 
 from __future__ import annotations
@@ -31,8 +36,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from src.envs import MiniGridWrapper
+from src.intrinsic import RND, RNDConfig
+from src.memory import BoundedReplayBuffer, ReplayBudget, Transition
 from src.monitoring import HealthChecker, MemoryWatcher, WatcherConfig
-from src.platform import get_device, get_device_info, stage_ckpt_path
+from src.platform import data_dir, get_device, get_device_info, stage_ckpt_path
 from src.utils import (
     load_ckpt,
     load_config,
@@ -54,7 +61,8 @@ logger = logging.getLogger(__name__)
 class ActorCritic(nn.Module):
     """Tiny CNN actor-critic for MiniGrid image obs.
 
-    Not the point of Stage 0 — just enough to close the training loop.
+    Same architecture used from Stage 0 onward. Stage 2 will swap in the
+    Hybrid backbone (TTT-Linear + SWA + FFN) via a config flag.
     """
 
     def __init__(self, obs_shape: tuple[int, ...], num_actions: int, hidden: int = 64) -> None:
@@ -83,7 +91,7 @@ class ActorCritic(nn.Module):
 
 
 # =====================================================================
-# Rollout buffer (bounded, capacity-declared) — implements BoundedComponent
+# Rollout buffer (on-policy, Stage 0+)
 # =====================================================================
 
 
@@ -158,6 +166,78 @@ class RolloutBuffer:
 
 
 # =====================================================================
+# Coverage tracker (Stage 1) — bounded FP-hash bucket count
+# =====================================================================
+
+
+class BoundedCoverage:
+    """Track state-visitation entropy using a fixed number of hash buckets.
+
+    - `capacity` = num_buckets (fixed at construction; Axiom 1).
+    - `__len__` = number of buckets *visited so far* (grows toward capacity).
+    - `coverage_ratio` = |visited| / capacity.
+
+    This is intentionally an approximation — a bucket collision inflates the
+    apparent overlap between distinct states. For a 5×5 MiniGrid with ~50
+    unique obs, 4096 buckets makes collisions negligible.
+
+    有界状态覆盖率跟踪：固定 hash buckets 数（Axiom 1），
+    只记 bucket 是否被访问过。approx entropy = visited / total_buckets。
+    """
+
+    def __init__(self, num_buckets: int = 4096) -> None:
+        self._capacity = int(num_buckets)
+        if self._capacity <= 0:
+            raise ValueError("num_buckets must be positive")
+        # Bit-vector: 1 bit per bucket → fixed memory (Axiom 1).
+        self._seen = np.zeros(self._capacity, dtype=bool)
+        self._n_visits = 0
+        self._n_unique = 0
+
+    @property
+    def capacity(self) -> int:
+        return self._capacity
+
+    def __len__(self) -> int:
+        return self._n_unique
+
+    def touch(self, obs: np.ndarray) -> None:
+        """Register one visit. Constant-time; no growth."""
+        # Fast hash: xor-bytes reduction. Numpy view + rolling xor is cheap.
+        h = int(hash(obs.tobytes())) & (self._capacity - 1)
+        if not self._seen[h]:
+            self._seen[h] = True
+            self._n_unique += 1
+        self._n_visits += 1
+
+    def coverage_ratio(self) -> float:
+        return self._n_unique / self._capacity
+
+    def summary(self) -> dict:
+        return {
+            "visits": self._n_visits,
+            "unique_buckets": self._n_unique,
+            "capacity": self._capacity,
+            "coverage_ratio": self.coverage_ratio(),
+        }
+
+    def state_dict(self) -> dict:
+        return {
+            "capacity": self._capacity,
+            "seen": self._seen.copy(),
+            "n_visits": self._n_visits,
+            "n_unique": self._n_unique,
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        if state["capacity"] != self._capacity:
+            raise ValueError("coverage capacity mismatch")
+        self._seen = np.asarray(state["seen"], dtype=bool).copy()
+        self._n_visits = int(state["n_visits"])
+        self._n_unique = int(state["n_unique"])
+
+
+# =====================================================================
 # GAE
 # =====================================================================
 
@@ -202,7 +282,9 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     setup_logging("INFO")
     device_info = get_device_info(config.get("device_preferred"))
     device = get_device(config.get("device_preferred"))
-    logger.info("Preset: %s  device: %s (%s)", config.get("preset"), device_info.kind, device_info.name)
+    stage = int(config.get("stage", 0))
+    logger.info("Preset: %s  device: %s (%s)  stage: %d",
+                config.get("preset"), device_info.kind, device_info.name, stage)
 
     set_seed(42)
 
@@ -240,24 +322,73 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     if smoke_only:
         total_steps = min(total_steps, 200)
     run_id = make_run_id()
-    log_dir = open_stage_log_dir(config.get("stage", 0), run_id)
+    log_dir = open_stage_log_dir(stage, run_id)
     watcher = MemoryWatcher(
         WatcherConfig(
             sample_interval_s=float(monitor_cfg.get("sample_interval_s", 5.0)),
             slope_alarm_gb_per_hour=float(monitor_cfg.get("slope_alarm_gb_per_hour", 0.2)),
             empty_cache_every_steps=int(monitor_cfg.get("empty_cache_every_steps", 10_000)),
             csv_path=log_dir / "memory.csv",
+            warmup_seconds=float(monitor_cfg.get("warmup_seconds", 300.0)),
         )
     )
     logger.info("Logs → %s", log_dir)
+
+    # --- Stage 1: intrinsic motivation + coverage + replay ---
+    intrinsic_cfg = config.get("intrinsic")
+    replay_cfg = config.get("replay")
+    coverage_cfg = config.get("coverage")
+
+    rnd: RND | None = None
+    replay: BoundedReplayBuffer | None = None
+    coverage: BoundedCoverage | None = None
+
+    if stage >= 1 and intrinsic_cfg:
+        rnd = RND(
+            obs_shape,
+            RNDConfig(
+                embed_dim=int(intrinsic_cfg.get("embed_dim", 128)),
+                lr=float(intrinsic_cfg.get("lr", 1e-4)),
+                reward_clip=float(intrinsic_cfg.get("reward_clip", 5.0)),
+            ),
+        ).to(device)
+        logger.info("RND enabled (embed_dim=%d, reward_coef=%s)",
+                    rnd.config.embed_dim, intrinsic_cfg.get("reward_coef", 0.1))
+
+    if stage >= 1 and replay_cfg:
+        replay = BoundedReplayBuffer(
+            budget=ReplayBudget(
+                hot_capacity=int(replay_cfg.get("hot_capacity", 4096)),
+                warm_capacity=int(replay_cfg.get("warm_capacity", 32768)),
+                cold_max_shards=int(replay_cfg.get("cold_max_shards", 8)),
+                cold_shard_size=int(replay_cfg.get("cold_shard_size", 4096)),
+            ),
+            obs_shape=obs_shape,
+            device=device,
+            archive_dir=data_dir() / str(replay_cfg.get("archive_subdir", "replay")),
+        )
+        health.register("bounded_replay", replay)
+        logger.info("BoundedReplayBuffer enabled (capacity=%d)", replay.capacity)
+
+    if stage >= 1 and coverage_cfg:
+        coverage = BoundedCoverage(num_buckets=int(coverage_cfg.get("num_buckets", 4096)))
+        health.register("coverage", coverage)
+        logger.info("BoundedCoverage enabled (buckets=%d)", coverage.capacity)
 
     state = TrainState(step=0, episode=0)
 
     if resume is not None:
         payload = load_ckpt(resume)
-        model.load_state_dict(payload["model_state"])
+        try:
+            model.load_state_dict(payload["model_state"])
+        except RuntimeError as exc:
+            # Cross-stage resume with different model shape: warn + skip.
+            logger.warning("Model state mismatch on resume (%s); starting model fresh.", exc)
         if payload.get("optim_state"):
-            optimizer.load_state_dict(payload["optim_state"])
+            try:
+                optimizer.load_state_dict(payload["optim_state"])
+            except (ValueError, RuntimeError) as exc:
+                logger.warning("Optimizer state mismatch on resume (%s); starting fresh.", exc)
         state.step = int(payload.get("step", 0))
         logger.info("Resumed from %s at step %d", resume, state.step)
 
@@ -271,13 +402,27 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     log_every = int(train_cfg.get("log_every_steps", 50))
     ckpt_every = int(train_cfg.get("ckpt_every_steps", 200))
 
+    # Stage 1 knobs
+    intrinsic_coef = float(intrinsic_cfg.get("reward_coef", 0.1)) if intrinsic_cfg else 0.0
+    rnd_update_every = int(intrinsic_cfg.get("update_every_steps", 1)) if intrinsic_cfg else 0
+    coverage_log_every = int(coverage_cfg.get("log_every_steps", 5000)) if coverage_cfg else 0
+    replay_sample_every = int(replay_cfg.get("sample_every_steps", 4)) if replay_cfg else 0
+    replay_min_size = int(replay_cfg.get("min_size_to_sample", 1024)) if replay_cfg else 0
+    replay_batch_size = int(replay_cfg.get("batch_size_offpolicy", 128)) if replay_cfg else 0
+    per_alpha = float(replay_cfg.get("per_alpha", 0.6)) if replay_cfg else 0.6
+
     t0 = time.time()
     logger.info(
-        "Starting Stage %s baseline: total_steps=%d smoke=%s",
-        config.get("stage", 0),
+        "Starting Stage %s: total_steps=%d smoke=%s intrinsic=%s replay=%s coverage=%s",
+        stage,
         total_steps,
         smoke_only,
+        rnd is not None,
+        replay is not None,
+        coverage is not None,
     )
+
+    last_coverage_log_step = 0
 
     # ---- Main loop
     while state.step < total_steps:
@@ -293,14 +438,43 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 logprob = dist.log_prob(action)
 
             step_out = env.step(int(action.item()))
+            extrinsic_r = step_out.reward
+            total_r = extrinsic_r
+
+            # --- Stage 1: intrinsic reward from RND ---
+            if rnd is not None:
+                with torch.no_grad():
+                    int_r = float(rnd.intrinsic_reward(obs_t).item())
+                total_r = extrinsic_r + intrinsic_coef * int_r
+
             buffer.add(
                 obs=obs,
                 action=int(action.item()),
                 logprob=float(logprob.item()),
                 value=float(value.item()),
-                reward=step_out.reward,
+                reward=total_r,
                 done=step_out.terminated or step_out.truncated,
             )
+
+            # --- Stage 1: coverage tracking ---
+            if coverage is not None:
+                coverage.touch(obs)
+
+            # --- Stage 1: push transition to bounded replay ---
+            if replay is not None:
+                replay.add(Transition(
+                    obs=obs,
+                    action=int(action.item()),
+                    reward=total_r,
+                    next_obs=step_out.obs,
+                    done=step_out.terminated or step_out.truncated,
+                    priority=1.0 + abs(int_r) if rnd is not None else 1.0,
+                ))
+
+            # --- Stage 1: RND predictor SGD ---
+            if rnd is not None and rnd_update_every > 0 and state.step % rnd_update_every == 0:
+                rnd.update(obs_t)
+
             obs = step_out.obs
             state.step += 1
             watcher.tick(step=state.step)
@@ -341,30 +515,80 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
             optimizer.step()
 
+        # --- Stage 1: off-policy value refresh from replay (small, extra grad) ---
+        if (
+            replay is not None
+            and len(replay) >= replay_min_size
+            and state.step % replay_sample_every < rollout_capacity
+        ):
+            try:
+                sample, indices, weights = replay.sample_prioritized(
+                    replay_batch_size, alpha=per_alpha
+                )
+                _, offp_values = model(sample["obs"])
+                # TD target with intrinsic-augmented reward + bootstrapped next value
+                with torch.no_grad():
+                    _, next_v = model(sample["next_obs"])
+                    td_target = sample["reward"] + gamma * next_v * (1.0 - sample["done"])
+                w = torch.as_tensor(weights, dtype=torch.float32, device=device)
+                td_loss = (w * (offp_values - td_target).pow(2)).mean()
+                optimizer.zero_grad(set_to_none=True)
+                td_loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+                optimizer.step()
+                # Update priorities to |TD error|
+                new_prios = (offp_values - td_target).detach().abs().cpu().numpy() + 1e-6
+                replay.update_hot_priorities(indices, new_prios)
+            except (ValueError, IndexError) as exc:
+                # e.g., hot tier still tiny; just skip this cycle
+                logger.debug("replay sample skipped: %s", exc)
+
         # Health sweep after each rollout+update cycle
         health.sweep()
 
         if state.step % log_every < rollout_capacity:
             summary = env.summary()
             mem = watcher.snapshot_summary()
+            extras: list[str] = []
+            if coverage is not None:
+                extras.append(f"cov={coverage.coverage_ratio() * 100:.1f}%")
+            if replay is not None:
+                extras.append(f"replay={len(replay)}/{replay.capacity}")
             logger.info(
-                "step=%d ep=%d mean_ret=%.3f loss=%.4f mem_used=%.2fGB slope=%s",
+                "step=%d ep=%d mean_ret=%.3f loss=%.4f mem_used=%.2fGB slope=%s %s",
                 state.step,
                 summary["episodes"],
                 summary["mean_return"],
                 float(loss.item()),
                 (mem.get("used_bytes", 0) or 0) / 1024**3,
                 mem.get("slope_gb_per_hour"),
+                " ".join(extras),
             )
 
+        # Periodic coverage snapshot (Stage 1)
+        if (
+            coverage is not None
+            and coverage_log_every > 0
+            and state.step - last_coverage_log_step >= coverage_log_every
+        ):
+            logger.info("coverage summary @ step=%d: %s", state.step, coverage.summary())
+            last_coverage_log_step = state.step
+
         if state.step % ckpt_every < rollout_capacity:
+            extra: dict[str, Any] = {"preset": config.get("preset"), "run_id": run_id}
+            if rnd is not None:
+                extra["rnd_state"] = rnd.rnd_state_dict()
+            if coverage is not None:
+                extra["coverage_state"] = coverage.state_dict()
+            # NB: replay state not serialized here (too big for on-policy ckpts;
+            # rely on data disk to persist replay across restarts).
             save_ckpt(
-                stage_ckpt_path(config.get("stage", 0), state.step),
-                stage=config.get("stage", 0),
+                stage_ckpt_path(stage, state.step),
+                stage=stage,
                 step=state.step,
                 model_state=model.state_dict(),
                 optim_state=optimizer.state_dict(),
-                extra={"preset": config.get("preset"), "run_id": run_id},
+                extra=extra,
             )
 
     elapsed = time.time() - t0
@@ -378,6 +602,10 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         elapsed,
     )
     logger.info("Memory summary: %s", mem_summary)
+    if coverage is not None:
+        logger.info("Coverage final: %s", coverage.summary())
+    if replay is not None:
+        logger.info("Replay final: %s", replay.stats())
 
     env.close()
     return 0
@@ -388,13 +616,19 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
 # =====================================================================
 
 
+_DEFAULT_STAGE_CONFIGS = {
+    0: "stage0_baseline.yaml",
+    1: "stage1_curiosity.yaml",
+}
+
+
 def _parse_args() -> argparse.Namespace:
-    ap = argparse.ArgumentParser(description="devagi trainer (Stage 0 baseline)")
+    ap = argparse.ArgumentParser(description="devagi trainer")
     ap.add_argument("--stage", type=int, default=0)
     ap.add_argument("--preset", type=str, default=None,
                     help="Override preset. Env DEVAGI_PRESET used if unset.")
     ap.add_argument("--config", type=str, default=None,
-                    help="Stage config filename under configs/ (default: stage{N}_baseline.yaml)")
+                    help="Stage config filename under configs/ (default: pick by stage)")
     ap.add_argument("--smoke-only", action="store_true",
                     help="Cap training to a tiny smoke workload (<5 min).")
     ap.add_argument("--resume", type=str, default=None, help="Path to checkpoint")
@@ -406,7 +640,11 @@ def main() -> int:
 
     args = _parse_args()
     preset = args.preset or os.environ.get("DEVAGI_PRESET") or "local_smoke"
-    stage_cfg = args.config or f"stage{args.stage}_baseline.yaml"
+    # Pick default config filename by stage
+    if args.config:
+        stage_cfg = args.config
+    else:
+        stage_cfg = _DEFAULT_STAGE_CONFIGS.get(args.stage, f"stage{args.stage}_baseline.yaml")
     cfg = load_config(stage_cfg, preset)
     cfg.setdefault("stage", args.stage)
     resume = Path(args.resume) if args.resume else None

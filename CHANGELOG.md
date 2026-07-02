@@ -8,6 +8,40 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased]
+
+### Added — Stage 1 wiring (RND + Bounded Replay + Coverage)
+
+- `configs/stage1_curiosity.yaml` — Stage 1 config: intrinsic (RND), replay
+  (3-tier bounded), coverage (fixed-bucket state-visitation).
+- `src/train.py` — trainer now supports Stage 1:
+  - Reads optional `intrinsic` / `replay` / `coverage` config blocks.
+  - Adds RND intrinsic reward to environment reward (with `reward_coef`).
+  - Pushes every transition to `BoundedReplayBuffer` (with PER priorities).
+  - Every N env steps runs an off-policy TD update from replay
+    (`--stage 1` triggers this path automatically).
+  - Adds `BoundedCoverage` class (fixed hash-bucket state-visitation counter).
+  - Stage 0 codepath fully unchanged (backward-compatible).
+- `src/utils/config_schema.py` — top-level schema now accepts optional
+  `intrinsic` / `replay` / `coverage` sub-blocks (permissive validation).
+- `src/train.py::main` — auto-selects `stage{N}_baseline.yaml` or
+  `stage{N}_curiosity.yaml` based on `--stage`.
+- `src/monitoring/memory_watcher.py` — added `warmup_seconds` (default 300 s)
+  to suppress startup slope alarms. Trainer passes this through via
+  `monitor.warmup_seconds` config key.
+- `tests/test_stage1_config.py` — 11 new tests covering:
+  - Stage 1 config exists / loads / validates.
+  - Intrinsic / replay / coverage hyperparameter sanity.
+  - `BoundedCoverage` capacity enforcement, dedup on repeated states,
+    state-dict roundtrip, `BoundedComponent` protocol conformance.
+
+### Test coverage after this batch
+- **228 tests passed** (was 217), 10 skipped, 0 failing.
+- `check_bounded`: OK across 37 source files.
+- Stage 0 backward-compat: verified via `test_config_presets` still green.
+
+---
+
 ## [v0.0.0-stage0-cloud] — 2026-07-02
 
 ### Stage 0 COMPLETED on cloud (AutoDL vGPU-32GB / L40 sm_89)
