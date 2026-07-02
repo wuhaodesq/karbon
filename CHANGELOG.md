@@ -10,6 +10,23 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added — Full-journey planning doc
+
+- `FULL_JOURNEY.md` — Bilingual end-to-end Stage 0–6 timeline, cost matrix,
+  hardware purchase guide, risk register, and copy-paste kickoff commands.
+  Recommends Route C (hybrid: cloud vGPU/5090 for Stage 0–4, home 64G rig
+  for Stage 5–6 perpetual).
+- README: link to FULL_JOURNEY.md.
+
+### Route summary (from FULL_JOURNEY.md)
+- Route A · full cloud (vGPU):    ~85 days, ¥2900–3500
+- Route B · full cloud (5090):    ~60 days, ¥3900–4550
+- **Route C · hybrid (recommended): ~90 days, ¥1200–1600 + hardware (¥16k–60k)**
+
+---
+
+## [Unreleased]
+
 ### Added — Cloud-training operational scripts
 
 - `scripts/preflight.py` — 10-step pre-training checklist (Python version, torch/CUDA, GPU inventory, Triton, disk, env vars, project imports, bounded check, preset load, 20-step smoke). Exits nonzero on any critical failure.

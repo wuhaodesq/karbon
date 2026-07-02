@@ -45,11 +45,14 @@ An implementation of a **long-lived developmental agent** whose architecture com
 | Doc | Purpose |
 |---|---|
 | [`PLAN.md`](PLAN.md) | Final consolidated project plan / 最终方案 |
+| [`FULL_JOURNEY.md`](FULL_JOURNEY.md) | End-to-end Stage 0–6 timeline & cost / 全流程时间成本 |
 | [`DESIGN_PRINCIPLES.md`](DESIGN_PRINCIPLES.md) | Six bounded design axioms / 六大有界公理 |
 | [`ROADMAP.md`](ROADMAP.md) | Stage 0–6 milestones / 六 Stage 里程碑 |
 | [`HARDWARE_TOPOLOGY.md`](HARDWARE_TOPOLOGY.md) | 3-stage hardware evolution / 三阶段硬件路线 |
 | [`MIGRATION.md`](MIGRATION.md) | Local ↔ cloud ↔ home-64G migration / 迁移指南 |
 | [`GLOSSARY.md`](GLOSSARY.md) | Chinese-English term table / 中英术语 |
+| [`AGENTS.md`](AGENTS.md) | Instructions for automated coding assistants |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Human contributor guide |
 | [`CHANGELOG.md`](CHANGELOG.md) | Stage-by-stage changelog |
 
 ---
