@@ -1,0 +1,21 @@
+# RTX 50 series / Blackwell (sm_120) support: CUDA 12.4 wheels + PyTorch ≥ 2.6.
+# 适用于 RTX 5090 等 Blackwell (sm_120) 显卡：CUDA 12.4 wheel + PyTorch ≥ 2.6。
+#
+# Usage:
+#   pip install -r requirements/base.txt -r requirements/cuda124.txt
+#
+# Notes:
+#   - RTX 5090 is Blackwell (sm_120). PyTorch 2.5.x cu121 wheels do NOT ship
+#     sm_120 kernels — using them will fail with:
+#       "no kernel image is available for execution on the device"
+#     torch >= 2.6 fixes this.
+#   - The host driver (typically CUDA 13.0 on rental GPUs) is forward-compatible
+#     with cu124-compiled wheels via CUDA Compatibility.
+
+--index-url https://download.pytorch.org/whl/cu124
+--extra-index-url https://pypi.org/simple
+
+torch>=2.6,<2.9
+
+# Triton kernels (Stage 2b onwards). Linux + CUDA only.
+triton>=3.0,<4.0

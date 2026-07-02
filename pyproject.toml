@@ -7,13 +7,15 @@ name = "devagi"
 version = "0.0.0"
 description = "Developmental AI: bounded, perpetual, migration-ready research platform"
 readme = "README.md"
-requires-python = ">=3.10,<3.12"
+requires-python = ">=3.10,<3.13"
 license = { text = "Proprietary" }
 authors = [{ name = "karbon" }]
 keywords = ["developmental-ai", "ttt", "continual-learning", "intrinsic-motivation"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Operating System :: POSIX :: Linux",
     "Operating System :: Microsoft :: Windows",
 ]
@@ -35,7 +37,7 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-extend-exclude = ["notebooks", "logs", "checkpoints", "data"]
+extend-exclude = ["notebooks", "logs", "checkpoints", "data", "exports"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "SIM"]
@@ -43,7 +45,7 @@ ignore = ["E501", "N803", "N806"]  # tolerate ML-style short var names
 
 [tool.black]
 line-length = 100
-target-version = ["py310"]
+target-version = ["py310", "py311", "py312"]
 
 [tool.mypy]
 python_version = "3.10"

@@ -10,6 +10,33 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added — RTX 5090 / Blackwell support + platform-image (PyTorch 2.8 / CUDA 12.8) support
+
+Target scenario: cloud VMs with pre-installed **PyTorch 2.8.0 / Python 3.12 /
+Ubuntu 22.04 / CUDA 12.8** running on RTX 5090 (Blackwell / sm_120).
+
+- `requirements/cuda128.txt` — new; `torch>=2.8,<2.9` + `triton>=3` on cu128 wheels.
+  Ships sm_120 kernels required by RTX 5090.
+- `configs/_presets/cloud_5090.yaml` — new preset:
+  22 GB VRAM budget, batch=16, seq=96, 16 parallel envs, 6-layer × 384-dim model.
+  Sits between `cloud_24g` and `home_64g`.
+- `scripts/cloud/setup_env.sh`:
+  * Auto-detects Python 3.10/3.11/3.12 (was 3.10-only).
+  * Detects RTX 50-series → auto-uses `cuda128.txt`.
+  * New `--skip-torch` flag to reuse pre-installed torch on platform images.
+- `scripts/home/setup_env.sh`: same auto-detect + `--skip-torch` support.
+- `pyproject.toml`: `requires-python = ">=3.10,<3.13"`; black targets py310/11/12.
+- `HARDWARE_TOPOLOGY.md`: Phase-2 section now documents 5090 wheel selection.
+- Preset test coverage extended to `cloud_5090` (211 tests total).
+
+### Test coverage after this batch
+- **211 passed** (was 208), 10 skipped, 0 failing.
+- `check_bounded`: OK across 37 source files.
+
+---
+
+## [Unreleased]
+
 ### Added — HuggingFace-format export path (this session)
 
 **Export tooling for TOS / HuggingFace Hub / ARK custom-model upload:**

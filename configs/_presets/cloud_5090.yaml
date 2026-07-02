@@ -1,0 +1,48 @@
+# Preset: cloud_5090
+# 用途：云端单卡 RTX 5090 (Blackwell / sm_120, 32 GB VRAM)
+# Purpose: single-GPU RTX 5090 cloud instance (32 GB VRAM)
+# Ceiling: ≤22 GB VRAM
+#
+# Sits between cloud_24g and home_64g:
+#   - Bigger batches than cloud_24g (more headroom on 32 GB)
+#   - Not as ambitious as home_64g (which assumes 48+ GB VRAM)
+#
+# Host prerequisites (typical rental machine):
+#   - Ubuntu 22.04 / 24.04
+#   - NVIDIA driver ≥ 570 (Blackwell support)
+#   - CUDA runtime 12.4+ (host driver 13.x is forward-compatible with cu124 wheels)
+#   - torch ≥ 2.6 (from requirements/cuda124.txt) — 2.5 lacks sm_120 kernels
+
+preset: cloud_5090
+device_preferred: cuda
+
+model:
+  hidden_size: 384
+  num_layers: 6
+  ttt_backend: pytorch     # switch to triton after Stage 2b parity passes
+
+memory:
+  gpu_budget_gb: 22.0
+  cpu_ram_budget_gb: 64.0
+  replay_gpu_capacity: 16384
+  replay_cpu_capacity: 163840
+  skill_gpu_capacity: 48
+  wm_rollout_max_steps: 20
+
+env:
+  id: "MiniGrid-Empty-5x5-v0"
+  num_envs: 16
+  max_episode_steps: 512
+
+train:
+  batch_size: 16
+  seq_len: 96
+  learning_rate: 3.0e-4
+  total_steps: 3_000_000
+  log_every_steps: 500
+  ckpt_every_steps: 25_000
+
+monitor:
+  sample_interval_s: 5.0
+  slope_alarm_gb_per_hour: 0.15
+  empty_cache_every_steps: 10_000

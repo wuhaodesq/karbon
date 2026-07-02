@@ -1,0 +1,19 @@
+# CUDA 12.8 wheels + PyTorch 2.8 (Blackwell / sm_120 native).
+# Ideal for RTX 50-series GPUs on hosts with CUDA 12.8 runtime.
+# 适用于 RTX 5090 (Blackwell) + CUDA 12.8 主机；PyTorch 2.8 原生支持 sm_120。
+#
+# Usage:
+#   pip install -r requirements/base.txt -r requirements/cuda128.txt
+#
+# Notes:
+#   - PyTorch 2.8.0 cu128 wheels ship sm_120 kernels — required for RTX 5090.
+#   - If the platform image already pre-installs torch 2.8.0, this file is
+#     mostly a no-op (pip will detect already-satisfied).
+
+--index-url https://download.pytorch.org/whl/cu128
+--extra-index-url https://pypi.org/simple
+
+torch>=2.8,<2.9
+
+# Triton 3.x ships alongside PyTorch 2.8; usually already installed by image.
+triton>=3.0,<4.0

@@ -24,16 +24,27 @@ Three-stage evolution of hardware backing this project.
 
 ---
 
-## Phase 2 · Cloud Linux 24GB GPU / 阶段 2：云端 Linux 24GB 显存
+## Phase 2 · Cloud Linux 24GB / 32GB GPU / 阶段 2：云端 Linux 24GB / 32GB 显存
 
-**Target hardware**: RTX 4090 24 GB, or A100 40 GB
+**Target hardware**: RTX 4090 24 GB, RTX 5090 32 GB, or A100 40 GB
 **OS**: Linux (Ubuntu 22.04 typical)
-**Python**: 3.10 + venv + `torch==2.5.1+cu121` + `triton>=2.1`
+**Python**: 3.10 / 3.11 / 3.12 + venv
+**PyTorch wheels** (auto-selected by `scripts/cloud/setup_env.sh`):
+- RTX 5090 (Blackwell, sm_120) → `torch>=2.8+cu128` (`requirements/cuda128.txt`)
+- Ampere / Hopper / Ada         → `torch==2.5.1+cu121` (`requirements/cuda121.txt`)
+- If the image already ships PyTorch, pass `--skip-torch` to reuse it.
 **Role**:
 - Stage 0 first cloud run + 24 h longevity
 - Stages 1–4 formal training
 - Triton kernel development for TTT (Stage 2b)
 - After every run: `rsync` checkpoints & logs back to local (or object storage)
+
+**Preset picking**:
+| GPU | Preset |
+|---|---|
+| 4090 24 GB / A100-40 | `cloud_24g` |
+| **RTX 5090 32 GB** | **`cloud_5090`** (best fit — 22 GB budget, batch 16) |
+| ≥48 GB | `home_64g` |
 
 **Platform selection**: **user's choice** — see `MIGRATION.md` §"Platform Selection Checklist".
 
@@ -95,10 +106,11 @@ Local  <------------------->  Cloud  ------------------------>  Object Storage
 | Preset | Phase | Typical params | Batch × Env × Seq |
 |---|---|---|---|
 | `local_smoke` | Phase 1 (laptop CPU) | ≤1 M | 1 × 2 × 32 |
-| `cloud_24g` | Phase 2 (cloud 4090/A100) | 5–20 M | 8 × 8 × 64 |
+| `cloud_24g` | Phase 2 (cloud 4090 / A100-40) | 5–20 M | 8 × 8 × 64 |
+| `cloud_5090` | Phase 2 (cloud RTX 5090 32 GB) | 15–50 M | 16 × 16 × 96 |
 | `home_64g` | Phase 3 (home rig) | 20–200 M | 32 × 32 × 128 |
 
-Switch: `--preset {local_smoke|cloud_24g|home_64g}`.
+Switch: `--preset {local_smoke|cloud_24g|cloud_5090|home_64g}`.
 
 ---
 

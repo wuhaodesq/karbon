@@ -3,30 +3,44 @@
 # 家用 64GB 显存 Linux 训练机环境安装
 #
 # Usage:
-#   bash scripts/home/setup_env.sh [--force] [--python python3.10]
+#   bash scripts/home/setup_env.sh [--force] [--python <python-exec>] [--skip-torch]
 #
 # Assumes:
 #   - Linux (Ubuntu 22.04 or 24.04 LTS recommended)
-#   - NVIDIA driver + CUDA 12.1 installed (verify with nvidia-smi)
+#   - NVIDIA driver + CUDA installed (verify with nvidia-smi)
 #   - Total VRAM ≥ 48 GB (target 64 GB); single or dual-GPU
-#   - Python 3.10 available
+#   - Python 3.10 / 3.11 / 3.12 available
 #
-# This is functionally similar to scripts/cloud/setup_env.sh but installs
-# additional long-run tooling (tmux, htop diagnostics via psutil we already
-# ship, etc.) and emits a "next steps" banner tailored to Phase 3.
+# --skip-torch: reuse pre-installed torch (e.g., platform images that ship
+# PyTorch 2.8.0 / CUDA 12.8) instead of pinning our own wheel.
 
 set -euo pipefail
 
 FORCE=0
-PYTHON_EXE="python3.10"
+SKIP_TORCH=0
+PYTHON_EXE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --force) FORCE=1; shift ;;
+        --skip-torch) SKIP_TORCH=1; shift ;;
         --python) PYTHON_EXE="$2"; shift 2 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
 done
+
+if [[ -z "${PYTHON_EXE}" ]]; then
+    for cand in python3.12 python3.11 python3.10 python3; do
+        if command -v "${cand}" >/dev/null 2>&1; then
+            PYTHON_EXE="${cand}"
+            break
+        fi
+    done
+fi
+if [[ -z "${PYTHON_EXE}" ]]; then
+    echo "ERROR: no python3.{10,11,12} found in PATH" >&2
+    exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -43,13 +57,17 @@ if ! command -v "${PYTHON_EXE}" >/dev/null 2>&1; then
 fi
 pyver="$("${PYTHON_EXE}" --version)"
 echo "Detected Python: ${pyver}"
-if [[ "${pyver}" != Python\ 3.10.* ]]; then
-    echo "WARN: expected Python 3.10.x, got: ${pyver}"
-    if [[ ${FORCE} -eq 0 ]]; then
-        echo "Aborting. Re-run with --force to override." >&2
-        exit 1
-    fi
-fi
+case "${pyver}" in
+    "Python 3.10."*|"Python 3.11."*|"Python 3.12."*)
+        ;;
+    *)
+        echo "WARN: expected Python 3.10 / 3.11 / 3.12, got: ${pyver}"
+        if [[ ${FORCE} -eq 0 ]]; then
+            echo "Aborting. Re-run with --force to override." >&2
+            exit 1
+        fi
+        ;;
+esac
 
 # --- NVIDIA / CUDA + VRAM sanity ---
 if ! command -v nvidia-smi >/dev/null 2>&1; then
@@ -88,10 +106,31 @@ source "${VENV_PATH}/bin/activate"
 echo "==> Upgrading pip / wheel / setuptools..."
 python -m pip install --upgrade pip wheel setuptools
 
-echo "==> Installing base + cuda121 + dev requirements..."
-pip install -r "${PROJECT_ROOT}/requirements/base.txt" \
-            -r "${PROJECT_ROOT}/requirements/cuda121.txt" \
-            -r "${PROJECT_ROOT}/requirements/dev.txt"
+if [[ ${SKIP_TORCH} -eq 1 ]]; then
+    echo "==> --skip-torch: using pre-installed torch"
+    python -c "import torch; print(f'  torch: {torch.__version__}')"
+    pip install -r "${PROJECT_ROOT}/requirements/base.txt" \
+                -r "${PROJECT_ROOT}/requirements/dev.txt"
+else
+    # Choose CUDA wheel variant based on detected GPU
+    CUDA_REQ_FILE="${PROJECT_ROOT}/requirements/cuda121.txt"
+    gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
+    echo "Detected GPU (first): ${gpu_name}"
+    case "${gpu_name}" in
+        *5090*|*5080*|*RTX\ 50*)
+            echo "==> Blackwell GPU — using CUDA 12.8 wheels (torch >= 2.8)"
+            CUDA_REQ_FILE="${PROJECT_ROOT}/requirements/cuda128.txt"
+            ;;
+        *)
+            echo "==> Non-Blackwell GPU — using CUDA 12.1 wheels (torch 2.5.1)"
+            ;;
+    esac
+
+    echo "==> Installing base + $(basename "${CUDA_REQ_FILE}") + dev requirements..."
+    pip install -r "${PROJECT_ROOT}/requirements/base.txt" \
+                -r "${CUDA_REQ_FILE}" \
+                -r "${PROJECT_ROOT}/requirements/dev.txt"
+fi
 
 echo "==> Verifying install..."
 python - <<'PY'

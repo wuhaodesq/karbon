@@ -14,7 +14,7 @@ from src.utils import (
 )
 
 
-PRESETS = ["local_smoke", "cloud_24g", "home_64g"]
+PRESETS = ["local_smoke", "cloud_24g", "cloud_5090", "home_64g"]
 
 
 @pytest.fixture()

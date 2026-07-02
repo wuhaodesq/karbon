@@ -3,26 +3,46 @@
 # 云端 Linux 环境安装脚本
 #
 # Usage:
-#   bash scripts/cloud/setup_env.sh [--force] [--python python3.10]
+#   bash scripts/cloud/setup_env.sh [--force] [--python <python-exec>] [--skip-torch]
 #
 # Assumes:
 #   - Linux (Ubuntu 22.04 recommended)
-#   - CUDA 12.1 driver installed (verify with nvidia-smi)
-#   - Python 3.10 available
-#   - git already clones this repo
+#   - CUDA runtime installed (verify with nvidia-smi)
+#   - Python 3.10 / 3.11 / 3.12 available
+#
+# --skip-torch:
+#   If the platform image already ships a working PyTorch (e.g., the
+#   "PyTorch 2.8.0 / CUDA 12.8" preset image), pass --skip-torch to avoid
+#   re-installing torch on top. Non-torch deps are still installed.
 
 set -euo pipefail
 
 FORCE=0
-PYTHON_EXE="python3.10"
+SKIP_TORCH=0
+PYTHON_EXE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --force) FORCE=1; shift ;;
+        --skip-torch) SKIP_TORCH=1; shift ;;
         --python) PYTHON_EXE="$2"; shift 2 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
 done
+
+# Auto-pick python if not overridden
+if [[ -z "${PYTHON_EXE}" ]]; then
+    for cand in python3.12 python3.11 python3.10 python3; do
+        if command -v "${cand}" >/dev/null 2>&1; then
+            PYTHON_EXE="${cand}"
+            break
+        fi
+    done
+fi
+if [[ -z "${PYTHON_EXE}" ]]; then
+    echo "ERROR: no python3.{10,11,12} found in PATH" >&2
+    exit 1
+fi
 
 # Project root = parent of parent of this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,13 +60,17 @@ if ! command -v "${PYTHON_EXE}" >/dev/null 2>&1; then
 fi
 pyver="$("${PYTHON_EXE}" --version)"
 echo "Detected Python: ${pyver}"
-if [[ "${pyver}" != Python\ 3.10.* ]]; then
-    echo "WARN: expected Python 3.10.x, got: ${pyver}"
-    if [[ ${FORCE} -eq 0 ]]; then
-        echo "Aborting. Re-run with --force to override." >&2
-        exit 1
-    fi
-fi
+case "${pyver}" in
+    "Python 3.10."*|"Python 3.11."*|"Python 3.12."*)
+        ;;
+    *)
+        echo "WARN: expected Python 3.10 / 3.11 / 3.12, got: ${pyver}"
+        if [[ ${FORCE} -eq 0 ]]; then
+            echo "Aborting. Re-run with --force to override." >&2
+            exit 1
+        fi
+        ;;
+esac
 
 # --- Verify NVIDIA / CUDA ---
 if ! command -v nvidia-smi >/dev/null 2>&1; then
@@ -79,10 +103,47 @@ source "${VENV_PATH}/bin/activate"
 echo "==> Upgrading pip / wheel / setuptools..."
 python -m pip install --upgrade pip wheel setuptools
 
-echo "==> Installing base + cuda121 + dev requirements..."
-pip install -r "${PROJECT_ROOT}/requirements/base.txt" \
-            -r "${PROJECT_ROOT}/requirements/cuda121.txt" \
-            -r "${PROJECT_ROOT}/requirements/dev.txt"
+# --- Torch install strategy ---
+# If the platform image already provides a working torch (e.g., PyTorch 2.8.0
+# on CUDA 12.8), --skip-torch avoids re-installing it. Otherwise pick the
+# right CUDA wheel by inspecting the GPU and driver.
+
+if [[ ${SKIP_TORCH} -eq 1 ]]; then
+    echo "==> --skip-torch: using pre-installed torch on this image"
+    python -c "import torch; print(f'  torch: {torch.__version__}')"
+else
+    # Auto-select wheel: prefer cu128 for RTX 50-series or CUDA 12.8+ hosts.
+    CUDA_REQ_FILE="${PROJECT_ROOT}/requirements/cuda121.txt"
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
+        driver_cuda=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1)
+        echo "Detected GPU:    ${gpu_name}"
+        echo "Detected driver: ${driver_cuda}"
+
+        case "${gpu_name}" in
+            *5090*|*5080*|*RTX\ 50*)
+                echo "==> Blackwell GPU — using CUDA 12.8 wheels (torch >= 2.8)"
+                CUDA_REQ_FILE="${PROJECT_ROOT}/requirements/cuda128.txt"
+                ;;
+            *)
+                # Ampere/Hopper — cu121 is fine but if driver is 12.4+, prefer cu124.
+                # (Keep it simple: default to cu121.)
+                echo "==> Non-Blackwell GPU — using CUDA 12.1 wheels (torch 2.5.1)"
+                ;;
+        esac
+    fi
+
+    echo "==> Installing base + $(basename "${CUDA_REQ_FILE}") + dev requirements..."
+    pip install -r "${PROJECT_ROOT}/requirements/base.txt" \
+                -r "${CUDA_REQ_FILE}" \
+                -r "${PROJECT_ROOT}/requirements/dev.txt"
+fi
+
+# When --skip-torch: still install the non-torch deps
+if [[ ${SKIP_TORCH} -eq 1 ]]; then
+    pip install -r "${PROJECT_ROOT}/requirements/base.txt" \
+                -r "${PROJECT_ROOT}/requirements/dev.txt"
+fi
 
 echo "==> Verifying install..."
 python - <<'PY'
@@ -105,5 +166,6 @@ echo "==> Setup complete."
 echo
 echo "Next steps:"
 echo "  1. Activate venv: source .venv/bin/activate"
-echo "  2. Run smoke:     bash scripts/cloud/run_stage.sh 0 cloud_24g --smoke-only"
+echo "  2. Run smoke:     bash scripts/cloud/run_stage.sh 0 cloud_5090 --smoke-only"
+echo "                    (or cloud_24g for 24 GB cards, home_64g for 48+ GB)"
 echo "  3. Run tests:     pytest -x tests/"

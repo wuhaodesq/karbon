@@ -9,7 +9,7 @@ from src.platform import configs_dir
 from src.utils import load_config
 
 
-PRESETS = ["local_smoke", "cloud_24g", "home_64g"]
+PRESETS = ["local_smoke", "cloud_24g", "cloud_5090", "home_64g"]
 
 
 @pytest.mark.parametrize("preset", PRESETS)
