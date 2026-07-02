@@ -8,6 +8,42 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [v0.0.0-stage0-cloud] — 2026-07-02
+
+### Stage 0 COMPLETED on cloud (AutoDL vGPU-32GB / L40 sm_89)
+
+- **Wall time**: 3906.8 s (65 min)
+- **Total steps**: 3,000,000 (full run, not smoke)
+- **Episodes**: 555,169
+- **Final mean_return**: **0.951** (near-optimal for MiniGrid-Empty-5x5-v0)
+- **Peak VRAM**: 0.82 GB / 32 GB (2.5%)
+- **VRAM slope at end**: **0.0 GB/h** ✅ (Axiom 5 clean)
+- **Checkpoints saved**: 300
+- **Unit tests**: 217 passed / 10 skipped
+- **check_bounded**: OK across 37 source files
+
+See `docs/stage0_report.md` for the full run card.
+
+### Fixed
+- `MemoryWatcher`: added `warmup_seconds` (default 300 s) to suppress startup
+  slope alarms. During the Stage-0 cloud run the alarm fired once during
+  CUDA-context / Adam-state initialization (which looks like a fast slope in
+  the 5-minute rolling window). Long-term slope was 0.0 GB/h. The alarm was
+  a false positive; the warmup gate prevents it in future runs.
+- Added `test_memory_watcher_warmup_suppresses_alarm` and
+  `test_memory_watcher_alarm_fires_after_warmup` to guard the fix.
+
+### Environment (locked for reproducibility)
+- Ubuntu 22.04
+- Python 3.12.3
+- torch 2.5.1+cu124 (from AutoDL preset image)
+- triton 3.1.0
+- Preset: `cloud_5090` (32 GB budget matches vGPU-32GB exactly)
+- Env vars: `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` +
+  `DEVAGI_{CKPT,DATA,LOGS}_DIR=/root/autodl-tmp/karbon/*`
+
+---
+
 ## [Unreleased]
 
 ### Added — Nightly / interruptible training

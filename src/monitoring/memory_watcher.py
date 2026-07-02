@@ -31,6 +31,9 @@ class WatcherConfig:
     - ``sample_interval_s``: how often to snapshot memory.
     - ``rolling_window_s``: how much history to keep for slope computation.
     - ``slope_alarm_gb_per_hour``: alarm threshold (used_gb slope over the window).
+    - ``warmup_seconds``: grace period at startup during which slope alarms are
+      suppressed. Covers CUDA-context / optimizer-state initialization which
+      inflates apparent slope for the first few minutes. Default 300s.
     - ``empty_cache_every_steps``: proactively call ``empty_cache`` this often.
     - ``csv_path``: optional CSV file to persist snapshots.
     - ``max_history_points``: cap the in-memory ring buffer (Axiom 1).
@@ -39,6 +42,7 @@ class WatcherConfig:
     sample_interval_s: float = 5.0
     rolling_window_s: float = 3600.0  # 1 hour default
     slope_alarm_gb_per_hour: float = 0.2
+    warmup_seconds: float = 300.0
     empty_cache_every_steps: int = 10_000
     csv_path: Path | None = None
     max_history_points: int = 4096
@@ -67,7 +71,7 @@ class MemoryWatcher:
     def __init__(self, config: WatcherConfig | None = None) -> None:
         self.config = config or WatcherConfig()
         # Ring buffer of samples; capacity enforced (Axiom 1).
-        self._history: Deque[_Sample] = deque(maxlen=self.config.max_history_points)
+        self._history: Deque[_Sample] = deque(maxlen=self.config.max_history_points)  # BOUNDS-OK: maxlen bounded
         self._last_sample_ts: float = 0.0
         self._csv_file: Path | None = self.config.csv_path
         self._csv_header_written: bool = False
@@ -76,6 +80,7 @@ class MemoryWatcher:
         self._stop_flag = threading.Event()
         self._step_counter: int = 0
         self._lock = threading.Lock()
+        self._start_ts: float = time.time()
 
     # ------------------------------------------------------------------ helpers
 
@@ -143,6 +148,10 @@ class MemoryWatcher:
             empty_cache()
 
     def _check_slope(self, latest: _Sample) -> None:
+        # Suppress alarms during warmup (CUDA context / optimizer state init
+        # can look like a fast slope for the first few minutes).
+        if latest.ts - self._start_ts < self.config.warmup_seconds:
+            return
         slope = self.slope_gb_per_hour()
         if slope is None:
             return

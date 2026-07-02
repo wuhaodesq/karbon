@@ -85,3 +85,43 @@ def test_memory_watcher_rate_limits():
     # Second tick immediately should be rate-limited (return None)
     r = w.tick(step=1)
     assert r is None
+
+
+def test_memory_watcher_warmup_suppresses_alarm():
+    """During warmup period, no alarm should fire even if slope crosses threshold.
+
+    We fake this by installing a very short warmup and calling _check_slope
+    directly with a synthetic sample inside the warmup window.
+    """
+    from src.monitoring.memory_watcher import _Sample
+    import time as _time
+    w = MemoryWatcher(WatcherConfig(
+        warmup_seconds=60.0,
+        slope_alarm_gb_per_hour=0.001,   # ridiculously low so any slope trips
+        rolling_window_s=1.0,
+    ))
+    # Inject two samples spanning >10% of window to make slope compute
+    now = _time.time()
+    with w._lock:
+        w._history.append(_Sample(ts=now - 0.5, used_bytes=0, total_bytes=1, process_rss_bytes=0, kind="cuda"))
+        w._history.append(_Sample(ts=now, used_bytes=10**9, total_bytes=1, process_rss_bytes=0, kind="cuda"))
+    # Latest sample within warmup → no alarm
+    w._check_slope(w._history[-1])
+    assert not w._alarm_fired
+
+
+def test_memory_watcher_alarm_fires_after_warmup():
+    """After warmup, a fast slope should trip the alarm."""
+    from src.monitoring.memory_watcher import _Sample
+    import time as _time
+    w = MemoryWatcher(WatcherConfig(
+        warmup_seconds=0.0,     # no warmup
+        slope_alarm_gb_per_hour=0.001,
+        rolling_window_s=1.0,
+    ))
+    now = _time.time()
+    with w._lock:
+        w._history.append(_Sample(ts=now - 0.5, used_bytes=0, total_bytes=1, process_rss_bytes=0, kind="cuda"))
+        w._history.append(_Sample(ts=now, used_bytes=10**9, total_bytes=1, process_rss_bytes=0, kind="cuda"))
+    w._check_slope(w._history[-1])
+    assert w._alarm_fired
