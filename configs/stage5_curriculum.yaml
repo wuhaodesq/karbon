@@ -1,0 +1,101 @@
+# Stage 5 · Auto Curriculum (Learning Progress driven)
+# Adds an AutoCurriculum on top of Stage 4. Instead of training on a fixed
+# env/task, the agent samples the next task from an LP-driven distribution.
+#
+# For MiniGrid this uses variants of MiniGrid environments as tasks
+# (Empty-5x5, Empty-6x6, DoorKey-5x5, ...). Each task is registered as a
+# TaskTemplate with a `spec` that the trainer can turn into an env instance.
+#
+# The learning-progress signal is fed from PPO's mean-return delta on the task.
+
+stage: 5
+name: "stage5_curriculum"
+
+model:
+  use_hybrid_backbone: true
+  hybrid_n_layers: 3
+  hybrid_n_heads: 4
+  hybrid_swa_window: 16
+  hybrid_ttt_mini_batch: 8
+  hybrid_ffn_hidden_mult: 4
+  hybrid_dropout: 0.0
+
+# --- Stage 5 sub-block: curriculum ---
+curriculum:
+  # Bounded task pool (Axiom 1)
+  max_tasks: 8
+  lp_window_size: 32
+  lp_min_samples: 8
+  # 10% uniform exploration, 90% LP-weighted
+  exploration_epsilon: 0.1
+  smoothing: 0.5
+  # How often (env steps) to sample a new task
+  switch_every_steps: 20000
+  # Report error signal (prediction error / negative reward) to LP tracker
+  # every N env steps
+  report_every_steps: 500
+  # Predefined task list (env_id → spec).
+  # The trainer instantiates the MiniGridWrapper with these env_ids in rotation.
+  tasks:
+    - {id: 0, env_id: "MiniGrid-Empty-5x5-v0",  difficulty: 0.1, tag: "empty-5x5"}
+    - {id: 1, env_id: "MiniGrid-Empty-6x6-v0",  difficulty: 0.2, tag: "empty-6x6"}
+    - {id: 2, env_id: "MiniGrid-Empty-8x8-v0",  difficulty: 0.3, tag: "empty-8x8"}
+    - {id: 3, env_id: "MiniGrid-DoorKey-5x5-v0", difficulty: 0.5, tag: "doorkey-5x5"}
+    - {id: 4, env_id: "MiniGrid-DoorKey-6x6-v0", difficulty: 0.6, tag: "doorkey-6x6"}
+
+# --- Prior blocks carry forward ---
+skills:
+  skill_d_out: 128
+  skill_d_in: 128
+  skill_rank: 8
+  gpu_capacity: 32
+  cpu_capacity: 128
+  ssd_max_shards: 4
+  ssd_shard_size: 32
+  merge_similarity_threshold: 0.9
+  score_alpha: 1.0
+  score_beta: 0.5
+  score_gamma: 0.1
+  archive_subdir: "skills"
+
+world_model:
+  z_dim: 32
+  h_dim: 64
+  embed_dim: 64
+  hidden: 128
+  max_rollout_steps: 10
+  kl_free_nats: 1.0
+  update_every_steps: 8
+  lr: 3.0e-4
+  wm_loss_coef: 1.0
+  log_every_steps: 5000
+
+intrinsic:
+  embed_dim: 128
+  lr: 1.0e-4
+  reward_clip: 5.0
+  reward_coef: 0.1
+  update_every_steps: 1
+
+replay:
+  hot_capacity: 4096
+  warm_capacity: 32768
+  cold_max_shards: 8
+  cold_shard_size: 4096
+  per_alpha: 0.6
+  min_size_to_sample: 1024
+  sample_every_steps: 4
+  batch_size_offpolicy: 128
+  archive_subdir: "replay"
+
+coverage:
+  num_buckets: 4096
+  log_every_steps: 5000
+
+train:
+  ppo_clip: 0.2
+  ppo_epochs: 4
+  entropy_coef: 0.01
+  value_coef: 0.5
+  gamma: 0.99
+  gae_lambda: 0.95

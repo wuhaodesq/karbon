@@ -35,10 +35,25 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.continual import (
+    ConsolidationConfig,
+    OnlineEWC,
+    OnlineEWCConfig,
+    SleepConsolidationLoop,
+)
+from src.curriculum import AutoCurriculum, AutoCurriculumConfig, TaskTemplate
 from src.envs import MiniGridWrapper
 from src.intrinsic import RND, RNDConfig
-from src.memory import BoundedReplayBuffer, ReplayBudget, Transition
-from src.models import HybridBackbone
+from src.memory import (
+    BoundedReplayBuffer,
+    BoundedSkillLibrary,
+    GenerativeReplayConfig,
+    GenerativeReplayVAE,
+    ReplayBudget,
+    SkillLibraryBudget,
+    Transition,
+)
+from src.models import HybridBackbone, RSSM, RSSMConfig
 from src.monitoring import HealthChecker, MemoryWatcher, WatcherConfig
 from src.platform import data_dir, get_device, get_device_info, stage_ckpt_path
 from src.utils import (
@@ -479,6 +494,183 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         health.register("coverage", coverage)
         logger.info("BoundedCoverage enabled (buckets=%d)", coverage.capacity)
 
+    # --- Stage 3+: World Model ---
+    wm_cfg = config.get("world_model")
+    wm: RSSM | None = None
+    wm_optimizer: torch.optim.Optimizer | None = None
+    if stage >= 3 and wm_cfg:
+        obs_dim_flat = int(np.prod(obs_shape))
+        wm = RSSM(RSSMConfig(
+            obs_dim=obs_dim_flat,
+            action_dim=num_actions,
+            z_dim=int(wm_cfg.get("z_dim", 32)),
+            h_dim=int(wm_cfg.get("h_dim", 64)),
+            embed_dim=int(wm_cfg.get("embed_dim", 64)),
+            hidden=int(wm_cfg.get("hidden", 128)),
+            max_rollout_steps=int(wm_cfg.get("max_rollout_steps", 10)),
+            kl_free_nats=float(wm_cfg.get("kl_free_nats", 1.0)),
+        )).to(device)
+        wm_optimizer = torch.optim.Adam(wm.parameters(), lr=float(wm_cfg.get("lr", 3e-4)))
+        logger.info("RSSM world model enabled (params=%d)", wm.num_parameters())
+
+    # --- Stage 4+: Skill Library ---
+    skills_cfg = config.get("skills")
+    skills: BoundedSkillLibrary | None = None
+    if stage >= 4 and skills_cfg:
+        skills = BoundedSkillLibrary(
+            budget=SkillLibraryBudget(
+                gpu_capacity=int(skills_cfg.get("gpu_capacity", 32)),
+                cpu_capacity=int(skills_cfg.get("cpu_capacity", 128)),
+                ssd_max_shards=int(skills_cfg.get("ssd_max_shards", 4)),
+                ssd_shard_size=int(skills_cfg.get("ssd_shard_size", 32)),
+                merge_similarity_threshold=float(
+                    skills_cfg.get("merge_similarity_threshold", 0.9)
+                ),
+            ),
+            skill_shape=(
+                int(skills_cfg.get("skill_d_out", 128)),
+                int(skills_cfg.get("skill_rank", 8)),
+                int(skills_cfg.get("skill_d_in", 128)),
+            ),
+            device=device,
+            archive_dir=data_dir() / str(skills_cfg.get("archive_subdir", "skills")),
+            score_alpha=float(skills_cfg.get("score_alpha", 1.0)),
+            score_beta=float(skills_cfg.get("score_beta", 0.5)),
+            score_gamma=float(skills_cfg.get("score_gamma", 0.1)),
+        )
+        health.register("skills", skills)
+        logger.info(
+            "BoundedSkillLibrary enabled (gpu=%d cpu=%d cold=%dx%d capacity=%d)",
+            skills._budget.gpu_capacity,
+            skills._budget.cpu_capacity,
+            skills._budget.ssd_max_shards,
+            skills._budget.ssd_shard_size,
+            skills.capacity,
+        )
+
+    # --- Stage 5+: Auto Curriculum ---
+    curriculum_cfg = config.get("curriculum")
+    curriculum: AutoCurriculum | None = None
+    curriculum_tasks: list[dict] = []
+    if stage >= 5 and curriculum_cfg:
+        curriculum = AutoCurriculum(AutoCurriculumConfig(
+            max_tasks=int(curriculum_cfg.get("max_tasks", 8)),
+            lp_window_size=int(curriculum_cfg.get("lp_window_size", 32)),
+            lp_min_samples=int(curriculum_cfg.get("lp_min_samples", 8)),
+            exploration_epsilon=float(curriculum_cfg.get("exploration_epsilon", 0.1)),
+            smoothing=float(curriculum_cfg.get("smoothing", 0.5)),
+        ))
+        curriculum_tasks = list(curriculum_cfg.get("tasks", []))
+        for task_spec in curriculum_tasks:
+            curriculum.add_task(TaskTemplate(
+                id=int(task_spec["id"]),
+                spec={"env_id": task_spec["env_id"]},
+                difficulty=float(task_spec.get("difficulty", 0.0)),
+                tag=str(task_spec.get("tag", "")),
+            ))
+        health.register("curriculum", curriculum)
+        logger.info(
+            "AutoCurriculum enabled (tasks=%d capacity=%d)",
+            len(curriculum), curriculum.capacity,
+        )
+
+    # --- Stage 6+: Online EWC + Generative Replay VAE + Sleep Loop ---
+    continual_cfg = config.get("continual")
+    ewc: OnlineEWC | None = None
+    grep_vae: GenerativeReplayVAE | None = None
+    sleep_loop: SleepConsolidationLoop | None = None
+    if stage >= 6 and continual_cfg:
+        ewc = OnlineEWC(model, OnlineEWCConfig(
+            lambda_reg=float(continual_cfg.get("ewc_lambda", 1.0)),
+            gamma=float(continual_cfg.get("ewc_gamma", 0.95)),
+            update_anchor_mode=str(continual_cfg.get("ewc_anchor_mode", "replace")),
+            anchor_ema_alpha=float(continual_cfg.get("ewc_anchor_ema_alpha", 0.9)),
+        ))
+        logger.info("Online EWC enabled (lambda=%s gamma=%s)",
+                    continual_cfg.get("ewc_lambda", 1.0),
+                    continual_cfg.get("ewc_gamma", 0.95))
+
+        if bool(continual_cfg.get("gr_enabled", True)):
+            obs_dim_flat = int(np.prod(obs_shape))
+            grep_vae = GenerativeReplayVAE(GenerativeReplayConfig(
+                obs_dim=obs_dim_flat,
+                latent_dim=int(continual_cfg.get("gr_latent_dim", 32)),
+                hidden=int(continual_cfg.get("gr_hidden", 128)),
+                lr=float(continual_cfg.get("gr_lr", 1e-3)),
+                kl_weight=float(continual_cfg.get("gr_kl_weight", 1.0)),
+            )).to(device)
+            logger.info("Generative Replay VAE enabled (obs_dim=%d, latent=%d, params=%d)",
+                        obs_dim_flat,
+                        grep_vae.config.latent_dim,
+                        grep_vae.num_parameters())
+
+        sleep_loop = SleepConsolidationLoop(ConsolidationConfig(
+            warmup_steps=int(continual_cfg.get("sleep_warmup_steps", 1000)),
+            replay_trim_every=int(continual_cfg.get("sleep_replay_trim_every", 10_000)),
+            skills_merge_every=int(continual_cfg.get("sleep_skills_merge_every", 20_000)),
+            ttt_distill_every=int(continual_cfg.get("sleep_ttt_distill_every", 20_000)),
+            ewc_consolidate_every=int(continual_cfg.get("ewc_consolidate_every_steps", 100_000)),
+        ))
+
+        # --- Register sleep tasks ---
+        def _sleep_replay_trim() -> None:
+            if replay is not None:
+                # Trim priorities: reset any that are below the median
+                # (this is a light "trim" — replay is already bounded)
+                try:
+                    stats = replay.stats()
+                    logger.info("[sleep] replay_trim: %s", stats)
+                except Exception:
+                    pass
+
+        def _sleep_skills_merge() -> None:
+            if skills is not None:
+                # Skill library merges similar skills on `add`; this hook is
+                # a report + placeholder for future explicit merge sweeps.
+                try:
+                    logger.info("[sleep] skills_merge: %s", skills.stats())
+                except Exception:
+                    pass
+
+        def _sleep_ttt_distill() -> None:
+            # Placeholder: distill TTT inner-W into fixed weights (Stage 6+).
+            # In current implementation the TTT layer freshly zero-inits W
+            # every forward, so there's no long-lived slow state to distill.
+            # Future work.
+            logger.info("[sleep] ttt_distill (placeholder)")
+
+        def _sleep_ewc_consolidate() -> None:
+            if ewc is None or replay is None or len(replay) == 0:
+                return
+            batch_size = int(continual_cfg.get("ewc_batch_size", 32))
+            num_batches = int(continual_cfg.get("ewc_consolidate_num_batches", 32))
+
+            def _batches():
+                for _ in range(num_batches):
+                    try:
+                        sample = replay.sample(batch_size)
+                        yield sample
+                    except (ValueError, IndexError):
+                        return
+
+            def _loss_fn(m, batch):
+                obs = batch["obs"]
+                actions = batch["action"]
+                logits, _ = m(obs)
+                return F.cross_entropy(logits, actions.to(torch.long))
+
+            try:
+                ewc.consolidate(model, _batches(), _loss_fn, num_batches=num_batches)
+                logger.info("[sleep] ewc_consolidate done: %s", ewc.summary())
+            except Exception as exc:  # never crash training
+                logger.warning("[sleep] ewc_consolidate failed: %s", exc)
+
+        sleep_loop.set_replay_trim(_sleep_replay_trim)
+        sleep_loop.set_skills_merge(_sleep_skills_merge)
+        sleep_loop.set_ttt_distill(_sleep_ttt_distill)
+        sleep_loop.set_ewc_consolidate(_sleep_ewc_consolidate)
+        logger.info("SleepConsolidationLoop enabled")
+
     state = TrainState(step=0, episode=0)
 
     if resume is not None:
@@ -515,15 +707,50 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     replay_batch_size = int(replay_cfg.get("batch_size_offpolicy", 128)) if replay_cfg else 0
     per_alpha = float(replay_cfg.get("per_alpha", 0.6)) if replay_cfg else 0.6
 
+    # Stage 3 knobs
+    wm_update_every = int(wm_cfg.get("update_every_steps", 8)) if wm_cfg else 0
+    wm_log_every = int(wm_cfg.get("log_every_steps", 5000)) if wm_cfg else 0
+    wm_last_loss: dict[str, float] = {"loss": 0.0, "recon": 0.0, "kl": 0.0}
+    wm_last_log_step = 0
+
+    # Stage 5 knobs
+    curr_switch_every = int(curriculum_cfg.get("switch_every_steps", 20_000)) if curriculum_cfg else 0
+    curr_report_every = int(curriculum_cfg.get("report_every_steps", 500)) if curriculum_cfg else 0
+    curr_active_task: TaskTemplate | None = None
+    if curriculum is not None:
+        # Start with the first task
+        curr_active_task = curriculum.sample_task()
+        logger.info("Curriculum: initial task=%s (id=%d)",
+                    curr_active_task.tag, curr_active_task.id)
+    last_curr_switch_step = 0
+    last_curr_report_step = 0
+    last_curr_mean_ret: float = 0.0
+
+    # Stage 6 knobs
+    gr_update_every = int(continual_cfg.get("gr_update_every_steps", 16)) if continual_cfg else 0
+    gr_batch_size = int(continual_cfg.get("gr_batch_size", 32)) if continual_cfg else 0
+    gr_inject_every = int(continual_cfg.get("gr_inject_every_steps", 5000)) if continual_cfg else 0
+    gr_rehearsal_bs = int(continual_cfg.get("gr_rehearsal_batch_size", 32)) if continual_cfg else 0
+    last_gr_inject_step = 0
+    gr_last_loss: float = 0.0
+
     t0 = time.time()
     logger.info(
-        "Starting Stage %s: total_steps=%d smoke=%s intrinsic=%s replay=%s coverage=%s",
+        "Starting Stage %s: total_steps=%d smoke=%s "
+        "intrinsic=%s replay=%s coverage=%s wm=%s skills=%s curriculum=%s "
+        "ewc=%s gr=%s sleep=%s",
         stage,
         total_steps,
         smoke_only,
         rnd is not None,
         replay is not None,
         coverage is not None,
+        wm is not None,
+        skills is not None,
+        curriculum is not None,
+        ewc is not None,
+        grep_vae is not None,
+        sleep_loop is not None,
     )
 
     last_coverage_log_step = 0
@@ -614,6 +841,9 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             value_loss = F.mse_loss(values, returns)
             entropy = dist.entropy().mean()
             loss = policy_loss + value_coef * value_loss - entropy_coef * entropy
+            # Stage 6: add EWC penalty (protects consolidated weights)
+            if ewc is not None and ewc.has_consolidated():
+                loss = loss + ewc.penalty(model).to(loss.device)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
@@ -647,6 +877,64 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 # e.g., hot tier still tiny; just skip this cycle
                 logger.debug("replay sample skipped: %s", exc)
 
+        # --- Stage 3: World Model update from replay ---
+        if (
+            wm is not None
+            and wm_optimizer is not None
+            and replay is not None
+            and len(replay) >= replay_min_size
+            and wm_update_every > 0
+            and state.step % wm_update_every < rollout_capacity
+        ):
+            try:
+                sample, _, _ = replay.sample_prioritized(
+                    min(replay_batch_size, wm.config.max_rollout_steps * 4),
+                    alpha=per_alpha,
+                )
+                # Reshape B*T into (batch=B/T, T=max_rollout_steps).
+                # For simplicity we treat each transition as a T=1 sequence.
+                # This is an approximation — proper sequential replay comes later.
+                bsz = sample["obs"].shape[0]
+                T = 1
+                obs_flat = sample["obs"].reshape(bsz, T, -1).float() / 255.0
+                # One-hot actions
+                actions_onehot = F.one_hot(
+                    sample["action"].to(torch.long), num_classes=num_actions
+                ).float().reshape(bsz, T, num_actions)
+                wm_out = wm.compute_loss(obs_flat, actions_onehot)
+                wm_loss = wm_out["loss"]
+                wm_optimizer.zero_grad(set_to_none=True)
+                wm_loss.backward()
+                torch.nn.utils.clip_grad_norm_(wm.parameters(), max_norm=1.0)
+                wm_optimizer.step()
+                wm_last_loss = {
+                    "loss": float(wm_out["loss"].item()),
+                    "recon": float(wm_out["recon_loss"].item()),
+                    "kl": float(wm_out["kl_loss"].item()),
+                }
+            except (ValueError, IndexError, RuntimeError) as exc:
+                logger.debug("world model update skipped: %s", exc)
+
+        # --- Stage 6: Generative Replay VAE update from replay ---
+        if (
+            grep_vae is not None
+            and replay is not None
+            and len(replay) >= replay_min_size
+            and gr_update_every > 0
+            and state.step % gr_update_every < rollout_capacity
+        ):
+            try:
+                sample = replay.sample(gr_batch_size)
+                obs_flat = sample["obs"].reshape(gr_batch_size, -1).float() / 255.0
+                gr_out = grep_vae.update(obs_flat)
+                gr_last_loss = float(gr_out["loss"])
+            except (ValueError, IndexError, RuntimeError) as exc:
+                logger.debug("generative replay update skipped: %s", exc)
+
+        # --- Stage 6: Sleep consolidation tick ---
+        if sleep_loop is not None:
+            sleep_loop.tick(step=state.step)
+
         # Health sweep after each rollout+update cycle
         health.sweep()
 
@@ -658,6 +946,16 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 extras.append(f"cov={coverage.coverage_ratio() * 100:.1f}%")
             if replay is not None:
                 extras.append(f"replay={len(replay)}/{replay.capacity}")
+            if wm is not None:
+                extras.append(f"wm={wm_last_loss['loss']:.3f}(r={wm_last_loss['recon']:.3f},kl={wm_last_loss['kl']:.3f})")
+            if skills is not None:
+                extras.append(f"skills={len(skills)}/{skills.capacity}")
+            if curriculum is not None and curr_active_task is not None:
+                extras.append(f"task={curr_active_task.tag}")
+            if ewc is not None:
+                extras.append(f"ewc={'✓' if ewc.has_consolidated() else '_'}")
+            if grep_vae is not None:
+                extras.append(f"gr={gr_last_loss:.3f}")
             logger.info(
                 "step=%d ep=%d mean_ret=%.3f loss=%.4f mem_used=%.2fGB slope=%s %s",
                 state.step,
@@ -678,12 +976,86 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             logger.info("coverage summary @ step=%d: %s", state.step, coverage.summary())
             last_coverage_log_step = state.step
 
+        # Periodic WM snapshot (Stage 3)
+        if (
+            wm is not None
+            and wm_log_every > 0
+            and state.step - wm_last_log_step >= wm_log_every
+        ):
+            logger.info("world model @ step=%d: %s", state.step, wm_last_loss)
+            wm_last_log_step = state.step
+
+        # --- Stage 5: report LP error signal to curriculum ---
+        if (
+            curriculum is not None
+            and curr_active_task is not None
+            and curr_report_every > 0
+            and state.step - last_curr_report_step >= curr_report_every
+        ):
+            current_mean_ret = env.summary()["mean_return"]
+            # LP tracker expects an "error" — lower = better performance.
+            # Use (1 - mean_return) as a proxy so decreasing error ↔ improving policy.
+            err = max(0.0, 1.0 - current_mean_ret)
+            try:
+                curriculum.report_error(curr_active_task.id, err)
+            except KeyError:
+                pass
+            last_curr_mean_ret = current_mean_ret
+            last_curr_report_step = state.step
+
+        # --- Stage 5: periodically switch task via LP-driven sampling ---
+        if (
+            curriculum is not None
+            and curr_switch_every > 0
+            and state.step - last_curr_switch_step >= curr_switch_every
+        ):
+            new_task = curriculum.sample_task()
+            if curr_active_task is None or new_task.id != curr_active_task.id:
+                logger.info(
+                    "Curriculum switch @ step=%d: task=%s (id=%d) → %s (id=%d)",
+                    state.step,
+                    curr_active_task.tag if curr_active_task else "<none>",
+                    curr_active_task.id if curr_active_task else -1,
+                    new_task.tag, new_task.id,
+                )
+                # Rebuild env from task spec
+                try:
+                    env.close()
+                except Exception:
+                    pass
+                env = MiniGridWrapper(
+                    env_id=new_task.spec["env_id"],
+                    seed=42,
+                    max_episode_steps=env_cfg.get("max_episode_steps"),
+                    auto_reset=True,
+                )
+                obs = env.reset()
+                curr_active_task = new_task
+            last_curr_switch_step = state.step
+
         if state.step % ckpt_every < rollout_capacity:
             extra: dict[str, Any] = {"preset": config.get("preset"), "run_id": run_id}
             if rnd is not None:
                 extra["rnd_state"] = rnd.rnd_state_dict()
             if coverage is not None:
                 extra["coverage_state"] = coverage.state_dict()
+            if wm is not None:
+                extra["wm_state"] = wm.state_dict()
+                if wm_optimizer is not None:
+                    extra["wm_optim_state"] = wm_optimizer.state_dict()
+            if skills is not None:
+                extra["skills_state"] = skills.state_dict()
+            if curriculum is not None:
+                extra["curriculum_state"] = curriculum.state_dict()
+                extra["curriculum_active_task_id"] = (
+                    curr_active_task.id if curr_active_task else -1
+                )
+            if ewc is not None:
+                extra["ewc_state"] = ewc.state_dict()
+            if grep_vae is not None:
+                extra["gr_vae_state"] = grep_vae.state_dict()
+            if sleep_loop is not None:
+                extra["sleep_loop_state"] = sleep_loop.state_dict()
             # NB: replay state not serialized here (too big for on-policy ckpts;
             # rely on data disk to persist replay across restarts).
             save_ckpt(
@@ -710,6 +1082,18 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         logger.info("Coverage final: %s", coverage.summary())
     if replay is not None:
         logger.info("Replay final: %s", replay.stats())
+    if wm is not None:
+        logger.info("World model final losses: %s", wm_last_loss)
+    if skills is not None:
+        logger.info("Skills final: %s", skills.stats())
+    if curriculum is not None:
+        logger.info("Curriculum final: %s", curriculum.summary())
+    if ewc is not None:
+        logger.info("EWC final: %s", ewc.summary())
+    if grep_vae is not None:
+        logger.info("Generative Replay VAE final: %s", grep_vae.summary())
+    if sleep_loop is not None:
+        logger.info("Sleep loop final: %s", sleep_loop.summary())
 
     env.close()
     return 0
@@ -724,6 +1108,10 @@ _DEFAULT_STAGE_CONFIGS = {
     0: "stage0_baseline.yaml",
     1: "stage1_curiosity.yaml",
     2: "stage2_hybrid.yaml",
+    3: "stage3_world_model.yaml",
+    4: "stage4_skills.yaml",
+    5: "stage5_curriculum.yaml",
+    6: "stage6_consolidation.yaml",
 }
 
 

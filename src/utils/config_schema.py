@@ -157,6 +157,10 @@ class TopLevelSchema:
     intrinsic: dict | None = None
     replay: dict | None = None
     coverage: dict | None = None
+    world_model: dict | None = None
+    skills: dict | None = None
+    curriculum: dict | None = None
+    continual: dict | None = None
 
     def _validate(self) -> None:
         if not self.preset:

@@ -1,0 +1,85 @@
+# Stage 4 · Bounded Skill Library
+# Adds a persistent LoRA-based skill store on top of Stage 3.
+# The skill library is instantiated but skills are discovered/populated
+# lazily during training as reward-carrying behaviors are identified.
+#
+# For MiniGrid this is a scaffold — skill discovery is a Stage-4 research
+# activity, not something we hardcode. What we DO validate here:
+#   - The library is bounded (3-tier: GPU top-K / CPU cache / SSD archive).
+#   - It conforms to BoundedComponent and is registered in HealthChecker.
+#   - Persistence works (state_dict roundtrip).
+
+stage: 4
+name: "stage4_skills"
+
+model:
+  use_hybrid_backbone: true
+  hybrid_n_layers: 3
+  hybrid_n_heads: 4
+  hybrid_swa_window: 16
+  hybrid_ttt_mini_batch: 8
+  hybrid_ffn_hidden_mult: 4
+  hybrid_dropout: 0.0
+
+# --- Stage 4 sub-block: skill library ---
+skills:
+  # Skill representation is LoRA A @ B with shape (d_out, rank, d_in).
+  # Pick d_out = policy head input dim (equal to d_model).
+  # d_in = same (self-projection). Rank kept small (Axiom 1).
+  skill_d_out: 128
+  skill_d_in: 128
+  skill_rank: 8
+  # 3-tier bounded storage
+  gpu_capacity: 32
+  cpu_capacity: 128
+  ssd_max_shards: 4
+  ssd_shard_size: 32
+  merge_similarity_threshold: 0.9
+  # Scoring weights for LRU × usefulness × avg-reward
+  score_alpha: 1.0    # avg_reward
+  score_beta: 0.5     # log(1 + usage)
+  score_gamma: 0.1    # recency (higher = penalize idle more)
+  archive_subdir: "skills"
+
+# --- Prior blocks carry forward ---
+world_model:
+  z_dim: 32
+  h_dim: 64
+  embed_dim: 64
+  hidden: 128
+  max_rollout_steps: 10
+  kl_free_nats: 1.0
+  update_every_steps: 8
+  lr: 3.0e-4
+  wm_loss_coef: 1.0
+  log_every_steps: 5000
+
+intrinsic:
+  embed_dim: 128
+  lr: 1.0e-4
+  reward_clip: 5.0
+  reward_coef: 0.1
+  update_every_steps: 1
+
+replay:
+  hot_capacity: 4096
+  warm_capacity: 32768
+  cold_max_shards: 8
+  cold_shard_size: 4096
+  per_alpha: 0.6
+  min_size_to_sample: 1024
+  sample_every_steps: 4
+  batch_size_offpolicy: 128
+  archive_subdir: "replay"
+
+coverage:
+  num_buckets: 4096
+  log_every_steps: 5000
+
+train:
+  ppo_clip: 0.2
+  ppo_epochs: 4
+  entropy_coef: 0.01
+  value_coef: 0.5
+  gamma: 0.99
+  gae_lambda: 0.95

@@ -1,0 +1,71 @@
+# Stage 3 · World Model
+# Adds a Dreamer-style RSSM alongside the PPO policy.
+# The world model is trained on replayed transitions (already available from Stage 1).
+# Its reconstruction + KL losses do not replace PPO — they are an auxiliary
+# objective providing a sample-efficient understanding of environment dynamics.
+#
+# Stage 3 introduces the Crafter env as an option (not yet default — we keep
+# MiniGrid to make the transition observable). Switching env is one config key.
+
+stage: 3
+name: "stage3_world_model"
+
+model:
+  use_hybrid_backbone: true
+  hybrid_n_layers: 3
+  hybrid_n_heads: 4
+  hybrid_swa_window: 16
+  hybrid_ttt_mini_batch: 8
+  hybrid_ffn_hidden_mult: 4
+  hybrid_dropout: 0.0
+
+# --- Stage 3 sub-block: world model ---
+world_model:
+  # RSSM dims (obs_dim is auto-inferred from env by the trainer)
+  z_dim: 32
+  h_dim: 64
+  embed_dim: 64
+  hidden: 128
+  # Bounded rollout length (Axiom 1). Every WM update samples this many
+  # contiguous frames from replay.
+  max_rollout_steps: 10
+  # Free-nats for KL — prevents posterior collapse.
+  kl_free_nats: 1.0
+  # How often to update the WM (env steps between updates)
+  update_every_steps: 8
+  # WM optimizer learning rate (separate from PPO's)
+  lr: 3.0e-4
+  # WM loss coefficient in the auxiliary summary (does not affect PPO grads)
+  wm_loss_coef: 1.0
+  log_every_steps: 5000
+
+# --- Stage 1 / 2 blocks carry forward ---
+intrinsic:
+  embed_dim: 128
+  lr: 1.0e-4
+  reward_clip: 5.0
+  reward_coef: 0.1
+  update_every_steps: 1
+
+replay:
+  hot_capacity: 4096
+  warm_capacity: 32768
+  cold_max_shards: 8
+  cold_shard_size: 4096
+  per_alpha: 0.6
+  min_size_to_sample: 1024
+  sample_every_steps: 4
+  batch_size_offpolicy: 128
+  archive_subdir: "replay"
+
+coverage:
+  num_buckets: 4096
+  log_every_steps: 5000
+
+train:
+  ppo_clip: 0.2
+  ppo_epochs: 4
+  entropy_coef: 0.01
+  value_coef: 0.5
+  gamma: 0.99
+  gae_lambda: 0.95

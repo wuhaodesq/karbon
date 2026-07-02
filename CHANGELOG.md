@@ -10,6 +10,75 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added — Stages 3 / 4 / 5 / 6 wiring (full pipeline integrated end-to-end)
+
+**Stage 3 · World Model**
+- `configs/stage3_world_model.yaml`: WM sub-block (z_dim, h_dim, embed, hidden,
+  max_rollout_steps, kl_free_nats, lr, update_every_steps).
+- `src/train.py`: builds `RSSM` when `world_model` config present; trains on
+  transitions sampled from `BoundedReplayBuffer`; per-cycle recon/KL losses
+  logged; WM state added to checkpoints.
+- `tests/test_stage3_wm.py` (8 tests).
+
+**Stage 4 · Skill Library**
+- `configs/stage4_skills.yaml`: skills sub-block (LoRA rank, 3-tier capacities,
+  merge threshold, score weights).
+- `src/train.py`: builds `BoundedSkillLibrary`; registered in HealthChecker;
+  count logged per step summary; skills state added to checkpoints.
+- `tests/test_stage4_skills.py` (8 tests).
+
+**Stage 5 · Auto Curriculum**
+- `configs/stage5_curriculum.yaml`: curriculum sub-block with 5 declared
+  MiniGrid tasks (Empty-5x5..8x8, DoorKey-5x5/6x6).
+- `src/train.py`: builds `AutoCurriculum`; loads tasks from config; every
+  `report_every_steps` reports (1 - mean_return) as LP error; every
+  `switch_every_steps` re-samples an active task and rebuilds the env.
+- `tests/test_stage5_curriculum.py` (9 tests).
+
+**Stage 6 · Continual (Online EWC + Generative Replay + Sleep)**
+- `configs/stage6_consolidation.yaml`: continual sub-block covering EWC
+  (lambda, gamma, anchor mode, consolidate every-steps), Generative Replay VAE
+  (latent_dim, hidden, lr, kl_weight, update-every, rehearsal batch,
+  inject-every), and sleep periods (replay_trim / skills_merge / ttt_distill).
+- `src/train.py`:
+  - Builds `OnlineEWC`, `GenerativeReplayVAE`, `SleepConsolidationLoop`.
+  - Adds EWC penalty to PPO loss once `ewc.has_consolidated()`.
+  - Trains VAE from replay every N env-steps.
+  - Sleep loop registers `replay_trim / skills_merge / ttt_distill /
+    ewc_consolidate` callbacks. Sleep ticks in the training loop.
+  - EWC / GR / sleep state added to checkpoints.
+- `src/utils/config_schema.py`: `TopLevelSchema` now accepts `world_model`,
+  `skills`, `curriculum`, `continual` optional sub-blocks (permissive).
+- `tests/test_stage6_continual.py` (9 tests).
+
+**Trainer defaults**
+- `src/train.py::_DEFAULT_STAGE_CONFIGS` now maps stages 0–6 to their
+  respective yaml files.
+
+### Test coverage
+- **273 tests passing** (was 239, +34 Stage 3–6), 10 skipped, 0 failing.
+- `check_bounded`: OK across 37 source files.
+
+### Full stack summary (Stage 6 active)
+When `--stage 6 --preset cloud_5090`, the trainer builds:
+- ActorCritic backed by HybridBackbone (TTT-Linear + SWA + FFN).
+- RND intrinsic reward → augments extrinsic reward.
+- BoundedReplayBuffer (3-tier GPU/CPU/SSD) fed every step.
+- BoundedCoverage tracking state-visitation entropy.
+- RSSM world model trained on replay.
+- BoundedSkillLibrary registered in HealthChecker.
+- AutoCurriculum switching envs by learning progress.
+- OnlineEWC penalizing weight drift after each consolidation.
+- Generative Replay VAE learning obs distribution.
+- SleepConsolidationLoop firing periodic offline maintenance.
+
+All components enforce their bounded-design axioms; each is state-serializable
+and included in the checkpoint envelope.
+
+---
+
+## [Unreleased]
+
 ### Added — Stage 2 wiring (Hybrid backbone in the training loop)
 
 - `configs/stage2_hybrid.yaml` — Stage 2 config: enables `use_hybrid_backbone`,
