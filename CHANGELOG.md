@@ -10,6 +10,30 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added — Nightly / interruptible training
+
+- `scripts/cloud/nightly_run.sh` — one-command starter for off-peak-only
+  cloud training. Auto-resumes from newest ckpt, launches trainer +
+  autosync in parallel tmux sessions, optionally auto-stops after
+  `--duration <sec>` or `--until <time>` and does a final Git sync.
+- `configs/_presets/cloud_5090.yaml`: `ckpt_every_steps` reduced from
+  25_000 → 10_000 so nightly interrupts lose at most ~15–30 min of work.
+- `MIGRATION.md` §10: nightly rhythm, cost tradeoff, do/don't list.
+
+### Interrupt tolerance summary
+- Stage 0–5: FULL support (resume from any ckpt).
+- Stage 0 24h longevity: NOT interruptible (hard exit criterion).
+- Stage 6 30-day perpetual: NOT interruptible (final milestone).
+
+### Cost scenarios (vGPU-32GB @ ¥1.58/h)
+- 24/7:        ~30 days, ¥1140
+- Night-only:  ~60 days, ¥570 (12h/day)
+- Weekends:    ~90 days, ¥456 (~48h/wk)
+
+---
+
+## [Unreleased]
+
 ### Added — Autosync daemons (periodic GitHub / TOS / rsync push)
 
 - `scripts/cloud/autosync_daemon.sh` — Linux daemon that every N seconds:

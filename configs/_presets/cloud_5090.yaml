@@ -40,7 +40,7 @@ train:
   learning_rate: 3.0e-4
   total_steps: 3_000_000
   log_every_steps: 500
-  ckpt_every_steps: 25_000
+  ckpt_every_steps: 10_000   # ~15-30 min on 5090; safe for nightly-only training
 
 monitor:
   sample_interval_s: 5.0

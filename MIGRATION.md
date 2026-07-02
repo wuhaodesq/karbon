@@ -331,3 +331,82 @@ bash scripts/cloud/autosync_daemon.sh --stage 3
 | Active dev / Stage 0–1 short runs | 1800 s (30 min) |
 | Stage 2–4 medium runs | 3600 s (1 h) — default |
 | Stage 6 perpetual | 21600 s (6 h) — reduce Git churn |
+
+---
+
+## 10. Nightly / interruptible training / 夜间与断点续训
+
+**Stage 0–5 support arbitrary interrupts + resume**, so you can rent cloud
+GPUs only during off-peak hours if that's cheaper. The pipeline auto-recovers
+from the newest checkpoint on next start.
+
+Stage 0–5 全部支持任意中断 + 断点续训，可以只在夜间便宜时段租云机。
+
+**Only two things do NOT tolerate interrupts** / **不能中断的两件事**:
+- Stage 0's **24-hour longevity test** (hard exit criterion).
+- Stage 6's **30-day perpetual test** (final milestone).
+
+Everything else is fair game.
+
+### 10.1 One-command nightly run / 一键夜间训练
+
+```bash
+# Runs stage 1 with the newest ckpt, auto-stops after 6 hours:
+bash scripts/cloud/nightly_run.sh 1 cloud_5090 --duration 21600
+
+# Or run until 08:00 tomorrow local time:
+bash scripts/cloud/nightly_run.sh 1 cloud_5090 --until "tomorrow 08:00"
+
+# Or run indefinitely and stop manually:
+bash scripts/cloud/nightly_run.sh 1 cloud_5090
+```
+
+The script:
+1. Finds the latest `checkpoints/ckpt_stage{N}_*.pt` and passes `--resume`.
+2. Launches `src.train` in a tmux session.
+3. Launches `autosync_daemon.sh` in a parallel tmux session (30-min interval).
+4. If `--duration` or `--until` was given, waits then sends `SIGINT` to
+   trigger a graceful final checkpoint, then runs one last `sync_to_git.sh`.
+
+Safe to close the SSH session — tmux keeps things running; auto-stop still fires.
+
+### 10.2 Daily rhythm / 每日节奏
+
+**Startup (evening)**:
+```bash
+ssh user@cloud
+cd karbon
+git pull origin main
+bash scripts/cloud/nightly_run.sh 1 cloud_5090 --until "tomorrow 08:00"
+# Close SSH — training + autosync run unattended
+```
+
+**Shutdown (morning)**:
+```bash
+ssh user@cloud
+tmux ls                              # verify sessions gone (auto-stop finished)
+git log --oneline -3                 # confirm autosync committed
+sudo shutdown -h now                 # stop billing
+```
+
+### 10.3 Cost tradeoff / 成本权衡
+
+| Strategy | Daily hours | Stage 0–4 duration | Total cost (vGPU) |
+|---|---|---|---|
+| 24/7 | 24 h | ~30 days | ¥1140 |
+| Night-only (12h) | 12 h | ~60 days | ¥570 |
+| Weekend-only | ~48h/wk | ~90 days | ¥456 |
+
+Cheaper but longer wall-time. **Best for hobbyists on a tight budget.**
+
+### 10.4 Ckpt frequency for interruptible runs / 断点频率
+
+For nightly training, prefer more frequent ckpts. Preset `cloud_5090` was
+updated to `ckpt_every_steps: 10_000` (was 25_000) so at most 15–30 min of
+progress is lost per interrupt. Tune per your interval.
+
+### 10.5 What NOT to do overnight / 夜间不宜做的事
+
+- Do NOT start Stage 0's `longevity_24h.sh` if the machine will stop before 24h — it's a monolithic test.
+- Do NOT start Stage 6 unattended — it's the 30-day perpetual milestone, not a nightly job.
+- Do NOT skip `git pull` in the morning — you may have committed something from your laptop.
