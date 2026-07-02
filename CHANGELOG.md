@@ -10,6 +10,19 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added — Cloud-training operational scripts
+
+- `scripts/preflight.py` — 10-step pre-training checklist (Python version, torch/CUDA, GPU inventory, Triton, disk, env vars, project imports, bounded check, preset load, 20-step smoke). Exits nonzero on any critical failure.
+- `scripts/cloud/sync_to_git.sh` — pushes small stage artefacts (reports, figures, config snapshots, CHANGELOG) + optional git tag to remote. Explicitly documents the split: text → Git, binaries (`*.pt`, replay data) → TOS/rsync mirror.
+
+### Guidance
+- Reports (`docs/stage*_report.md`) and preset snapshots ARE synced to Git.
+- Checkpoints, replay cold data, exports/ are NOT — they go to TOS or an rsync mirror.
+
+---
+
+## [Unreleased]
+
 ### Added — RTX 5090 / Blackwell support + platform-image (PyTorch 2.8 / CUDA 12.8) support
 
 Target scenario: cloud VMs with pre-installed **PyTorch 2.8.0 / Python 3.12 /
