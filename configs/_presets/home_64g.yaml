@@ -1,0 +1,38 @@
+# Preset: home_64g
+# 用途：家用 64GB 显存训练机（未来阶段 3）
+# Purpose: home-built rig with 64GB total VRAM (Phase 3)
+# Ceiling: ≤48 GB VRAM (comfortable headroom)
+
+preset: home_64g
+device_preferred: cuda
+
+model:
+  hidden_size: 768
+  num_layers: 12
+  ttt_backend: triton
+
+memory:
+  gpu_budget_gb: 48.0
+  cpu_ram_budget_gb: 64.0
+  replay_gpu_capacity: 32768
+  replay_cpu_capacity: 262144
+  skill_gpu_capacity: 128
+  wm_rollout_max_steps: 32
+
+env:
+  id: "MiniGrid-DoorKey-8x8-v0"   # more complex env once we're here
+  num_envs: 32
+  max_episode_steps: 512
+
+train:
+  batch_size: 32
+  seq_len: 128
+  learning_rate: 2.0e-4
+  total_steps: 100_000_000
+  log_every_steps: 1_000
+  ckpt_every_steps: 100_000
+
+monitor:
+  sample_interval_s: 10.0
+  slope_alarm_gb_per_hour: 0.1
+  empty_cache_every_steps: 50_000

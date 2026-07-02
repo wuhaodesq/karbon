@@ -1,0 +1,11 @@
+# Local Windows CPU install (Phase 1)
+# 本地 Windows CPU 安装（阶段 1）
+#
+# Usage:
+#   pip install -r requirements/base.txt -r requirements/cpu.txt
+#
+# torch 2.5.1 CPU wheel from official index
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
+
+torch==2.5.1

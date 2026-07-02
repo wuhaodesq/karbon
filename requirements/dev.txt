@@ -1,0 +1,12 @@
+# Development tools (both local and cloud)
+# 开发工具（本地云端通用）
+
+pytest>=7.4
+pytest-cov>=4.1
+ruff>=0.5
+black>=24.0
+mypy>=1.8
+
+# Notebook (optional)
+jupyter>=1.0
+matplotlib>=3.8

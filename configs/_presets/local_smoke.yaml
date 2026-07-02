@@ -1,0 +1,41 @@
+# Preset: local_smoke
+# 用途：本地笔记本 CPU 冒烟测试
+# Purpose: 5-minute smoke test on laptop CPU (Intel i5-1335U + 16GB RAM)
+# Ceiling: ≤4 GB process RSS
+
+preset: local_smoke
+device_preferred: cpu
+
+model:
+  hidden_size: 64
+  num_layers: 1
+  # placeholder for future TTT config; unused in Stage 0 PPO baseline
+  ttt_backend: pytorch
+
+memory:
+  # These budgets are per-component ceilings enforced by health check.
+  # Stage 0 doesn't create most of these yet; they're declared for consistency.
+  gpu_budget_gb: 0.0        # No GPU expected
+  cpu_ram_budget_gb: 4.0
+  replay_gpu_capacity: 512
+  replay_cpu_capacity: 4096
+  skill_gpu_capacity: 0
+  wm_rollout_max_steps: 4
+
+env:
+  id: "MiniGrid-Empty-5x5-v0"
+  num_envs: 2
+  max_episode_steps: 64
+
+train:
+  batch_size: 1
+  seq_len: 32
+  learning_rate: 3.0e-4
+  total_steps: 200            # short; smoke mode caps this further
+  log_every_steps: 50
+  ckpt_every_steps: 200
+
+monitor:
+  sample_interval_s: 2.0
+  slope_alarm_gb_per_hour: 0.5
+  empty_cache_every_steps: 100

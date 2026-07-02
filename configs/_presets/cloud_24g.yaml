@@ -1,0 +1,38 @@
+# Preset: cloud_24g
+# 用途：单卡 24GB VRAM 云端（4090 / A100-40G partially utilized）
+# Purpose: single-GPU 24GB cloud instance (4090 or A100 with cap)
+# Ceiling: ≤14 GB VRAM
+
+preset: cloud_24g
+device_preferred: cuda
+
+model:
+  hidden_size: 256
+  num_layers: 4
+  ttt_backend: pytorch    # Stage 2a; hot-swap to triton in Stage 2b
+
+memory:
+  gpu_budget_gb: 14.0
+  cpu_ram_budget_gb: 24.0
+  replay_gpu_capacity: 10240
+  replay_cpu_capacity: 102400
+  skill_gpu_capacity: 32
+  wm_rollout_max_steps: 15
+
+env:
+  id: "MiniGrid-Empty-5x5-v0"
+  num_envs: 8
+  max_episode_steps: 256
+
+train:
+  batch_size: 8
+  seq_len: 64
+  learning_rate: 3.0e-4
+  total_steps: 1_000_000
+  log_every_steps: 500
+  ckpt_every_steps: 20_000
+
+monitor:
+  sample_interval_s: 5.0
+  slope_alarm_gb_per_hour: 0.2
+  empty_cache_every_steps: 10_000

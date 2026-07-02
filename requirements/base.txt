@@ -1,0 +1,22 @@
+# Platform-agnostic core dependencies (no torch here — that's split into cpu/cuda variants)
+# 平台无关的核心依赖（torch 拆到 cpu/cuda 分支）
+
+numpy>=1.26,<2.0
+einops>=0.8
+pyyaml>=6.0
+psutil>=5.9
+pynvml>=11.5  # NVML for GPU probing; gracefully unused if no NVIDIA GPU
+tqdm>=4.66
+
+# RL / envs
+gymnasium>=0.29
+minigrid>=2.3
+# crafter is added at Stage 3 to avoid unnecessary install cost on laptop
+# crafter>=1.8.3
+
+# Optional (imported lazily; not required for smoke)
+# wandb>=0.16
+
+# Not a dep, just a note:
+# - Triton is Linux+CUDA only; declared in cuda121.txt.
+# - torchvision is not required by the core project (may be added later).

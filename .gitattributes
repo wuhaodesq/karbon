@@ -1,0 +1,32 @@
+# Enforce LF line endings for text files (avoid CRLF surprises on Linux)
+* text=auto eol=lf
+
+# Explicit binary
+*.pt binary
+*.pth binary
+*.npy binary
+*.npz binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.zip binary
+*.tar binary
+*.gz binary
+
+# Shell scripts must be LF
+*.sh text eol=lf
+
+# PowerShell scripts can be CRLF (Windows-native), but keep them LF for consistency
+*.ps1 text eol=lf
+
+# Python
+*.py text eol=lf diff=python
+
+# Configs
+*.yaml text eol=lf
+*.yml text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.md text eol=lf

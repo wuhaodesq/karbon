@@ -1,0 +1,58 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+.pip-cache/
+
+# Testing / coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# --- Project artifacts (large, machine-generated) ---
+logs/**
+!logs/.gitkeep
+checkpoints/**
+!checkpoints/.gitkeep
+data/**
+!data/.gitkeep
+docs/figures/*.png
+!docs/figures/.gitkeep
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+.idea/
+.vscode/
+!.vscode/settings.json.example
+
+# --- Local secrets ---
+.env
+*.env.local
+.secrets/
+
+# --- Torch cache ---
+.torch/
+.cache/

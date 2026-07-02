@@ -1,0 +1,20 @@
+# Stage 0 · Baseline
+# PPO baseline on MiniGrid to validate skeleton, monitoring, and preset system.
+# 用于验证骨架、监控、预设系统的最简 PPO baseline。
+
+stage: 0
+name: "stage0_baseline"
+
+# Presets are loaded first (from configs/_presets/*.yaml by --preset flag),
+# then this file's values override.
+# 先加载 preset，本文件覆盖。
+
+train:
+  # Total steps override intentionally left to preset default.
+  # Add stage-specific overrides here if needed.
+  ppo_clip: 0.2
+  ppo_epochs: 4
+  entropy_coef: 0.01
+  value_coef: 0.5
+  gamma: 0.99
+  gae_lambda: 0.95

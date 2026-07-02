@@ -1,0 +1,13 @@
+# Cloud / home-64G Linux + CUDA 12.1 install (Phase 2 / Phase 3)
+# 云端 / 家用 Linux + CUDA 12.1 安装（阶段 2 / 阶段 3）
+#
+# Usage:
+#   pip install -r requirements/base.txt -r requirements/cuda121.txt
+#
+--index-url https://download.pytorch.org/whl/cu121
+--extra-index-url https://pypi.org/simple
+
+torch==2.5.1
+
+# Triton kernels (Stage 2b onwards). Linux + CUDA only.
+triton>=2.1,<4.0
