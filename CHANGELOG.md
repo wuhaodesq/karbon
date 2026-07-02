@@ -10,6 +10,45 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added — Stage 2 wiring (Hybrid backbone in the training loop)
+
+- `configs/stage2_hybrid.yaml` — Stage 2 config: enables `use_hybrid_backbone`,
+  keeps all Stage 1 blocks (RND / Replay / Coverage).
+- `src/train.py`:
+  - New `HybridActorCritic` class: CNN encoder → HybridBackbone
+    (TTT-Linear + SWA + FFN) → policy/value heads. Treats the rollout batch as
+    a length-B sequence so causal SWA + TTT-Linear see cross-step context.
+  - `train()` now picks between vanilla `ActorCritic` and `HybridActorCritic`
+    based on `config.model.use_hybrid_backbone`.
+  - `d_model` auto-snapped up to a multiple of `n_heads` and to even (for PE).
+- `src/utils/config_schema.py`: `ModelSchema` extended with 7 Hybrid knobs
+  (`use_hybrid_backbone`, `hybrid_n_layers`, `hybrid_n_heads`, ...); validates
+  hyperparameter ranges when hybrid is on.
+- `src/train.py::main`: `--stage 2` auto-loads `stage2_hybrid.yaml`.
+- `tests/test_stage2_hybrid.py`: 11 tests covering config load/validate,
+  Hybrid output shape/grad flow/determinism, d_model snapping, param-count
+  sanity, and shape parity with the baseline `ActorCritic`.
+
+### Test coverage
+- **239 tests passing** (was 228, +11 Stage 2), 10 skipped, 0 failing.
+- `check_bounded`: OK across 37 source files.
+
+### How to run Stage 2 on cloud
+```bash
+cd ~/karbon
+git pull origin main
+LATEST=$(ls -t /root/autodl-tmp/karbon/ckpts/ckpt_stage*_*.pt | head -1)
+tmux new -d -s stage2 "source .venv/bin/activate && bash scripts/cloud/run_stage.sh 2 cloud_5090 --resume $LATEST"
+tmux attach -t stage2
+```
+
+Note: resuming Stage 0 ckpts into Stage 2 will warn "Model state mismatch" and
+start the Hybrid model fresh (expected — different architecture).
+
+---
+
+## [Unreleased]
+
 ### Added — Stage 1 wiring (RND + Bounded Replay + Coverage)
 
 - `configs/stage1_curiosity.yaml` — Stage 1 config: intrinsic (RND), replay

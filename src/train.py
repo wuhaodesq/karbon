@@ -38,6 +38,7 @@ import torch.nn.functional as F
 from src.envs import MiniGridWrapper
 from src.intrinsic import RND, RNDConfig
 from src.memory import BoundedReplayBuffer, ReplayBudget, Transition
+from src.models import HybridBackbone
 from src.monitoring import HealthChecker, MemoryWatcher, WatcherConfig
 from src.platform import data_dir, get_device, get_device_info, stage_ckpt_path
 from src.utils import (
@@ -87,6 +88,93 @@ class ActorCritic(nn.Module):
         # obs_u8: (B, H, W, C) uint8 → (B, C, H, W) float
         x = obs_u8.permute(0, 3, 1, 2).float() / 255.0
         z = self.trunk(self.encoder(x))
+        return self.policy_head(z), self.value_head(z).squeeze(-1)
+
+
+class HybridActorCritic(nn.Module):
+    """Stage 2 actor-critic backed by the :class:`HybridBackbone`.
+
+    Architecture:
+
+        obs (B, H, W, C) uint8
+            → CNN encoder → per-obs feature (B, d_model)
+            → treat batch as a length-B sequence (B=1 sequence of B tokens)
+            → HybridBackbone → (1, B, d_model)
+            → mean pooling over the "token" axis  → (B, d_model)
+            → policy_head + value_head
+
+    Bounded semantics (Axiom 1):
+    - Hybrid backbone has no unbounded per-forward state.
+    - Inner TTT weight ``W`` is freshly zero-initialized every forward
+      (no cross-batch state accumulation in this PPO usage).
+
+    ``d_model`` is the backbone hidden dim; if not divisible by ``n_heads``
+    for the sliding-window attention, we snap it up to the next multiple.
+    """
+
+    def __init__(
+        self,
+        obs_shape: tuple[int, ...],
+        num_actions: int,
+        d_model: int = 128,
+        n_layers: int = 3,
+        n_heads: int = 4,
+        swa_window: int = 16,
+        ttt_mini_batch: int = 8,
+        ffn_hidden_mult: int = 4,
+        dropout: float = 0.0,
+    ) -> None:
+        super().__init__()
+        h, w, c = obs_shape
+        # Snap d_model up to a multiple of n_heads
+        if d_model % n_heads != 0:
+            d_model = ((d_model // n_heads) + 1) * n_heads
+        # d_model must also be even for sinusoidal position encoding
+        if d_model % 2 != 0:
+            d_model += 1
+        self.d_model = d_model
+
+        # CNN encoder → per-obs feature of size d_model
+        self.encoder = nn.Sequential(
+            nn.Conv2d(c, 16, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(16, 32, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Flatten(),
+            nn.Linear(32 * h * w, d_model),
+            nn.ReLU(inplace=True),
+        )
+
+        # Hybrid backbone (no token embedding: we feed pre-encoded features)
+        # Ensure swa_window is at least 2 and mini_batch <= swa_window.
+        swa_window = max(2, int(swa_window))
+        ttt_mini_batch = max(1, min(int(ttt_mini_batch), swa_window))
+        self.backbone = HybridBackbone(
+            d_model=d_model,
+            n_layers=int(n_layers),
+            vocab_size=0,  # pre-embedded input
+            n_heads=int(n_heads),
+            swa_window_size=swa_window,
+            ttt_mini_batch=ttt_mini_batch,
+            max_seq_len=4096,  # supports rollout batches up to 4096
+            ffn_hidden_mult=int(ffn_hidden_mult),
+            dropout=float(dropout),
+        )
+
+        self.policy_head = nn.Linear(d_model, num_actions)
+        self.value_head = nn.Linear(d_model, 1)
+
+    def forward(self, obs_u8: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        # obs_u8: (B, H, W, C) uint8 → (B, C, H, W) float
+        x = obs_u8.permute(0, 3, 1, 2).float() / 255.0
+        # (B, d_model) per-obs features
+        feats = self.encoder(x)
+        # Feed the batch as a length-B sequence: (1, B, d_model)
+        seq = feats.unsqueeze(0)
+        seq_out = self.backbone(seq)  # (1, B, d_model)
+        # Squeeze back to (B, d_model). Each position sees its own history
+        # via causal sliding-window attention + TTT-Linear's in-context state.
+        z = seq_out.squeeze(0)
         return self.policy_head(z), self.value_head(z).squeeze(-1)
 
 
@@ -302,8 +390,24 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     logger.info("Env: %s  obs_shape=%s  actions=%d", env_cfg["id"], obs_shape, num_actions)
 
     # --- Model
-    hidden = int(config["model"]["hidden_size"])
-    model = ActorCritic(obs_shape, num_actions, hidden=hidden).to(device)
+    model_cfg = config["model"]
+    if bool(model_cfg.get("use_hybrid_backbone", False)):
+        model = HybridActorCritic(
+            obs_shape=obs_shape,
+            num_actions=num_actions,
+            d_model=int(model_cfg.get("hidden_size", 128)),
+            n_layers=int(model_cfg.get("hybrid_n_layers", 3)),
+            n_heads=int(model_cfg.get("hybrid_n_heads", 4)),
+            swa_window=int(model_cfg.get("hybrid_swa_window", 16)),
+            ttt_mini_batch=int(model_cfg.get("hybrid_ttt_mini_batch", 8)),
+            ffn_hidden_mult=int(model_cfg.get("hybrid_ffn_hidden_mult", 4)),
+            dropout=float(model_cfg.get("hybrid_dropout", 0.0)),
+        ).to(device)
+        logger.info("Model: HybridActorCritic (d_model=%d, layers=%d)",
+                    model.d_model, int(model_cfg.get("hybrid_n_layers", 3)))
+    else:
+        model = ActorCritic(obs_shape, num_actions, hidden=int(model_cfg.get("hidden_size", 64))).to(device)
+        logger.info("Model: ActorCritic (hidden=%d)", int(model_cfg.get("hidden_size", 64)))
     optimizer = torch.optim.Adam(model.parameters(), lr=float(config["train"]["learning_rate"]))
     logger.info("Model params: %d", sum(p.numel() for p in model.parameters()))
 
@@ -619,6 +723,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
 _DEFAULT_STAGE_CONFIGS = {
     0: "stage0_baseline.yaml",
     1: "stage1_curiosity.yaml",
+    2: "stage2_hybrid.yaml",
 }
 
 

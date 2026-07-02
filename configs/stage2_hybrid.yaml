@@ -1,0 +1,52 @@
+# Stage 2 · Hybrid Backbone
+# Replace the tiny CNN actor-critic with:
+#   CNN encoder → Hybrid Backbone (TTT-Linear + Sliding-Window Attention + FFN)
+#     → policy/value heads
+# Inherits Stage 1 additions (RND intrinsic, Bounded Replay, Coverage).
+#
+# Stage 2a: PyTorch backend (default)
+# Stage 2b: Triton backend hot-swap (config override sets model.ttt_backend=triton)
+
+stage: 2
+name: "stage2_hybrid"
+
+model:
+  # Hybrid backbone config; PPO ActorCritic wraps it.
+  use_hybrid_backbone: true
+  hybrid_n_layers: 3
+  hybrid_n_heads: 4
+  hybrid_swa_window: 16
+  hybrid_ttt_mini_batch: 8
+  hybrid_ffn_hidden_mult: 4
+  hybrid_dropout: 0.0
+
+# --- Stage 1 blocks carry forward ---
+intrinsic:
+  embed_dim: 128
+  lr: 1.0e-4
+  reward_clip: 5.0
+  reward_coef: 0.1
+  update_every_steps: 1
+
+replay:
+  hot_capacity: 4096
+  warm_capacity: 32768
+  cold_max_shards: 8
+  cold_shard_size: 4096
+  per_alpha: 0.6
+  min_size_to_sample: 1024
+  sample_every_steps: 4
+  batch_size_offpolicy: 128
+  archive_subdir: "replay"
+
+coverage:
+  num_buckets: 4096
+  log_every_steps: 5000
+
+train:
+  ppo_clip: 0.2
+  ppo_epochs: 4
+  entropy_coef: 0.01
+  value_coef: 0.5
+  gamma: 0.99
+  gae_lambda: 0.95

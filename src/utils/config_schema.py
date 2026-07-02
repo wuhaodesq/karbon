@@ -22,6 +22,14 @@ class ModelSchema:
     hidden_size: int
     num_layers: int = 1
     ttt_backend: str = "pytorch"
+    # Stage 2+: Hybrid backbone knobs. Ignored when use_hybrid_backbone=False.
+    use_hybrid_backbone: bool = False
+    hybrid_n_layers: int = 3
+    hybrid_n_heads: int = 4
+    hybrid_swa_window: int = 16
+    hybrid_ttt_mini_batch: int = 8
+    hybrid_ffn_hidden_mult: int = 4
+    hybrid_dropout: float = 0.0
 
     def _validate(self) -> None:
         if self.hidden_size <= 0:
@@ -32,6 +40,17 @@ class ModelSchema:
             raise ConfigValidationError(
                 f"model.ttt_backend must be 'pytorch' or 'triton', got {self.ttt_backend!r}"
             )
+        if self.use_hybrid_backbone:
+            if self.hybrid_n_layers <= 0:
+                raise ConfigValidationError("model.hybrid_n_layers must be positive")
+            if self.hybrid_n_heads <= 0:
+                raise ConfigValidationError("model.hybrid_n_heads must be positive")
+            if self.hybrid_swa_window <= 0:
+                raise ConfigValidationError("model.hybrid_swa_window must be positive")
+            if self.hybrid_ttt_mini_batch <= 0:
+                raise ConfigValidationError("model.hybrid_ttt_mini_batch must be positive")
+            if not (0.0 <= self.hybrid_dropout < 1.0):
+                raise ConfigValidationError("model.hybrid_dropout must be in [0, 1)")
 
 
 @dataclass
