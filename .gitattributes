@@ -4,6 +4,7 @@
 # Explicit binary
 *.pt binary
 *.pth binary
+*.safetensors binary
 *.npy binary
 *.npz binary
 *.png binary

@@ -38,6 +38,10 @@ data/**
 docs/figures/*.png
 !docs/figures/.gitkeep
 
+# --- HF-format exports (upload to TOS/Hub, not Git) ---
+exports/**
+!exports/.gitkeep
+
 # --- OS / editor ---
 .DS_Store
 Thumbs.db

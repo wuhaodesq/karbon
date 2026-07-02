@@ -199,3 +199,65 @@ If a stage regresses on new hardware:
 2. `rsync` back the last known-good checkpoint from local mirror.
 3. Do not retrain from scratch — first bisect what changed.
 4. Log the incident in `CHANGELOG.md` under an `## Incident` section.
+
+---
+
+## 8. Exporting a Checkpoint for TOS / HuggingFace / ARK Custom Model / 导出模型到对象存储
+
+The training checkpoints under `checkpoints/` use our internal
+`src.utils.ckpt.save_ckpt` format. To upload to TOS, HuggingFace Hub, or ARK's
+custom-model import, first convert them to Hugging Face layout.
+
+训练产出的 `.pt` 是内部格式；上传到 TOS / HF Hub / ARK 自定义模型
+前先用导出脚本转成 HF 目录格式。
+
+### 8.1 Export command / 导出命令
+
+```bash
+python -m scripts.export_hf \
+    --ckpt checkpoints/ckpt_stage2_000500000.pt \
+    --output-dir exports/devagi-hybrid-stage2 \
+    --model-name "devagi-hybrid-stage2" \
+    --arch hybrid_backbone \
+    --dtype float16          # optional: float32 (default) / float16 / bfloat16
+```
+
+Supported `--arch` values: `hybrid_backbone`, `rssm`, `rnd`, `ttt_linear`.
+
+### 8.2 Output layout / 产物目录结构
+
+```
+exports/devagi-hybrid-stage2/
+├── config.json            # HF-style config + devagi metadata
+├── model.safetensors      # weights (sharded automatically if > 5 GB)
+├── model.safetensors.index.json   # only when sharded
+└── README.md              # bilingual model card
+```
+
+This directory is what you point the TOS "select a directory" picker at.
+
+### 8.3 Verify before upload / 上传前自检
+
+```bash
+python -c "
+from safetensors.torch import load_file
+import json
+d = 'exports/devagi-hybrid-stage2'
+with open(f'{d}/config.json') as f: print(json.load(f))
+w = load_file(f'{d}/model.safetensors')
+print('tensors:', len(w), 'total params:', sum(v.numel() for v in w.values()))
+"
+```
+
+### 8.4 Quick demo / 快速演示
+
+To produce demo exports without a real training run:
+
+```bash
+python scripts/build_demo_export.py     # produces exports/demo-hybrid-{fp32,fp16}/
+```
+
+### 8.5 What NOT to commit / 不要提交的东西
+
+`exports/` is git-ignored (except `.gitkeep`). Uploads go to TOS / Hub, not Git.
+`.gitattributes` already marks `*.pt` and `*.safetensors` as binary.

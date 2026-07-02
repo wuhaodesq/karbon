@@ -10,6 +10,31 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added — HuggingFace-format export path (this session)
+
+**Export tooling for TOS / HuggingFace Hub / ARK custom-model upload:**
+- `scripts/export_hf.py` — converts `src.utils.ckpt.save_ckpt` payloads to HF
+  layout: `config.json` + sharded `model.safetensors` (+ `model.safetensors.index.json`
+  when >5 GB) + bilingual `README.md`.
+- Supports architectures: `hybrid_backbone`, `rssm`, `rnd`, `ttt_linear`.
+- Supports dtype cast: `float32` / `float16` / `bfloat16`.
+- `scripts/build_demo_export.py` — one-shot generator for demo `exports/demo-hybrid-{fp32,fp16}/`
+  directly uploadable to TOS.
+- `requirements/base.txt`: adds `safetensors>=0.4`.
+- `.gitignore`: ignores `exports/` (upload artefacts, not for Git).
+- `.gitattributes`: marks `*.safetensors` as binary.
+- `MIGRATION.md` §8: bilingual export + TOS upload guide.
+- `tests/test_export_hf.py`: 8 unit tests covering flatten / shard / dtype cast
+  / roundtrip / architecture whitelist.
+
+### Test coverage after this batch
+- **208 tests passing**, 10 skipped, 0 failing.
+- `check_bounded`: OK across 37 source files.
+
+---
+
+## [Unreleased]
+
 ### Added — Full local pre-work batch (A–N)
 
 **Models:**
