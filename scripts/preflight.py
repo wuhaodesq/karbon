@@ -77,6 +77,10 @@ def check_python() -> None:
 
 def check_torch() -> tuple[str, bool, int]:
     print("[2/10] PyTorch + CUDA")
+    import warnings
+    # torch 2.5 emits a FutureWarning about pynvml → nvidia-ml-py rename;
+    # harmless for our probing purposes.
+    warnings.filterwarnings("ignore", category=FutureWarning, module="torch.cuda")
     try:
         import torch
     except ImportError as exc:
@@ -120,14 +124,65 @@ def check_triton() -> None:
 
 def check_disk() -> None:
     print("[5/10] Disk space")
-    total, used, free = shutil.disk_usage(str(_ROOT))
-    free_gb = free / 1024**3
-    total_gb = total / 1024**3
-    _ok(f"Project filesystem: {free_gb:.1f} GB free / {total_gb:.1f} GB total")
-    if free_gb < 30:
-        raise PreflightError(f"Only {free_gb:.1f} GB free — need at least 30 GB (recommend 100+)")
-    if free_gb < 100:
-        _warn(f"{free_gb:.1f} GB free — OK for Stage 0-2, but expand to 170 GB before Stage 3")
+    # Check the filesystems that actually hold training data.
+    # If DEVAGI_DATA_DIR / DEVAGI_CKPT_DIR / DEVAGI_LOGS_DIR are set to
+    # separate mounts (e.g., a large data disk), inspect those instead of
+    # only the project root (which often lives on a small system disk).
+    import os
+    checked_mounts: dict[str, tuple[float, float]] = {}
+
+    def _record(path_str: str, label: str) -> tuple[bool, float]:
+        p = Path(path_str)
+        # ensure at least one existing parent to stat
+        while not p.exists() and p != p.parent:
+            p = p.parent
+        if not p.exists():
+            _warn(f"{label}: path unavailable ({path_str})")
+            return False, 0.0
+        total, used, free = shutil.disk_usage(str(p))
+        free_gb = free / 1024**3
+        total_gb = total / 1024**3
+        # De-dup by (device, size) — best-effort
+        key = f"{total}-{free}"
+        if key in checked_mounts:
+            return True, free_gb
+        checked_mounts[key] = (free_gb, total_gb)
+        _ok(f"{label} @ {p}: {free_gb:.1f} GB free / {total_gb:.1f} GB total")
+        return True, free_gb
+
+    _record(str(_ROOT), "project root")
+
+    # Check the data-writing dirs individually (may point to a big data disk)
+    for env_var, default_rel in [
+        ("DEVAGI_DATA_DIR", "data"),
+        ("DEVAGI_CKPT_DIR", "checkpoints"),
+        ("DEVAGI_LOGS_DIR", "logs"),
+    ]:
+        path_str = os.environ.get(env_var, str(_ROOT / default_rel))
+        _record(path_str, env_var)
+
+    # Aggregate: the smallest free-space among all data-writing mounts is
+    # the binding constraint. If ANY of them has ≥100 GB, we're comfortable.
+    frees = [v[0] for v in checked_mounts.values()]
+    if not frees:
+        raise PreflightError("no disk mounts detected")
+    max_free = max(frees)
+    min_free = min(frees)
+
+    _ok(f"largest mount has {max_free:.1f} GB free; smallest has {min_free:.1f} GB free")
+
+    # Threshold logic:
+    # - Stage 0-1 needs ~30 GB.
+    # - Stage 2-4 wants 100+ GB.
+    # We fail only if the LARGEST data mount is under 30 GB (no place to write ckpts).
+    if max_free < 30:
+        raise PreflightError(
+            f"largest data mount has only {max_free:.1f} GB free — need ≥ 30 GB "
+            "(tip: set DEVAGI_CKPT_DIR / DEVAGI_DATA_DIR to a bigger data disk)"
+        )
+    if max_free < 100:
+        _warn(f"largest mount only {max_free:.1f} GB free — OK for Stage 0-1, "
+              "expand or point DEVAGI_* env-vars at a bigger disk before Stage 3")
 
 
 def check_env_vars() -> None:
