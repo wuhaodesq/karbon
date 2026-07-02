@@ -96,8 +96,13 @@ if [[ -d "${VENV_PATH}" ]]; then
     fi
 fi
 if [[ ! -d "${VENV_PATH}" ]]; then
-    echo "==> Creating venv..."
-    "${PYTHON_EXE}" -m venv "${VENV_PATH}"
+    if [[ ${SKIP_TORCH} -eq 1 ]]; then
+        echo "==> Creating venv (with --system-site-packages for pre-installed torch)..."
+        "${PYTHON_EXE}" -m venv --system-site-packages "${VENV_PATH}"
+    else
+        echo "==> Creating venv..."
+        "${PYTHON_EXE}" -m venv "${VENV_PATH}"
+    fi
 fi
 
 # shellcheck disable=SC1090,SC1091
@@ -107,8 +112,13 @@ echo "==> Upgrading pip / wheel / setuptools..."
 python -m pip install --upgrade pip wheel setuptools
 
 if [[ ${SKIP_TORCH} -eq 1 ]]; then
-    echo "==> --skip-torch: using pre-installed torch"
-    python -c "import torch; print(f'  torch: {torch.__version__}')"
+    echo "==> --skip-torch: using pre-installed torch from system site-packages"
+    if ! python -c "import torch; print(f'  torch: {torch.__version__} (cuda: {torch.cuda.is_available()})')" 2>/dev/null; then
+        echo "ERROR: torch not visible in the venv." >&2
+        echo "       The venv was created without --system-site-packages OR the image lacks torch." >&2
+        echo "       Fix: remove .venv and re-run with --force." >&2
+        exit 1
+    fi
     pip install -r "${PROJECT_ROOT}/requirements/base.txt" \
                 -r "${PROJECT_ROOT}/requirements/dev.txt"
 else

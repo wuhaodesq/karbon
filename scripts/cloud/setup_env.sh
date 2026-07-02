@@ -93,8 +93,15 @@ if [[ -d "${VENV_PATH}" ]]; then
     fi
 fi
 if [[ ! -d "${VENV_PATH}" ]]; then
-    echo "==> Creating venv..."
-    "${PYTHON_EXE}" -m venv "${VENV_PATH}"
+    # --skip-torch requires the venv to see the system's pre-installed torch,
+    # so we opt into --system-site-packages in that mode.
+    if [[ ${SKIP_TORCH} -eq 1 ]]; then
+        echo "==> Creating venv (with --system-site-packages for pre-installed torch)..."
+        "${PYTHON_EXE}" -m venv --system-site-packages "${VENV_PATH}"
+    else
+        echo "==> Creating venv..."
+        "${PYTHON_EXE}" -m venv "${VENV_PATH}"
+    fi
 fi
 
 # shellcheck disable=SC1090,SC1091
@@ -109,8 +116,13 @@ python -m pip install --upgrade pip wheel setuptools
 # right CUDA wheel by inspecting the GPU and driver.
 
 if [[ ${SKIP_TORCH} -eq 1 ]]; then
-    echo "==> --skip-torch: using pre-installed torch on this image"
-    python -c "import torch; print(f'  torch: {torch.__version__}')"
+    echo "==> --skip-torch: using pre-installed torch from system site-packages"
+    if ! python -c "import torch; print(f'  torch: {torch.__version__} (cuda: {torch.cuda.is_available()})')" 2>/dev/null; then
+        echo "ERROR: torch not visible in the venv." >&2
+        echo "       The venv was created without --system-site-packages OR the image lacks torch." >&2
+        echo "       Fix: remove .venv and re-run with --force." >&2
+        exit 1
+    fi
 else
     # Auto-select wheel: prefer cu128 for RTX 50-series or CUDA 12.8+ hosts.
     CUDA_REQ_FILE="${PROJECT_ROOT}/requirements/cuda121.txt"
