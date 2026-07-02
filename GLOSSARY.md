@@ -16,16 +16,22 @@
 | 分层存储 | Hierarchical Storage | HS | GPU/CPU/SSD/归档 四级 |
 | 淘汰策略 | Eviction Policy | — | LRU / 优先级 / 加权综合 |
 | 睡眠固化 | Sleep Consolidation | SC | 周期性蒸馏流动状态到固定权重 |
+| 睡眠固化循环 | Sleep Consolidation Loop | SCL | 按 step 周期触发 replay-trim / skill-merge / EWC 固化 |
 | 内在动机 | Intrinsic Motivation | IM | 非外部 reward 驱动的探索信号 |
 | 随机网络蒸馏 | Random Network Distillation | RND | 一种内在动机实现 |
 | 内在好奇心模块 | Intrinsic Curiosity Module | ICM | 预测误差型好奇心 |
 | 学习进度 | Learning Progress | LP | 预测误差的下降速度作为动机 |
 | 自动课程学习 | Automatic Curriculum Learning | ACL | 由 agent 自主选择任务 |
+| 自动课程 | Auto Curriculum | — | LP-驱动的有界任务池采样器 |
+| 任务模板 | Task Template | — | 课程池中一个描述任务的数据结构 |
 | 世界模型 | World Model | WM | 内部环境模拟器 |
+| 递归状态空间模型 | Recurrent State-Space Model | RSSM | Dreamer 式世界模型，隐状态=(h_det, z_stoch) |
 | 技能库 | Skill Library | SL | 存储可复用技能的有界集合 |
 | 低秩适配 | Low-Rank Adaptation | LoRA | 用于压缩技能表示 |
 | 在线弹性权重固化 | Online Elastic Weight Consolidation | oEWC | 单份累积的 Fisher 保护 |
+| Fisher 信息矩阵 | Fisher Information Matrix | FIM | 用于 EWC 加权参数保护 |
 | 生成式回放 | Generative Replay | GR | 用生成模型合成旧经验 |
+| 变分自编码器 | Variational Auto-Encoder | VAE | Generative Replay 的实现载体 |
 | 灾难性遗忘 | Catastrophic Forgetting | CF | 学新任务时旧任务性能骤降 |
 | 永续训练 | Perpetual Training | PT | 长期不重启运行 |
 | 存活性测试 | Longevity Test | — | 24h / 7d / 30d 显存漂移与状态健康检查 |
@@ -37,7 +43,7 @@
 | 有界公理 | Bounded Design Axiom | — | 见 `DESIGN_PRINCIPLES.md` |
 | 冒烟测试 | Smoke Test | — | 5 分钟端到端最小验证 |
 | 数值对齐 | Numerical Parity | — | PyTorch 与 Triton 后端输出差异 ≤ 1e-4 |
-| Fisher 信息矩阵 | Fisher Information Matrix | FIM | 用于 EWC 加权参数保护 |
+| 配置校验 | Config Schema Validation | — | 基于 dataclass 的 YAML 校验，防止 typo |
 | 检查点 | Checkpoint | ckpt | 组件状态序列化文件 |
 | 断点续训 | Resume Training | — | 从 ckpt 继续训练 |
 

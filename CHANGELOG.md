@@ -10,23 +10,68 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-### Added — Stage 1/2 pre-work on local CPU (this session, batch A+B)
-- `src/memory/bounded_replay.py` — three-tier BoundedReplayBuffer (GPU ring + CPU ring + SSD shard archive). Enforces Axioms 1, 2, 3, 6.
-- `scripts/ci/check_bounded.py` — static AST+text linter for the bounded axioms; `make check-bounds` target added.
-- `src/models/ttt_backend.py` — backend abstraction protocol; supports `pytorch`/`triton`/env-var/auto selection with graceful fallback.
-- `src/models/ttt_linear.py` — pure-PyTorch mini-batch TTT-Linear (dual-form-equivalent). Guarded by parity tests (skipped until Triton env available).
-- `src/models/sliding_attn.py` — causal Sliding-Window Attention with cached masks and causality proofs by perturbation tests.
-- `src/models/hybrid_backbone.py` — `HybridBlock` (TTT-Linear + SWA + FFN, pre-norm) and `HybridBackbone` (stackable, sinusoidal PE, optional token embedding).
-- `src/intrinsic/rnd.py` — Random Network Distillation with frozen target, trainable predictor, `RunningMeanStd` reward normalization, full state-dict serialization.
-- `scripts/cloud/{setup_env,run_stage,longevity_24h,pull_logs}.sh` — LF-only bash scripts for Phase-2 cloud deployment.
-- `docs/stage0_report.md` — bilingual template for Stage-0 exit report.
+### Added — Full local pre-work batch (A–N)
+
+**Models:**
+- `src/models/ttt_mlp.py` — TTT-MLP with 2-layer inner MLP, analytic GELU derivative, mini-batch dual form.
+- `src/models/world_model.py` — Dreamer-style RSSM: encoder / decoder / GRU / prior / posterior heads, bounded rollouts.
+
+**Memory:**
+- `src/memory/skill_library.py` — Bounded 3-tier LoRA-based skill library with LRU × usefulness × reward eviction and cosine-similarity merging.
+- `src/memory/generative_replay.py` — Small MLP VAE for anti-forgetting rehearsal.
+
+**Intrinsic / Curriculum / Continual:**
+- `src/intrinsic/learning_progress.py` — Per-task ring buffer + LP metric, smoothing, priority normalization.
+- `src/curriculum/auto_curriculum.py` — LP-driven task sampling with FIFO eviction and ε-exploration.
+- `src/continual/online_ewc.py` — Single-Fisher exponentially-decayed EWC with penalty and gradient integration.
+- `src/continual/consolidation.py` — Periodic sleep-consolidation loop with warmup gate and disabled-task support.
+
+**Envs:**
+- `src/envs/crafter_wrapper.py` — Stage-3 Crafter wrapper with lazy import, auto-reset, bounded episode-return history.
+
+**Utils:**
+- `src/utils/config_schema.py` — Dataclass-based config validation catching typos, wrong types, out-of-range values.
+
+**Scripts:**
+- `scripts/home/setup_env.sh` — Phase-3 home 64G rig setup with VRAM ≥40 GB sanity check.
+- `scripts/home/run_perpetual.sh` — tmux-wrapped perpetual training launcher.
+- `scripts/home/health_daemon.sh` — External CSV-logging health monitor with VRAM slope alarm.
+
+**Docs & governance:**
+- `AGENTS.md` — Operating protocol for automated coding assistants.
+- `CONTRIBUTING.md` — Human contributor guide.
+- `notebooks/memory_profiling.ipynb` — MemoryWatcher CSV visualization.
+- `notebooks/skill_visualization.ipynb` — Skill library usage / weight-heatmap / similarity analysis.
+- `notebooks/ttt_state_inspection.ipynb` — TTT-Linear inner-state per-segment norm plot.
+
+**Tests:**
+- `tests/test_ttt_mlp.py` (7)
+- `tests/test_skill_library.py` (13)
+- `tests/test_world_model.py` (10)
+- `tests/test_learning_progress.py` (13)
+- `tests/test_auto_curriculum.py` (10)
+- `tests/test_online_ewc.py` (11)
+- `tests/test_consolidation.py` (9)
+- `tests/test_generative_replay.py` (9)
+- `tests/test_config_schema.py` (16)
+- `tests/test_integration_stage0.py` (2) — End-to-end wire-up test using a DummyEnv.
+- `tests/test_crafter_wrapper.py` (7 + 1 skipped) — Fake-crafter-based mechanics tests.
 
 ### Test coverage after this batch
-- **93 tests passing**, 9 skipped (Triton parity, activates on Linux+CUDA).
-- Suites: platform (7), presets (9), memory-watcher (6), bounded-replay (16), check-bounded (8), TTT-Linear (11+9), sliding-attn (11), hybrid-backbone (14), RND (11).
-- Bounded-axiom static check: OK across 27 source files.
+- **200 tests passing**, 10 skipped (Triton parity + Crafter install), 0 failing.
+- `check_bounded`: OK across 37 source files.
+
+### Stage readiness after this batch
+- Stage 1 ready: `RND` + `BoundedReplayBuffer` complete.
+- Stage 2 ready: `TTT-Linear` + `TTT-MLP` + `SlidingWindowAttention` + `HybridBackbone` complete.
+- Stage 3 ready: `RSSM` world model + `CrafterWrapper` complete.
+- Stage 4 ready: `BoundedSkillLibrary` complete.
+- Stage 5 ready: `LearningProgressTracker` + `AutoCurriculum` complete.
+- Stage 6 ready: `OnlineEWC` + `SleepConsolidationLoop` + `GenerativeReplayVAE` complete.
+- Static enforcement of six axioms operational; `make check-bounds` integrated.
 
 ---
+
 
 
 ## [v0.0.0-stage0-local] — planned
