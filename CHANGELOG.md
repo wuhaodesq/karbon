@@ -10,6 +10,40 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added — Autosync daemons (periodic GitHub / TOS / rsync push)
+
+- `scripts/cloud/autosync_daemon.sh` — Linux daemon that every N seconds:
+  1. Commits & pushes small text artefacts (docs/, configs/, CHANGELOG.md) to GitHub.
+  2. `rsync`s checkpoints/figures to `${DEVAGI_REMOTE_TARGET}` if set.
+  3. Optional `--export`: re-exports the newest ckpt into `exports/latest/` HF layout.
+  Best-effort semantics — never crashes; trap SIGTERM/SIGINT for graceful shutdown.
+- `scripts/local/autosync_daemon.ps1` — PowerShell equivalent for the Windows laptop.
+- `MIGRATION.md` §9: bilingual guide on launching, stopping, and tuning the daemon.
+- `tests/test_autosync_daemon.py`: 4 structural tests (LF endings, shebang, trap
+  handler, no bare `set -e`, no leaked PATs).
+
+### How to use during Stage 0 training on the cloud
+```bash
+# In one tmux session:
+bash scripts/cloud/run_stage.sh 0 cloud_5090
+
+# In another tmux session (parallel):
+tmux new -d -s devagi_autosync \
+    "bash scripts/cloud/autosync_daemon.sh --stage 0 --interval 3600"
+```
+
+The daemon will push whatever reports / config snapshots you drop into
+`docs/` and `configs/` throughout the run, so the GitHub repo stays fresh
+without manual intervention.
+
+### Test coverage after this batch
+- **215 tests passed** (was 211), 10 skipped, 0 failing.
+- `check_bounded`: OK.
+
+---
+
+## [Unreleased]
+
 ### Added — Full-journey planning doc
 
 - `FULL_JOURNEY.md` — Bilingual end-to-end Stage 0–6 timeline, cost matrix,

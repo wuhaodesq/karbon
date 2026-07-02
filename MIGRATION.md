@@ -261,3 +261,73 @@ python scripts/build_demo_export.py     # produces exports/demo-hybrid-{fp32,fp1
 
 `exports/` is git-ignored (except `.gitkeep`). Uploads go to TOS / Hub, not Git.
 `.gitattributes` already marks `*.pt` and `*.safetensors` as binary.
+
+---
+
+## 9. Automated periodic sync (autosync daemon) / 自动周期同步守护
+
+Long training runs need continuous checkpointing to GitHub / TOS / rsync
+mirror without human babysitting. Ship two daemons:
+
+- `scripts/cloud/autosync_daemon.sh` — Linux (cloud / home rig)
+- `scripts/local/autosync_daemon.ps1` — Windows (dev laptop)
+
+Both do the same job on a configurable interval:
+1. Stage small text artefacts (`docs/`, `configs/`, `CHANGELOG.md`) → git commit + push.
+2. `rsync` `checkpoints/` and `docs/figures/` to `${DEVAGI_REMOTE_TARGET}` if set.
+3. (Optional, `--export`) re-export the newest checkpoint into `exports/latest/` HF layout.
+
+Best-effort semantics: any failure is logged and retried on the next cycle;
+the daemon never crashes.
+
+### 9.1 Launch on cloud (recommended: separate tmux) / 云端启动
+
+```bash
+tmux new -d -s devagi_autosync \
+    "bash scripts/cloud/autosync_daemon.sh --stage 0 --interval 3600"
+
+# Watch progress
+tmux attach -t devagi_autosync
+# Detach: Ctrl-B D
+```
+
+Add `--export` to also refresh the HF-format export every cycle:
+
+```bash
+bash scripts/cloud/autosync_daemon.sh --stage 2 --export --arch hybrid_backbone
+```
+
+Add rsync target via env var:
+
+```bash
+export DEVAGI_REMOTE_TARGET=user@laptop:/mnt/karbon-mirror
+bash scripts/cloud/autosync_daemon.sh --stage 3
+```
+
+### 9.2 Launch on Windows laptop / 本地 Windows 启动
+
+```powershell
+.\scripts\local\autosync_daemon.ps1 -Stage 0 -Interval 3600
+```
+
+### 9.3 Stop / 停止
+
+- **Cloud (tmux)**: `tmux kill-session -t devagi_autosync`
+- **Cloud (fg)**: `Ctrl-C`
+- **Windows**: `Ctrl-C` in the PowerShell window
+- Both handle SIGTERM/SIGINT and exit gracefully — no partial commits.
+
+### 9.4 What the daemon does NOT do / 不做
+
+- Does not create Git tags (that's Stage-exit ceremony via `sync_to_git.sh`).
+- Does not fill in `docs/stageN_report.md` (you write that at Stage exit).
+- Does not touch `logs/` or `data/` (too large / too noisy).
+- Does not force-push, amend, or rebase.
+
+### 9.5 Interval guidance / 间隔建议
+
+| Scenario | Recommended interval |
+|---|---|
+| Active dev / Stage 0–1 short runs | 1800 s (30 min) |
+| Stage 2–4 medium runs | 3600 s (1 h) — default |
+| Stage 6 perpetual | 21600 s (6 h) — reduce Git churn |
