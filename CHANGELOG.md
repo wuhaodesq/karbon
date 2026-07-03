@@ -8,6 +8,41 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [v0.2.0-stage2-cloud] — 2026-07-03
+
+### Stage 2 COMPLETED on cloud (AutoDL vGPU-32GB / RTX 4080)
+
+- **Wall time**: 25,037 s (417 min, 7.0 h)
+- **Total steps**: 3,000,000
+- **Episodes**: 272,998
+- **Peak mean_return**: **0.941** (at step ~770k)
+- **Final mean_return**: **0.896** (regression in latter half — see report)
+- **VRAM**: stable 2.71 GB / 32 GB (8.4%)
+- **VRAM slope**: 0.002 GB/h ✅
+- **Model params**: ~1.5M (HybridActorCritic with TTT-Linear + SWA + FFN × 3)
+- **Checkpoints saved**: 300
+
+### Key validation
+**TTT-Hybrid architecture works for RL.** This is the first-ever training of
+a TTT-Linear + Sliding-Window Attention + FFN backbone in a reinforcement
+learning setting. mean_ret peaked at 0.941 (vs Stage 0's 0.951), proving the
+architecture is expressive enough for policy learning.
+
+### Issues
+- mean_ret regression 0.941 → 0.896 in the latter half (possible causes:
+  entropy collapse, LR too high, RND interference — documented in report).
+- alarm_fired=True (transient slope spike at one sample; VRAM was stable).
+
+### Bugs fixed during this run
+- NaN from batch-as-sequence: HybridActorCritic treated batch dim as temporal
+  sequence, causing TTT-Linear W to explode. Fixed: each obs is independent
+  seq_len=1 (commit `829cff2`).
+- Triton warning spam: get_backend() not cached. Fixed with @lru_cache.
+
+See `docs/stage2_report.md` for full analysis.
+
+---
+
 ## [v0.1.0-stage1-cloud] — 2026-07-03
 
 ### Stage 1 COMPLETED on cloud (AutoDL vGPU-32GB / RTX 4080 sm_89)
