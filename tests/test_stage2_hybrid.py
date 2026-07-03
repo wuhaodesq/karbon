@@ -62,6 +62,8 @@ def test_stage2_bad_hybrid_dropout_rejected():
 
 
 def test_hybrid_actor_critic_shape():
+    """HybridActorCritic should produce (B, num_actions) logits and (B,) values
+    regardless of batch size, treating each obs as an independent length-1 sequence."""
     torch.manual_seed(0)
     m = HybridActorCritic(
         obs_shape=OBS_SHAPE,
@@ -72,10 +74,18 @@ def test_hybrid_actor_critic_shape():
         swa_window=8,
         ttt_mini_batch=4,
     )
+    # Small batch
     obs = torch.randint(0, 255, (4, *OBS_SHAPE), dtype=torch.uint8)
     logits, value = m(obs)
     assert logits.shape == (4, 7)
     assert value.shape == (4,)
+    # Large batch — must not produce NaN (regression for the seq-as-batch bug)
+    obs_large = torch.randint(0, 255, (512, *OBS_SHAPE), dtype=torch.uint8)
+    logits_large, value_large = m(obs_large)
+    assert logits_large.shape == (512, 7)
+    assert value_large.shape == (512,)
+    assert torch.isfinite(logits_large).all(), "NaN in large-batch logits"
+    assert torch.isfinite(value_large).all(), "NaN in large-batch values"
 
 
 def test_hybrid_actor_critic_gradient_flows():

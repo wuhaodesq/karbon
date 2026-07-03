@@ -184,12 +184,15 @@ class HybridActorCritic(nn.Module):
         x = obs_u8.permute(0, 3, 1, 2).float() / 255.0
         # (B, d_model) per-obs features
         feats = self.encoder(x)
-        # Feed the batch as a length-B sequence: (1, B, d_model)
-        seq = feats.unsqueeze(0)
-        seq_out = self.backbone(seq)  # (1, B, d_model)
-        # Squeeze back to (B, d_model). Each position sees its own history
-        # via causal sliding-window attention + TTT-Linear's in-context state.
-        z = seq_out.squeeze(0)
+        # Treat each observation as an INDEPENDENT sequence of length 1.
+        # This avoids TTT-Linear's inner W blowing up across unrelated batch
+        # elements (which would cause NaN when B is large, e.g. 512).
+        # The Hybrid backbone still applies TTT + SWA + FFN per obs, but with
+        # trivial (length-1) temporal context. Full temporal context is a
+        # Stage 3+ concern (world model uses actual observation sequences).
+        seq = feats.unsqueeze(1)        # (B, 1, d_model) — B independent seqs
+        seq_out = self.backbone(seq)     # (B, 1, d_model)
+        z = seq_out.squeeze(1)          # (B, d_model)
         return self.policy_head(z), self.value_head(z).squeeze(-1)
 
 

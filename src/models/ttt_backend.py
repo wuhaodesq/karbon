@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+from functools import lru_cache
 from typing import Literal, Protocol, runtime_checkable
 
 import torch
@@ -66,6 +67,7 @@ class TTTLinearBackend(Protocol):
 # ---------------------------------------------------------------------
 
 
+@lru_cache(maxsize=1)
 def get_backend(name: BackendName | None = None) -> TTTLinearBackend:
     """Return a TTT-Linear implementation.
 
@@ -74,7 +76,10 @@ def get_backend(name: BackendName | None = None) -> TTTLinearBackend:
       2. ``DEVAGI_TTT_BACKEND`` environment variable
       3. auto: prefer Triton on CUDA-Linux, else PyTorch
 
-    根据显式参数 / 环境变量 / 自动探测 三级顺序选择后端。
+    Result is cached (``lru_cache``) so the selection + warning only fires
+    once per process.
+
+    根据显式参数 / 环境变量 / 自动探测 三级顺序选择后端。结果缓存。
     """
     forced = name or os.environ.get("DEVAGI_TTT_BACKEND")
     if forced:
