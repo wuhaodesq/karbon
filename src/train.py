@@ -685,8 +685,24 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 optimizer.load_state_dict(payload["optim_state"])
             except (ValueError, RuntimeError) as exc:
                 logger.warning("Optimizer state mismatch on resume (%s); starting fresh.", exc)
-        state.step = int(payload.get("step", 0))
-        logger.info("Resumed from %s at step %d", resume, state.step)
+        resumed_stage = int(payload.get("stage", stage))
+        resumed_step = int(payload.get("step", 0))
+        if resumed_stage == stage:
+            # Same-stage resume: continue the step counter.
+            state.step = resumed_step
+            logger.info("Resumed same-stage %d from %s at step %d",
+                        stage, resume, state.step)
+        else:
+            # Cross-stage resume (e.g., stage 0 → stage 1): weights are
+            # inherited but the step counter restarts so this stage runs its
+            # full total_steps budget.
+            state.step = 0
+            logger.info(
+                "Cross-stage resume: loaded weights from stage %d ckpt at step %d, "
+                "resetting step counter to 0 for stage %d (this stage will run "
+                "its own total_steps=%d budget)",
+                resumed_stage, resumed_step, stage, total_steps,
+            )
 
     # --- PPO hyperparams
     ppo_clip = float(train_cfg.get("ppo_clip", 0.2))

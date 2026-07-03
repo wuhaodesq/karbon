@@ -10,6 +10,26 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed — Cross-stage checkpoint resume (critical bug)
+
+- `src/train.py::train`: when resuming from a checkpoint whose `stage` field
+  differs from the current run's `stage`, **reset the step counter to 0**
+  rather than inherit it. Previously, resuming a Stage 1 run from a Stage 0
+  ckpt at step 3_000_000 would immediately exit because
+  `state.step (3M) >= total_steps (3M)`.
+- Same-stage resume behavior unchanged: continues the step counter (allows
+  split-run training).
+- `tests/test_resume_cross_stage.py`: 3 regression tests covering same-stage,
+  cross-stage, and multi-stage-jump scenarios.
+
+### Test coverage after this batch
+- **276 tests passing** (was 273, +3 resume tests), 10 skipped.
+- `check_bounded`: OK.
+
+---
+
+## [Unreleased]
+
 ### Added — Stages 3 / 4 / 5 / 6 wiring (full pipeline integrated end-to-end)
 
 **Stage 3 · World Model**
