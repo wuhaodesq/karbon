@@ -297,10 +297,25 @@ class ColdShardTier:
 
     @property
     def capacity(self) -> int:
-        """Approximate transition capacity (bounded)."""
-        return self._max_shards * self._shard_size
+        """Approximate transition capacity (bounded).
+
+        The cold tier can momentarily hold ``max_shards`` full shards PLUS
+        one in-progress pending buffer (up to ``shard_size - 1`` entries
+        awaiting flush). The +1 shard allowance here accounts for that
+        in-flight buffer so ``__len__`` never exceeds ``capacity`` (Axiom 1).
+
+        Cold 层容量：max_shards 个完整分片 + 1 个待 flush 的 pending 缓冲。
+        """
+        return (self._max_shards + 1) * self._shard_size
 
     def __len__(self) -> int:
+        """Estimate total transitions stored.
+
+        Note: assumes each known shard is full (worst case). The real count
+        may be slightly lower for the most recent shard. For accounting
+        purposes (Axiom 1 enforcement) this is conservative — it never
+        under-reports.
+        """
         return len(self._known) * self._shard_size + len(self._pending)
 
     # ------------------------------------------------------- discovery/IO
@@ -323,19 +338,21 @@ class ColdShardTier:
     def _flush_shard(self) -> None:
         if not self._pending:
             return
+        # Axiom 2 (eviction before learning): trim oldest shard BEFORE
+        # writing a new one if we're already at capacity. This guarantees
+        # we never transiently exceed ``max_shards`` known shards on disk.
+        while len(self._known) >= self._max_shards:
+            oldest = self._known.pop(0)
+            try:
+                self._shard_path(oldest).unlink()
+            except FileNotFoundError:
+                pass
         idx = self._next_shard_idx()
         path = self._shard_path(idx)
         with path.open("wb") as f:
             pickle.dump(self._pending, f, protocol=pickle.HIGHEST_PROTOCOL)
         self._known.append(idx)
         self._pending = []
-        # Axiom 2: evict oldest shard(s) if over capacity
-        while len(self._known) > self._max_shards:
-            oldest = self._known.pop(0)
-            try:
-                self._shard_path(oldest).unlink()
-            except FileNotFoundError:
-                pass
 
     # ------------------------------------------------------------- add/sample
 

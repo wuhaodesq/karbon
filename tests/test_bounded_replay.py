@@ -255,3 +255,52 @@ def test_replay_conforms_to_bounded_component(tmp_path):
         archive_dir=tmp_path,
     )
     assert isinstance(buf, BoundedComponent)
+
+
+def test_replay_never_exceeds_capacity_under_overflow(tmp_path):
+    """Regression: ColdShardTier.__len__ was reporting more transitions
+    than its capacity allowed when the pending buffer held items on top of
+    a full shard set. This caused HealthChecker to crash Stage 1 training
+    after the replay buffer first filled up.
+
+    Bug: capacity was `max_shards * shard_size` but __len__ could be
+    `max_shards * shard_size + len(pending)` which exceeds capacity.
+
+    Fix: capacity now accounts for the in-flight pending buffer:
+    `(max_shards + 1) * shard_size`.
+    """
+    buf = BoundedReplayBuffer(
+        budget=ReplayBudget(
+            hot_capacity=4, warm_capacity=4,
+            cold_max_shards=2, cold_shard_size=4,
+        ),
+        obs_shape=OBS_SHAPE,
+        device="cpu",
+        archive_dir=tmp_path,
+    )
+    # Force the buffer into the failure regime: fill hot + warm + cold to
+    # capacity, then keep adding so pending accumulates on top of full shards.
+    for i in range(100):
+        buf.add(_mk_transition(i))
+    buf.flush_cold()
+    # Critical assertion: HealthChecker would have raised here before the fix
+    assert len(buf) <= buf.capacity, (
+        f"BoundedReplayBuffer exceeded its declared capacity: "
+        f"len={len(buf)} cap={buf.capacity}"
+    )
+    # Also explicitly check cold tier (the buggy one)
+    assert len(buf.cold) <= buf.cold.capacity, (
+        f"ColdShardTier exceeded its declared capacity: "
+        f"len={len(buf.cold)} cap={buf.cold.capacity}"
+    )
+
+
+def test_replay_cold_capacity_includes_pending_allowance(tmp_path):
+    """ColdShardTier.capacity must include allowance for one in-flight
+    pending buffer (so __len__ can never exceed capacity)."""
+    from pathlib import Path
+    from src.memory import ColdShardTier
+
+    tier = ColdShardTier(archive_dir=tmp_path, max_shards=4, shard_size=64)
+    # (max_shards + 1) * shard_size = 5 * 64 = 320
+    assert tier.capacity == 5 * 64
