@@ -8,6 +8,44 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [v0.1.0-stage1-cloud] — 2026-07-03
+
+### Stage 1 COMPLETED on cloud (AutoDL vGPU-32GB / RTX 4080 sm_89)
+
+- **Wall time**: 16,160 s (269 min, 4.5 h)
+- **Total steps**: 3,000,000
+- **Episodes**: 598,995
+- **Final mean_return**: **0.955** (stable, inherited from Stage 0)
+- **Peak VRAM**: 0.93 GB / 32 GB (2.9%)
+- **VRAM slope at end**: **0.0 GB/h** ✅
+- **alarm_fired**: **False** ✅ (warmup fix verified — no false positive)
+- **Coverage**: 11 / 4096 buckets = 0.27% (MiniGrid-5x5 state space is tiny)
+- **Replay final**: hot=4096, warm=32768, cold=8 shards (34496), total=71360/73728
+- **Checkpoints saved**: 300
+- **Unit tests**: 278 passed / 10 skipped
+- **check_bounded**: OK across 37 source files
+
+See `docs/stage1_report.md` for the full run card.
+
+### Key validations
+1. **RND curiosity**: stable throughout, no NaN.
+2. **BoundedReplayBuffer 3-tier**: hot→warm→cold eviction cycle observed
+   (periodic 73216→69632→73216 every ~512 steps). Axioms 1, 2, 3 empirically
+   validated.
+3. **MemoryWatcher warmup fix**: `alarm_fired=False` across entire 4.5h run.
+4. **Cross-stage resume**: Stage 0 → Stage 1 step counter reset correctly.
+
+### Bugs fixed during this run
+- Cross-stage resume step counter reset (commit `3f3e5e2`).
+- ColdShardTier capacity includes pending buffer (commit `490b34f`).
+
+### Environment
+- Ubuntu 22.04, Python 3.12.3, torch 2.5.1+cu124, triton 3.1.0
+- Preset: `cloud_5090`
+- Resumed from: `ckpt_stage0_003000000.pt`
+
+---
+
 ## [Unreleased]
 
 ### Fixed — Cross-stage checkpoint resume (critical bug)
