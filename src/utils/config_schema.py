@@ -30,6 +30,11 @@ class ModelSchema:
     hybrid_ttt_mini_batch: int = 8
     hybrid_ffn_hidden_mult: int = 4
     hybrid_dropout: float = 0.0
+    # Stage 3+: Pretrained vision encoder (DINOv2/CLIP). Optional.
+    use_vision_encoder: bool = False
+    vision_model: str = "dinov2_vits14"
+    vision_freeze: bool = True
+    vision_target_size: int = 224
 
     def _validate(self) -> None:
         if self.hidden_size <= 0:
@@ -51,6 +56,9 @@ class ModelSchema:
                 raise ConfigValidationError("model.hybrid_ttt_mini_batch must be positive")
             if not (0.0 <= self.hybrid_dropout < 1.0):
                 raise ConfigValidationError("model.hybrid_dropout must be in [0, 1)")
+        if self.use_vision_encoder:
+            if self.vision_target_size < 14:
+                raise ConfigValidationError("model.vision_target_size must be >= 14")
 
 
 @dataclass

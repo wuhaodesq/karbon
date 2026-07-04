@@ -54,6 +54,7 @@ from src.memory import (
     Transition,
 )
 from src.models import HybridBackbone, RSSM, RSSMConfig
+from src.models.vision_encoder import CNNEncoder, VisionEncoder, build_encoder
 from src.monitoring import HealthChecker, MemoryWatcher, WatcherConfig
 from src.platform import data_dir, get_device, get_device_info, stage_ckpt_path
 from src.utils import (
@@ -107,24 +108,25 @@ class ActorCritic(nn.Module):
 
 
 class HybridActorCritic(nn.Module):
-    """Stage 2 actor-critic backed by the :class:`HybridBackbone`.
+    """Stage 2+ actor-critic backed by the :class:`HybridBackbone`.
 
     Architecture:
 
         obs (B, H, W, C) uint8
-            → CNN encoder → per-obs feature (B, d_model)
-            → treat batch as a length-B sequence (B=1 sequence of B tokens)
-            → HybridBackbone → (1, B, d_model)
-            → mean pooling over the "token" axis  → (B, d_model)
+            → [VisionEncoder or CNNEncoder] → per-obs feature (B, d_model)
+            → treat batch as B independent length-1 sequences
+            → HybridBackbone → (B, 1, d_model)
+            → squeeze → (B, d_model)
             → policy_head + value_head
+
+    When ``use_vision_encoder=True`` in config, the encoder is a pretrained
+    DINOv2/CLIP backbone (frozen) + trainable projection. This enables
+    semantic object recognition without retraining the backbone.
 
     Bounded semantics (Axiom 1):
     - Hybrid backbone has no unbounded per-forward state.
-    - Inner TTT weight ``W`` is freshly zero-initialized every forward
-      (no cross-batch state accumulation in this PPO usage).
-
-    ``d_model`` is the backbone hidden dim; if not divisible by ``n_heads``
-    for the sliding-window attention, we snap it up to the next multiple.
+    - Vision encoder backbone is frozen → constant VRAM.
+    - Inner TTT weight ``W`` is freshly zero-initialized every forward.
     """
 
     def __init__(
@@ -138,9 +140,11 @@ class HybridActorCritic(nn.Module):
         ttt_mini_batch: int = 8,
         ffn_hidden_mult: int = 4,
         dropout: float = 0.0,
+        use_vision_encoder: bool = False,
+        vision_model_name: str = "dinov2_vits14",
+        vision_freeze: bool = True,
     ) -> None:
         super().__init__()
-        h, w, c = obs_shape
         # Snap d_model up to a multiple of n_heads
         if d_model % n_heads != 0:
             d_model = ((d_model // n_heads) + 1) * n_heads
@@ -149,29 +153,34 @@ class HybridActorCritic(nn.Module):
             d_model += 1
         self.d_model = d_model
 
-        # CNN encoder → per-obs feature of size d_model
-        self.encoder = nn.Sequential(
-            nn.Conv2d(c, 16, 3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(16, 32, 3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Flatten(),
-            nn.Linear(32 * h * w, d_model),
-            nn.ReLU(inplace=True),
-        )
+        # --- Encoder: pretrained vision or from-scratch CNN ---
+        self.use_vision = use_vision_encoder
+        if use_vision_encoder:
+            try:
+                self.encoder = VisionEncoder(
+                    d_model=d_model,
+                    model_name=vision_model_name,
+                    freeze=vision_freeze,
+                )
+                logger.info("HybridActorCritic: using pretrained %s", vision_model_name)
+            except (RuntimeError, ValueError) as exc:
+                logger.warning("VisionEncoder load failed (%s), falling back to CNN", exc)
+                self.encoder = CNNEncoder(obs_shape, d_model=d_model)
+                self.use_vision = False
+        else:
+            self.encoder = CNNEncoder(obs_shape, d_model=d_model)
 
         # Hybrid backbone (no token embedding: we feed pre-encoded features)
-        # Ensure swa_window is at least 2 and mini_batch <= swa_window.
         swa_window = max(2, int(swa_window))
         ttt_mini_batch = max(1, min(int(ttt_mini_batch), swa_window))
         self.backbone = HybridBackbone(
             d_model=d_model,
             n_layers=int(n_layers),
-            vocab_size=0,  # pre-embedded input
+            vocab_size=0,
             n_heads=int(n_heads),
             swa_window_size=swa_window,
             ttt_mini_batch=ttt_mini_batch,
-            max_seq_len=4096,  # supports rollout batches up to 4096
+            max_seq_len=4096,
             ffn_hidden_mult=int(ffn_hidden_mult),
             dropout=float(dropout),
         )
@@ -180,10 +189,8 @@ class HybridActorCritic(nn.Module):
         self.value_head = nn.Linear(d_model, 1)
 
     def forward(self, obs_u8: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        # obs_u8: (B, H, W, C) uint8 → (B, C, H, W) float
-        x = obs_u8.permute(0, 3, 1, 2).float() / 255.0
-        # (B, d_model) per-obs features
-        feats = self.encoder(x)
+        # Encoder handles its own permute/normalize internally
+        feats = self.encoder(obs_u8)  # (B, d_model)
         # Treat each observation as an INDEPENDENT sequence of length 1.
         # This avoids TTT-Linear's inner W blowing up across unrelated batch
         # elements (which would cause NaN when B is large, e.g. 512).
@@ -420,14 +427,23 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             ttt_mini_batch=int(model_cfg.get("hybrid_ttt_mini_batch", 8)),
             ffn_hidden_mult=int(model_cfg.get("hybrid_ffn_hidden_mult", 4)),
             dropout=float(model_cfg.get("hybrid_dropout", 0.0)),
+            use_vision_encoder=bool(model_cfg.get("use_vision_encoder", False)),
+            vision_model_name=str(model_cfg.get("vision_model", "dinov2_vits14")),
+            vision_freeze=bool(model_cfg.get("vision_freeze", True)),
         ).to(device)
-        logger.info("Model: HybridActorCritic (d_model=%d, layers=%d)",
-                    model.d_model, int(model_cfg.get("hybrid_n_layers", 3)))
+        vision_tag = " + VisionEncoder" if model_cfg.get("use_vision_encoder") else ""
+        logger.info("Model: HybridActorCubit (d_model=%d, layers=%d%s)",
+                    model.d_model, int(model_cfg.get("hybrid_n_layers", 3)), vision_tag)
     else:
         model = ActorCritic(obs_shape, num_actions, hidden=int(model_cfg.get("hidden_size", 64))).to(device)
         logger.info("Model: ActorCritic (hidden=%d)", int(model_cfg.get("hidden_size", 64)))
-    optimizer = torch.optim.Adam(model.parameters(), lr=float(config["train"]["learning_rate"]))
-    logger.info("Model params: %d", sum(p.numel() for p in model.parameters()))
+    optimizer = torch.optim.Adam(
+        [p for p in model.parameters() if p.requires_grad],
+        lr=float(config["train"]["learning_rate"]),
+    )
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    logger.info("Model params: %d (trainable: %d)", total_params, trainable_params)
 
     # --- Bounded rollout buffer (declared capacity)
     rollout_capacity = 128 if smoke_only else 512
