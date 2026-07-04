@@ -7,6 +7,26 @@ Based on the formula:
 Implements an APPROXIMATION of transformational creativity — the ability
 to break existing rules and create new conceptual spaces.
 
+NOTE: This is an APPROXIMATION, not true transformational creativity.
+      True transformational creativity requires stepping entirely outside
+      the rule space (e.g., inventing a completely new concept that has
+      no relation to any existing knowledge). This module approximates it
+      by systematically breaking rules and checking if the rest of the
+      rule system still holds — but it operates WITHIN the existing
+      concept space, not outside it.
+      
+      未来正确性可以不保证 — the causal consistency check uses the world
+      model's approximation, which itself may be wrong. Accepted
+      transformations are "promising hypotheses", not guaranteed truths.
+      They must be empirically tested (via HypothesisTester) before
+      being relied upon.
+
+      本模块是变革创造的近似实现，不是真正的变革创造。
+      真正的变革创造需要完全跳出规则空间，本模块仍在规则空间内操作。
+      因果自洽校验依赖世界模型的近似，世界模型本身可能有误。
+      被接受的变革只是"有前景的假设"，不是保证正确的真理。
+      必须经 HypothesisTester 实证检验后才能信赖。
+
 Five stages:
 
 1. STOCKPILE — collect "building blocks" from all accumulated knowledge:
