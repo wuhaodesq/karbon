@@ -845,6 +845,16 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             state.step += 1
             watcher.tick(step=state.step)
 
+            # --- Stage 4: extract skill on successful episode end ---
+            if skills is not None and (step_out.terminated or step_out.truncated):
+                ep_ret = env.summary().get("last_return", 0.0)
+                if ep_ret > 0.3:
+                    skill = skills.new_skill(
+                        tag=f"ep{env.summary()['episodes']}_ret{ep_ret:.2f}"
+                    )
+                    skill.record_use(reward=ep_ret)
+                    skills.add(skill)
+
             if state.step >= total_steps:
                 break
 
