@@ -24,16 +24,20 @@ model:
 # --- Stage 4 sub-block: skill library ---
 skills:
   # Skill representation is LoRA A @ B with shape (d_out, rank, d_in).
-  # Pick d_out = policy head input dim (equal to d_model).
-  # d_in = same (self-projection). Rank kept small (Axiom 1).
+  # Each skill ≈ 6 KB (fp32) → VRAM impact is negligible.
+  # GPU tier stores top-K for fast lookup; CPU + SSD are archives.
   skill_d_out: 128
   skill_d_in: 128
   skill_rank: 8
-  # 3-tier bounded storage
-  gpu_capacity: 32
-  cpu_capacity: 128
-  ssd_max_shards: 4
-  ssd_shard_size: 32
+  # 3-tier bounded storage — tuned for generous capacity.
+  # GPU: 256 skills (~1.5 MB VRAM, O(256×384) per lookup ≈ 100k ops)
+  # CPU: 2048 skills (~12 MB RAM)
+  # SSD: 64 shards × 128 = 8192 skills (~50 MB disk)
+  # Total capacity: 256 + 2048 + 8192 = 10496 skills
+  gpu_capacity: 256
+  cpu_capacity: 2048
+  ssd_max_shards: 64
+  ssd_shard_size: 128
   merge_similarity_threshold: 0.9
   # Scoring weights for LRU × usefulness × avg-reward
   score_alpha: 1.0    # avg_reward
