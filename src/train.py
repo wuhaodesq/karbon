@@ -153,7 +153,9 @@ class HybridActorCritic(nn.Module):
             d_model += 1
         self.d_model = d_model
 
-        # --- Encoder: pretrained vision or from-scratch CNN ---
+        # --- Encoder: inline CNN (backward-compatible with Stage 0-3 checkpoints) ---
+        # Use CNNEncoder/VisionEncoder only when use_vision_encoder=True.
+        # When False, use the old inline Sequential so Stage 0-3 weights load.
         self.use_vision = use_vision_encoder
         if use_vision_encoder:
             try:
@@ -165,10 +167,29 @@ class HybridActorCritic(nn.Module):
                 logger.info("HybridActorCritic: using pretrained %s", vision_model_name)
             except (RuntimeError, ValueError) as exc:
                 logger.warning("VisionEncoder load failed (%s), falling back to CNN", exc)
-                self.encoder = CNNEncoder(obs_shape, d_model=d_model)
+                h, w, c = obs_shape
+                self.encoder = nn.Sequential(
+                    nn.Conv2d(c, 16, 3, padding=1),
+                    nn.ReLU(inplace=True),
+                    nn.Conv2d(16, 32, 3, padding=1),
+                    nn.ReLU(inplace=True),
+                    nn.Flatten(),
+                    nn.Linear(32 * h * w, d_model),
+                    nn.ReLU(inplace=True),
+                )
                 self.use_vision = False
         else:
-            self.encoder = CNNEncoder(obs_shape, d_model=d_model)
+            # Old inline encoder — matches Stage 0-3 checkpoint keys
+            h, w, c = obs_shape
+            self.encoder = nn.Sequential(
+                nn.Conv2d(c, 16, 3, padding=1),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(16, 32, 3, padding=1),
+                nn.ReLU(inplace=True),
+                nn.Flatten(),
+                nn.Linear(32 * h * w, d_model),
+                nn.ReLU(inplace=True),
+            )
 
         # Hybrid backbone (no token embedding: we feed pre-encoded features)
         swa_window = max(2, int(swa_window))
@@ -189,8 +210,9 @@ class HybridActorCritic(nn.Module):
         self.value_head = nn.Linear(d_model, 1)
 
     def forward(self, obs_u8: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        # Encoder handles its own permute/normalize internally
-        feats = self.encoder(obs_u8)  # (B, d_model)
+        # Inline permute (matches Stage 0-3 checkpoint behavior)
+        x = obs_u8.permute(0, 3, 1, 2).float() / 255.0
+        feats = self.encoder(x)  # (B, d_model)
         # Treat each observation as an INDEPENDENT sequence of length 1.
         # This avoids TTT-Linear's inner W blowing up across unrelated batch
         # elements (which would cause NaN when B is large, e.g. 512).

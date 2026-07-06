@@ -153,7 +153,7 @@ def test_vision_encoder_bad_target_size_rejected():
 
 def test_hybrid_actor_critic_with_vision_falls_back_to_cnn(monkeypatch):
     """HybridActorCritic with use_vision_encoder=True should gracefully
-    fall back to CNN when the pretrained model can't be loaded (e.g., offline)."""
+    fall back to inline CNN when the pretrained model can't be loaded."""
     import src.models.vision_encoder as ve_mod
     def mock_load(*args, **kwargs):
         raise RuntimeError("simulated offline")
@@ -170,10 +170,10 @@ def test_hybrid_actor_critic_with_vision_falls_back_to_cnn(monkeypatch):
         n_heads=4,
         swa_window=4,
         ttt_mini_batch=2,
-        use_vision_encoder=True,  # will try DINOv2, fail, fall back to CNN
+        use_vision_encoder=True,  # will try DINOv2, fail, fall back to inline CNN
         vision_model_name="dinov2_vits14",
     )
-    # Should have fallen back to CNN encoder
+    # Should have fallen back to inline CNN encoder
     assert m.use_vision is False
     # Should still produce valid output
     obs = torch.randint(0, 255, (4, *OBS_SHAPE), dtype=torch.uint8)
