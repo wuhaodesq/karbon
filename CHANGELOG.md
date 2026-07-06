@@ -8,6 +8,30 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [v0.3.0-stage3-cloud] — 2026-07-04
+
+### Stage 3 COMPLETED on cloud (AutoDL vGPU-32GB / RTX 4080)
+
+- **Wall time**: 26,536 s (442 min, 7.4 h)
+- **Total steps**: 3,000,000
+- **Episodes**: 542,262
+- **Final mean_return**: **0.950** (stable, no Stage 2 regression)
+- **VRAM**: 2.70 GB / 32 GB (8.4%)
+- **VRAM slope**: 0.0 GB/h ✅
+- **WM loss**: 1.0 (recon=4e-6, kl=1.0 at free_nats floor)
+- **Model params**: ~7.4M (HybridActorCritic 7.26M + RSSM 186k)
+- **Checkpoints**: 300
+
+### Key validation
+1. **RSSM world model** trains stably alongside PPO.
+2. **No regression** — mean_ret 0.950 stable throughout (Stage 2 had 0.941→0.896).
+3. VRAM unchanged from Stage 2 (RSSM adds only 186k params).
+4. WM recon loss ≈ 4e-6 (MiniGrid dynamics are simple).
+
+See `docs/stage3_report.md` for full analysis.
+
+---
+
 ## [v0.2.0-stage2-cloud] — 2026-07-03
 
 ### Stage 2 COMPLETED on cloud (AutoDL vGPU-32GB / RTX 4080)
