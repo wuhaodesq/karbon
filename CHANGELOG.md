@@ -8,6 +8,31 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [v0.5.0-stage5-cloud] — 2026-07-07
+
+### Stage 5 COMPLETED on cloud (AutoDL vGPU-32GB / RTX 4080)
+
+- **Wall time**: 28,945 s (482 min, 8.0 h)
+- **Total steps**: 3,000,000
+- **Episodes**: 31,491
+- **Final mean_return**: **0.937**
+- **VRAM**: 2.71 GB, slope 0.0 ✅
+- **Coverage**: **7.9% (324 buckets)** — 20× growth from 0.4%
+- **Skills**: 10496/10496 (344,012 created, 333,516 merged/evicted)
+- **Tasks mastered**: empty-5x5, empty-6x6, empty-8x8
+- **Tasks explored**: doorkey-5x5, doorkey-6x6 (not solved)
+
+### Key validation
+1. **AutoCurriculum** with 5 tasks — multiple autonomous task switches.
+2. **Explosive learning** on Empty-8x8 (new task): 0→0.906 in 27k steps.
+3. **No permanent forgetting** — recovered from temporary regression.
+4. **Coverage 20× growth** — each DoorKey exploration added new states.
+5. **Skill library** stable at 10496/10496 with 344k total skill operations.
+
+See `docs/stage5_report.md` for full analysis.
+
+---
+
 ## [v0.4.0-stage4-cloud] — 2026-07-07
 
 ### Stage 4 COMPLETED on cloud (AutoDL vGPU-32GB / RTX 4080)
