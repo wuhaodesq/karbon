@@ -8,6 +8,33 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [v0.4.0-stage4-cloud] — 2026-07-07
+
+### Stage 4 COMPLETED on cloud (AutoDL vGPU-32GB / RTX 4080)
+
+- **Wall time**: 50,939 s (849 min, 14.2 h)
+- **Total steps**: 3,000,000
+- **Episodes**: 331,211
+- **Final mean_return**: **0.914** (V-shaped recovery from 0.600)
+- **VRAM**: 2.71 GB, slope 0.0 ✅
+- **Skills**: 10496/10496 (full, merge/eviction operational)
+- **Skills created**: 317,150 (306,654 merged/evicted = 97% turnover)
+- **Speed**: 32 step/s (3.5× slower due to per-episode skill extraction)
+
+### Key validation
+1. Skill library filled to capacity and stayed bounded (Axiom 1).
+2. Merge (cosine > 0.9) + LRU eviction worked continuously.
+3. V-shaped recovery: 0.955 → 0.600 → 0.914 (agent fully recovered).
+4. All three tiers saturated: GPU(256) + CPU(2048) + SSD(64×128).
+
+### Bug fixed during this run
+- CNNEncoder wrapper changed state_dict keys → Stage 3 weights couldn't load →
+  reverted to inline encoder (commit `a67d712`).
+
+See `docs/stage4_report.md` for full analysis.
+
+---
+
 ## [v0.3.0-stage3-cloud] — 2026-07-04
 
 ### Stage 3 COMPLETED on cloud (AutoDL vGPU-32GB / RTX 4080)
