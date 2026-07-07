@@ -1,14 +1,9 @@
-# Stage 6 · Perpetual (Online EWC + Sleep Consolidation + Generative Replay)
+# Stage 6 · Perpetual (Online EWC + Generative Replay + Sleep Consolidation)
 # The AGI-esque terminal stage. Adds:
 #   - Online EWC: single Fisher matrix, penalizes drift from important weights.
-#   - Generative Replay VAE: synthesizes past observations for rehearsal
-#     instead of storing them all (Axiom 1 satisfied by fixed-size VAE).
+#   - Generative Replay VAE: synthesizes past observations for rehearsal.
 #   - Sleep Consolidation Loop: periodic offline "night" that trims replay,
 #     merges skills, and runs EWC consolidate.
-#
-# Exit criterion: 30 consecutive days of uninterrupted training with:
-#   * VRAM slope ≈ 0 GB/h over 7-day rolling windows
-#   * ≥10 tasks learned in sequence with ≤10% drop on earliest tasks
 
 stage: 6
 name: "stage6_consolidation"
@@ -27,9 +22,8 @@ continual:
   # Online EWC
   ewc_lambda: 1.0
   ewc_gamma: 0.95
-  ewc_anchor_mode: "replace"       # "replace" or "ema"
+  ewc_anchor_mode: "replace"
   ewc_anchor_ema_alpha: 0.9
-  # How often to run the EWC consolidate step (should align with sleep cycles)
   ewc_consolidate_every_steps: 100000
   ewc_consolidate_num_batches: 32
   ewc_batch_size: 32
@@ -43,7 +37,6 @@ continual:
   gr_update_every_steps: 16
   gr_batch_size: 32
   gr_rehearsal_batch_size: 32
-  # How often to inject synthetic samples into replay for rehearsal
   gr_inject_every_steps: 5000
 
   # Sleep consolidation loop
@@ -52,7 +45,7 @@ continual:
   sleep_skills_merge_every: 20000
   sleep_ttt_distill_every: 20000
 
-# --- Prior blocks carry forward ---
+# --- Prior blocks carry forward (with enlarged capacity) ---
 curriculum:
   max_tasks: 8
   lp_window_size: 32
@@ -72,10 +65,10 @@ skills:
   skill_d_out: 128
   skill_d_in: 128
   skill_rank: 8
-  gpu_capacity: 32
-  cpu_capacity: 128
-  ssd_max_shards: 4
-  ssd_shard_size: 32
+  gpu_capacity: 256
+  cpu_capacity: 2048
+  ssd_max_shards: 64
+  ssd_shard_size: 128
   merge_similarity_threshold: 0.9
   score_alpha: 1.0
   score_beta: 0.5
