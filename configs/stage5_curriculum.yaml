@@ -1,4 +1,4 @@
-# Stage 5 · Auto Curriculum (Learning Progress driven)
+# Stage 5 · Auto Curriculum (LP driven)
 # Adds an AutoCurriculum on top of Stage 4. Instead of training on a fixed
 # env/task, the agent samples the next task from an LP-driven distribution.
 #
@@ -43,15 +43,15 @@ curriculum:
     - {id: 3, env_id: "MiniGrid-DoorKey-5x5-v0", difficulty: 0.5, tag: "doorkey-5x5"}
     - {id: 4, env_id: "MiniGrid-DoorKey-6x6-v0", difficulty: 0.6, tag: "doorkey-6x6"}
 
-# --- Prior blocks carry forward ---
+# --- Stage 4 blocks carry forward (with enlarged capacity) ---
 skills:
   skill_d_out: 128
   skill_d_in: 128
   skill_rank: 8
-  gpu_capacity: 32
-  cpu_capacity: 128
-  ssd_max_shards: 4
-  ssd_shard_size: 32
+  gpu_capacity: 256
+  cpu_capacity: 2048
+  ssd_max_shards: 64
+  ssd_shard_size: 128
   merge_similarity_threshold: 0.9
   score_alpha: 1.0
   score_beta: 0.5
