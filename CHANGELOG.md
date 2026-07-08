@@ -3,6 +3,38 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+## [v1.1.0-stage7-cloud] - 2026-07-09
+
+### Stage 7 COMPLETED - ALL 7 STAGES DONE
+
+- **Wall time**: 29,274 s (8.1 h)
+- **Steps**: 3,000,000
+- **Final mean_return**: **0.955**
+- **VRAM**: 2.82 GB, slope 0.0 ✅
+- **Coverage**: **8.9% (363 buckets)**
+- **Skills**: 10496/10496 (877,149 created)
+- **EWC**: ✅ consolidated (Fisher L1=1265)
+- **Sleep Loop**: replay_trim×292, skills_merge×146, ewc×29
+
+### Key validation
+1. **SelfModel** (metacognition) active every step.
+2. **NeuralSymbolicLayer** + **LogicEngine** active (no rules extracted due to EWC interference).
+3. **ReflectionLoop** fired every 10 episodes.
+4. **InnerDialogue** generated natural-language reflections:
+   - "I failed this episode with return 0.000." (during EWC interference)
+   - "I succeeded this episode with return 0.955." (after recovery)
+5. Agent recovered from EWC interference: 0.006 -> 0.955.
+
+### Complete 7-stage journey
+- Total wall time: ~58 hours
+- Total steps: 21,000,000
+- Final mean_ret: 0.955
+- Peak VRAM: 2.82 GB / 32 GB (8.8%)
+- Skills created total: ~2.5M across all stages
+- Coverage growth: 0.1% -> 8.9% (89×)
+
+See `docs/stage7_report.md` for full analysis.
+
 ## [v1.0.0-stage6-cloud] - 2026-07-08
 
 ### Stage 6 COMPLETED - ALL 6 STAGES DONE
