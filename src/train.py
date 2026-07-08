@@ -712,6 +712,80 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         sleep_loop.set_ewc_consolidate(_sleep_ewc_consolidate)
         logger.info("SleepConsolidationLoop enabled")
 
+    # --- Stage 7+: Cognitive modules (SelfModel, NeuralSymbolic, LogicEngine, etc.) ---
+    cognitive_cfg = config.get("cognitive")
+    self_model: Any = None
+    symbolic_layer: Any = None
+    logic_engine: Any = None
+    reflection_loop: Any = None
+    inner_dialogue: Any = None
+    language_gen: Any = None
+
+    if stage >= 7 and cognitive_cfg:
+        # SelfModel (metacognition)
+        if bool(cognitive_cfg.get("self_model_enabled", False)):
+            from src.models.metacognition import SelfModel
+            self_model = SelfModel(
+                d_model=int(cognitive_cfg.get("self_model_d_model", 384)),
+                hidden=int(cognitive_cfg.get("self_model_hidden", 64)),
+            ).to(device)
+            logger.info("SelfModel enabled (metacognition)")
+
+        # NeuralSymbolicLayer (rule extraction + override)
+        if bool(cognitive_cfg.get("symbolic_enabled", False)):
+            from src.models.neural_symbolic import NeuralSymbolicLayer
+            symbolic_layer = NeuralSymbolicLayer(
+                d_model=int(model_cfg.get("hidden_size", 384)),
+                num_actions=num_actions,
+                max_rules=int(cognitive_cfg.get("symbolic_max_rules", 64)),
+                match_threshold=float(cognitive_cfg.get("symbolic_match_threshold", 0.7)),
+                extraction_reward_threshold=float(cognitive_cfg.get("symbolic_extraction_reward_threshold", 0.3)),
+                override_confidence_threshold=float(cognitive_cfg.get("symbolic_override_confidence_threshold", 0.6)),
+            ).to(device)
+            health.register("symbolic_rules", symbolic_layer.rule_memory)
+            logger.info("NeuralSymbolicLayer enabled (max_rules=%d)", symbolic_layer.rule_memory.capacity)
+
+        # LogicEngine (symbolic reasoning with variables)
+        if bool(cognitive_cfg.get("logic_engine_enabled", False)):
+            from src.models.logic_engine import LogicEngine
+            logic_engine = LogicEngine(
+                d_model=int(model_cfg.get("hidden_size", 384)),
+                max_rules=int(cognitive_cfg.get("logic_max_rules", 64)),
+                max_variables=int(cognitive_cfg.get("logic_max_variables", 16)),
+                match_threshold=float(cognitive_cfg.get("logic_match_threshold", 0.7)),
+            )
+            health.register("logic_engine", logic_engine)
+            logger.info("LogicEngine enabled (variables + quantification + forward chaining)")
+
+        # InnerDialogue (template mode by default; LLM if available)
+        from src.models.metacognition import InnerDialogue
+        dialogue_mode = str(cognitive_cfg.get("inner_dialogue_mode", "template"))
+        inner_dialogue = InnerDialogue(mode=dialogue_mode)
+        logger.info("InnerDialogue enabled (mode=%s)", dialogue_mode)
+
+        # LanguageGenerator (optional, needs Qwen downloaded)
+        if bool(cognitive_cfg.get("language_gen_enabled", False)):
+            try:
+                from src.models.language_generation import LanguageGenerator
+                language_gen = LanguageGenerator(
+                    model_name=str(cognitive_cfg.get("language_gen_model", "Qwen/Qwen2.5-7B-Instruct")),
+                ).to(device)
+                logger.info("LanguageGenerator enabled (can speak)")
+            except Exception as exc:
+                logger.warning("LanguageGenerator load failed (%s), using template mode", exc)
+
+        # ReflectionLoop
+        if bool(cognitive_cfg.get("reflection_enabled", False)) and self_model is not None:
+            from src.models.metacognition import ReflectionLoop
+            reflection_loop = ReflectionLoop(
+                self_model=self_model,
+                max_reflections=int(cognitive_cfg.get("reflection_max", 256)),
+                reflection_every_episodes=int(cognitive_cfg.get("reflection_every_episodes", 10)),
+            )
+            health.register("reflection", reflection_loop)
+            logger.info("ReflectionLoop enabled (every %d episodes)",
+                        int(cognitive_cfg.get("reflection_every_episodes", 10)))
+
     state = TrainState(step=0, episode=0)
 
     if resume is not None:
@@ -791,11 +865,17 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     last_gr_inject_step = 0
     gr_last_loss: float = 0.0
 
+    # Stage 7 knobs
+    symbolic_extract_threshold = float(
+        cognitive_cfg.get("symbolic_extraction_reward_threshold", 0.3)
+    ) if cognitive_cfg else 0.3
+    last_reflection_ep = 0
+
     t0 = time.time()
     logger.info(
         "Starting Stage %s: total_steps=%d smoke=%s "
         "intrinsic=%s replay=%s coverage=%s wm=%s skills=%s curriculum=%s "
-        "ewc=%s gr=%s sleep=%s",
+        "ewc=%s gr=%s sleep=%s symbolic=%s selfmodel=%s logic=%s lang=%s",
         stage,
         total_steps,
         smoke_only,
@@ -808,6 +888,10 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         ewc is not None,
         grep_vae is not None,
         sleep_loop is not None,
+        symbolic_layer is not None,
+        self_model is not None,
+        logic_engine is not None,
+        language_gen is not None,
     )
 
     last_coverage_log_step = 0
@@ -876,6 +960,30 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     )
                     skill.record_use(reward=ep_ret)
                     skills.add(skill)
+
+                # --- Stage 7: extract symbolic rules from successful episodes ---
+                if symbolic_layer is not None and ep_ret > symbolic_extract_threshold:
+                    try:
+                        symbolic_layer.extract_rules(
+                            hidden_states=[batch_obs_t.squeeze(0) for batch_obs_t in
+                                          [torch.from_numpy(obs).unsqueeze(0).to(device)]],
+                            actions=[int(action.item())],
+                            rewards=[ep_ret],
+                            descriptions=[f"IF see {curr_active_task.tag if curr_active_task else 'env'} THEN action"],
+                        )
+                    except Exception:
+                        pass  # never crash training for symbolic extraction
+
+                # --- Stage 7: reflection after episode ---
+                if reflection_loop is not None:
+                    try:
+                        reflection = reflection_loop.end_episode(ep_ret)
+                        if reflection is not None and inner_dialogue is not None:
+                            lessons = inner_dialogue.generate(reflection)
+                            for lesson in lessons[:2]:  # log first 2 lessons
+                                logger.info("[reflection] %s", lesson)
+                    except Exception:
+                        pass  # never crash training for reflection
 
             if state.step >= total_steps:
                 break
@@ -1005,6 +1113,23 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         # Health sweep after each rollout+update cycle
         health.sweep()
 
+        # --- Stage 7: symbolic rule override on next batch ---
+        if symbolic_layer is not None:
+            try:
+                # Use the first obs in the batch for symbolic reasoning
+                first_obs = batch.obs[0:1]
+                with torch.no_grad():
+                    logits_check, _ = model(first_obs)
+                final_logits, sym_info = symbolic_layer(
+                    model(first_obs)[0],  # hidden state proxy = logits
+                    logits_check,
+                )
+                if sym_info.get("override", False):
+                    logger.debug("[symbolic] rule #%d matched (sim=%.2f), action overridden",
+                                 sym_info.get("rule_id", -1), sym_info.get("rule_sim", 0))
+            except Exception:
+                pass  # never crash training for symbolic reasoning
+
         if state.step % log_every < rollout_capacity:
             summary = env.summary()
             mem = watcher.snapshot_summary()
@@ -1023,6 +1148,14 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 extras.append(f"ewc={'✓' if ewc.has_consolidated() else '_'}")
             if grep_vae is not None:
                 extras.append(f"gr={gr_last_loss:.3f}")
+            if symbolic_layer is not None:
+                extras.append(f"rules={len(symbolic_layer.rule_memory)}")
+            if self_model is not None:
+                extras.append("meta=on")
+            if logic_engine is not None:
+                extras.append(f"logic={len(logic_engine)}")
+            if language_gen is not None:
+                extras.append("speak=on")
             logger.info(
                 "step=%d ep=%d mean_ret=%.3f loss=%.4f mem_used=%.2fGB slope=%s %s",
                 state.step,
@@ -1123,6 +1256,14 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 extra["gr_vae_state"] = grep_vae.state_dict()
             if sleep_loop is not None:
                 extra["sleep_loop_state"] = sleep_loop.state_dict()
+            if symbolic_layer is not None:
+                extra["symbolic_state"] = symbolic_layer.rule_memory.state_dict()
+            if self_model is not None:
+                extra["self_model_state"] = self_model.state_dict()
+            if logic_engine is not None:
+                extra["logic_engine_state"] = logic_engine.state_dict()
+            if reflection_loop is not None:
+                extra["reflection_state"] = reflection_loop.state_dict()
             # NB: replay state not serialized here (too big for on-policy ckpts;
             # rely on data disk to persist replay across restarts).
             save_ckpt(
@@ -1179,6 +1320,7 @@ _DEFAULT_STAGE_CONFIGS = {
     4: "stage4_skills.yaml",
     5: "stage5_curriculum.yaml",
     6: "stage6_consolidation.yaml",
+    7: "stage7_cognitive.yaml",
 }
 
 

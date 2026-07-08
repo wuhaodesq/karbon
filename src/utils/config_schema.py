@@ -169,6 +169,7 @@ class TopLevelSchema:
     skills: dict | None = None
     curriculum: dict | None = None
     continual: dict | None = None
+    cognitive: dict | None = None
 
     def _validate(self) -> None:
         if not self.preset:
