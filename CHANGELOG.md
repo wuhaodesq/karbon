@@ -3,6 +3,28 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+## [v1.0.0-stage6-cloud] - 2026-07-08
+
+### Stage 6 COMPLETED - ALL 6 STAGES DONE
+
+- **Wall time**: 29,242 s (8.1 h)
+- **Steps**: 3,000,000
+- **Final mean_return**: **0.951** (recovered from EWC interference)
+- **VRAM**: 2.81 GB, slope 0.0 ✅
+- **Coverage**: **8.6% (353 buckets)** - 86× growth from Stage 0
+- **Skills**: 10496/10496 (672,158 created)
+- **EWC**: ✅ consolidated (7.26M params)
+- **GR VAE**: gr=0.001 (converged)
+- **Sleep Loop**: all 4 task types fired
+
+### Complete training summary (Stage 0-6)
+- Total wall time: ~50 hours across 6 stages
+- Total steps: 18,000,000
+- Final mean_ret: 0.951
+- Peak VRAM: 2.81 GB / 32 GB (8.8%)
+- Coverage growth: 0.1% -> 8.6% (86×)
+
+
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 遵循 Keep a Changelog 惯例。
 
