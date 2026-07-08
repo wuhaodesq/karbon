@@ -89,6 +89,15 @@ class SleepConsolidationLoop:
         self._ttt_distill: Optional[ConsolidationTask] = None
         self._ewc_consolidate: Optional[ConsolidationTask] = None
 
+        # Track last-fired step for each task (fixes the step-jump bug where
+        # step % period == 0 never matches because step increments by 512).
+        self._last_fired: dict[str, int] = {
+            "replay_trim": 0,
+            "skills_merge": 0,
+            "ttt_distill": 0,
+            "ewc_consolidate": 0,
+        }
+
     # ------------------------------------------------- registration API
 
     def set_replay_trim(self, task: ConsolidationTask) -> None:
@@ -116,22 +125,22 @@ class SleepConsolidationLoop:
         fired: list[str] = []
         t_start = time.time()
 
-        if self._should_fire(step, self.config.replay_trim_every) and self._replay_trim:
+        if self._should_fire(step, self.config.replay_trim_every, "replay_trim") and self._replay_trim:
             self._run("replay_trim", self._replay_trim)
             self._counters.replay_trim_runs += 1
             fired.append("replay_trim")
 
-        if self._should_fire(step, self.config.skills_merge_every) and self._skills_merge:
+        if self._should_fire(step, self.config.skills_merge_every, "skills_merge") and self._skills_merge:
             self._run("skills_merge", self._skills_merge)
             self._counters.skills_merge_runs += 1
             fired.append("skills_merge")
 
-        if self._should_fire(step, self.config.ttt_distill_every) and self._ttt_distill:
+        if self._should_fire(step, self.config.ttt_distill_every, "ttt_distill") and self._ttt_distill:
             self._run("ttt_distill", self._ttt_distill)
             self._counters.ttt_distill_runs += 1
             fired.append("ttt_distill")
 
-        if self._should_fire(step, self.config.ewc_consolidate_every) and self._ewc_consolidate:
+        if self._should_fire(step, self.config.ewc_consolidate_every, "ewc_consolidate") and self._ewc_consolidate:
             self._run("ewc_consolidate", self._ewc_consolidate)
             self._counters.ewc_consolidate_runs += 1
             fired.append("ewc_consolidate")
@@ -142,11 +151,20 @@ class SleepConsolidationLoop:
             self._counters.total_wall_seconds += dt
         return fired
 
-    @staticmethod
-    def _should_fire(step: int, period: int) -> bool:
+    def _should_fire(self, step: int, period: int, task_name: str) -> bool:
+        """Check if a task should fire based on elapsed steps since last fire.
+
+        Uses ``step - last_fired >= period`` instead of ``step % period == 0``
+        because the training loop increments step by 512 (rollout capacity)
+        each tick, so exact modulo matches almost never happen.
+        """
         if period <= 0:
             return False
-        return step > 0 and (step % period == 0)
+        last = self._last_fired.get(task_name, 0)
+        if step - last >= period:
+            self._last_fired[task_name] = step
+            return True
+        return False
 
     def _run(self, name: str, task: ConsolidationTask) -> None:
         try:
