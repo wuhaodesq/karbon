@@ -786,6 +786,133 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             logger.info("ReflectionLoop enabled (every %d episodes)",
                         int(cognitive_cfg.get("reflection_every_episodes", 10)))
 
+    # --- Stage 8+: Full cognitive activation ---
+    advanced_cfg = config.get("advanced")
+    language_cfg = config.get("language")
+    hypothesis_tester: Any = None
+    counterfactual: Any = None
+    behavior_cloning: Any = None
+    meta_learner: Any = None
+    code_exec_env: Any = None
+    divergent_gen: Any = None
+    transformational: Any = None
+    thought_action: Any = None
+    model_grower: Any = None
+    language_encoder: Any = None
+    language_generator: Any = None
+
+    if stage >= 8:
+        # Hypothesis tester
+        if advanced_cfg and bool(advanced_cfg.get("hypothesis_tester_enabled", False)):
+            from src.models.advanced_cognition import HypothesisTester
+            hypothesis_tester = HypothesisTester(
+                d_model=int(model_cfg.get("hidden_size", 384)),
+                num_actions=num_actions,
+                max_hypotheses=int(advanced_cfg.get("hypothesis_max", 32)),
+                probe_epsilon=float(advanced_cfg.get("hypothesis_probe_epsilon", 0.1)),
+            ).to(device)
+            health.register("hypotheses", hypothesis_tester)
+            logger.info("HypothesisTester enabled (max=%d)", hypothesis_tester.capacity)
+
+        # Counterfactual imagination
+        if advanced_cfg and bool(advanced_cfg.get("counterfactual_enabled", False)):
+            from src.models.advanced_cognition import CounterfactualImagination
+            counterfactual = CounterfactualImagination(
+                max_imagination_steps=int(advanced_cfg.get("counterfactual_max_steps", 5)),
+            )
+            logger.info("CounterfactualImagination enabled (max_steps=%d)", counterfactual.max_steps)
+
+        # Behavior cloning
+        if advanced_cfg and bool(advanced_cfg.get("behavior_cloning_enabled", False)):
+            from src.models.advanced_cognition import BehaviorCloningHead
+            behavior_cloning = BehaviorCloningHead(
+                bc_coef=float(advanced_cfg.get("behavior_cloning_coef", 0.3)),
+            )
+            logger.info("BehaviorCloningHead enabled (coef=%.2f)", behavior_cloning.current_coef)
+
+        # Meta learner
+        if advanced_cfg and bool(advanced_cfg.get("meta_learner_enabled", False)):
+            from src.models.advanced_cognition import MetaLearner
+            meta_learner = MetaLearner(
+                model=model,
+                ema_decay=float(advanced_cfg.get("meta_ema_decay", 0.9)),
+            )
+            logger.info("MetaLearner enabled (ema_decay=%.2f)", meta_learner._ema_decay)
+
+        # Code execution env
+        if advanced_cfg and bool(advanced_cfg.get("code_execution_enabled", False)):
+            from src.models.code_and_social import CodeExecutionEnv
+            code_exec_env = CodeExecutionEnv(
+                timeout_seconds=float(advanced_cfg.get("code_exec_timeout", 5.0)),
+            )
+            health.register("code_exec", code_exec_env)
+            logger.info("CodeExecutionEnv enabled (sandbox)")
+
+        # Divergent generator (combinational creativity)
+        if cognitive_cfg and bool(cognitive_cfg.get("divergent_generator_enabled", False)):
+            from src.models.divergent_generator import DivergentGenerator
+            divergent_gen = DivergentGenerator(
+                d_model=int(model_cfg.get("hidden_size", 384)),
+            ).to(device)
+            health.register("divergent", divergent_gen)
+            logger.info("DivergentGenerator enabled (combinational creativity)")
+
+        # Transformational creativity
+        if cognitive_cfg and bool(cognitive_cfg.get("transformational_creativity_enabled", False)):
+            from src.models.transformational_creativity import TransformationalCreativityEngine
+            transformational = TransformationalCreativityEngine(
+                d_model=int(model_cfg.get("hidden_size", 384)),
+                max_transformations=int(cognitive_cfg.get("transformational_max", 32)),
+                distance_threshold=float(cognitive_cfg.get("transformational_distance_threshold", 0.3)),
+                curiosity_threshold=float(cognitive_cfg.get("transformational_curiosity_threshold", 0.3)),
+            ).to(device)
+            health.register("transformational", transformational)
+            logger.info("TransformationalCreativityEngine enabled")
+
+        # Thought-action loop
+        if cognitive_cfg and bool(cognitive_cfg.get("thought_action_enabled", False)):
+            from src.models.thought_action_loop import ThoughtActionLoop
+            thought_action = ThoughtActionLoop(
+                d_model=int(model_cfg.get("hidden_size", 384)),
+                think_every_steps=int(cognitive_cfg.get("think_every_steps", 50)),
+            ).to(device)
+            logger.info("ThoughtActionLoop enabled (every %d steps)", thought_action._think_every)
+
+        # Model grower
+        if advanced_cfg and bool(advanced_cfg.get("model_grower_enabled", False)):
+            from src.models.model_growth import GrowthConfig, ModelGrower
+            model_grower = ModelGrower(GrowthConfig(
+                initial_params=sum(p.numel() for p in model.parameters()),
+                max_params=int(advanced_cfg.get("model_grower_max_params", 200_000_000)),
+                grow_factor=float(advanced_cfg.get("model_grower_factor", 1.5)),
+                min_steps_between_growths=int(advanced_cfg.get("model_grower_min_steps", 100_000)),
+            ))
+            logger.info("ModelGrower enabled (current=%dM, max=%dM)",
+                        model_grower.current_params // 10**6,
+                        model_grower.max_params // 10**6)
+
+        # Language encoder (CLIP)
+        if language_cfg and bool(language_cfg.get("enabled", False)):
+            try:
+                from src.models.language_encoder import LanguageEncoder
+                language_encoder = LanguageEncoder(
+                    d_model=int(language_cfg.get("d_model", 384)),
+                ).to(device)
+                logger.info("LanguageEncoder (CLIP) enabled")
+            except Exception as exc:
+                logger.warning("LanguageEncoder load failed (%s)", exc)
+
+        # Language generator (Qwen-7B)
+        if cognitive_cfg and bool(cognitive_cfg.get("language_gen_enabled", False)):
+            try:
+                from src.models.language_generation import LanguageGenerator
+                language_generator = LanguageGenerator(
+                    model_name=str(cognitive_cfg.get("language_gen_model", "Qwen/Qwen2.5-7B-Instruct")),
+                ).to(device)
+                logger.info("LanguageGenerator enabled (can speak)")
+            except Exception as exc:
+                logger.warning("LanguageGenerator load failed (%s), using template", exc)
+
     state = TrainState(step=0, episode=0)
 
     if resume is not None:
@@ -1321,6 +1448,7 @@ _DEFAULT_STAGE_CONFIGS = {
     5: "stage5_curriculum.yaml",
     6: "stage6_consolidation.yaml",
     7: "stage7_cognitive.yaml",
+    8: "stage8_full_cognitive.yaml",
 }
 
 

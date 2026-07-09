@@ -1,0 +1,193 @@
+# Stage 8 · Full Cognitive Activation
+# Activates ALL remaining modules: language, vision, creativity, social, code, etc.
+#
+# This is the "everything on" stage. All 30+ modules run simultaneously.
+#
+# Prerequisites (run on cloud before starting):
+#   pip install transformers bitsandbytes accelerate timm
+#   python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('Qwen/Qwen2.5-7B-Instruct')"
+#   python -c "from transformers import AutoModelForCausalLM; AutoModelForCausalLM.from_pretrained('Qwen/Qwen2.5-7B-Instruct', load_in_4bit=True, device_map='auto')"
+#   python -c "import timm; timm.create_model('vit_base_patch16_clip_224', pretrained=True)"
+#   python -c "import torch; torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14', trust_repo=True)"
+#
+# If any download fails, that module falls back to template/CNN mode gracefully.
+
+stage: 8
+name: "stage8_full_cognitive"
+
+model:
+  use_hybrid_backbone: true
+  hybrid_n_layers: 3
+  hybrid_n_heads: 4
+  hybrid_swa_window: 16
+  hybrid_ttt_mini_batch: 8
+  hybrid_ffn_hidden_mult: 4
+  hybrid_dropout: 0.0
+  # Vision encoder (DINOv2) - falls back to CNN if unavailable
+  use_vision_encoder: true
+  vision_model: dinov2_vits14
+  vision_freeze: true
+
+# --- Language ---
+language:
+  # CLIP text encoder - falls back if unavailable
+  enabled: true
+  model: clip_text_vit_base_patch16
+  d_model: 384
+  # Language generator (Qwen-7B) - falls back to template if unavailable
+  generation_enabled: true
+  generation_model: Qwen/Qwen2.5-7B-Instruct
+  # FiLM fusion of vision + language
+  use_film: true
+  use_cross_attention: false
+
+# --- Cognitive ---
+cognitive:
+  symbolic_enabled: true
+  symbolic_max_rules: 64
+  symbolic_match_threshold: 0.7
+  symbolic_extraction_reward_threshold: 0.3
+  symbolic_override_confidence_threshold: 0.6
+  self_model_enabled: true
+  self_model_d_model: 384
+  self_model_hidden: 64
+  reflection_enabled: true
+  reflection_max: 256
+  reflection_every_episodes: 10
+  inner_dialogue_mode: "llm"  # use LLM if available, else template
+  inner_dialogue_llm_model: Qwen/Qwen2.5-1.5B-Instruct
+  language_gen_enabled: true
+  language_gen_model: Qwen/Qwen2.5-7B-Instruct
+  logic_engine_enabled: true
+  logic_max_rules: 64
+  logic_max_variables: 16
+  logic_match_threshold: 0.7
+  # Thought-action loop
+  thought_action_enabled: true
+  think_every_steps: 50
+  # Creativity
+  divergent_generator_enabled: true
+  transformational_creativity_enabled: true
+  transformational_max: 32
+  transformational_distance_threshold: 0.3
+  transformational_curiosity_threshold: 0.3
+
+# --- Advanced cognition ---
+advanced:
+  # Hypothesis testing
+  hypothesis_tester_enabled: true
+  hypothesis_max: 32
+  hypothesis_probe_epsilon: 0.1
+  # Counterfactual imagination
+  counterfactual_enabled: true
+  counterfactual_max_steps: 5
+  # Behavior cloning
+  behavior_cloning_enabled: true
+  behavior_cloning_coef: 0.3
+  # Meta-learning
+  meta_learner_enabled: true
+  meta_ema_decay: 0.9
+  # Code execution
+  code_execution_enabled: true
+  code_exec_timeout: 5.0
+  # Social learning
+  social_learning_enabled: false  # needs multiple agents, skip for single-agent
+  # Model growth
+  model_grower_enabled: true
+  model_grower_max_params: 200000000
+  model_grower_factor: 1.5
+  model_grower_min_steps: 100000
+
+# --- Prior blocks ---
+continual:
+  ewc_lambda: 1.0
+  ewc_gamma: 0.95
+  ewc_anchor_mode: "replace"
+  ewc_anchor_ema_alpha: 0.9
+  ewc_consolidate_every_steps: 100000
+  ewc_consolidate_num_batches: 32
+  ewc_batch_size: 32
+  gr_enabled: true
+  gr_latent_dim: 32
+  gr_hidden: 128
+  gr_lr: 1.0e-3
+  gr_kl_weight: 1.0
+  gr_update_every_steps: 16
+  gr_batch_size: 32
+  gr_rehearsal_batch_size: 32
+  gr_inject_every_steps: 5000
+  sleep_warmup_steps: 1000
+  sleep_replay_trim_every: 10000
+  sleep_skills_merge_every: 20000
+  sleep_ttt_distill_every: 20000
+
+curriculum:
+  max_tasks: 8
+  lp_window_size: 32
+  lp_min_samples: 8
+  exploration_epsilon: 0.1
+  smoothing: 0.5
+  switch_every_steps: 20000
+  report_every_steps: 500
+  tasks:
+    - {id: 0, env_id: "MiniGrid-Empty-5x5-v0",  difficulty: 0.1, tag: "empty-5x5"}
+    - {id: 1, env_id: "MiniGrid-Empty-6x6-v0",  difficulty: 0.2, tag: "empty-6x6"}
+    - {id: 2, env_id: "MiniGrid-Empty-8x8-v0",  difficulty: 0.3, tag: "empty-8x8"}
+    - {id: 3, env_id: "MiniGrid-DoorKey-5x5-v0", difficulty: 0.5, tag: "doorkey-5x5"}
+    - {id: 4, env_id: "MiniGrid-DoorKey-6x6-v0", difficulty: 0.6, tag: "doorkey-6x6"}
+
+skills:
+  skill_d_out: 128
+  skill_d_in: 128
+  skill_rank: 8
+  gpu_capacity: 256
+  cpu_capacity: 2048
+  ssd_max_shards: 64
+  ssd_shard_size: 128
+  merge_similarity_threshold: 0.9
+  score_alpha: 1.0
+  score_beta: 0.5
+  score_gamma: 0.1
+  archive_subdir: "skills"
+
+world_model:
+  z_dim: 32
+  h_dim: 64
+  embed_dim: 64
+  hidden: 128
+  max_rollout_steps: 10
+  kl_free_nats: 1.0
+  update_every_steps: 8
+  lr: 3.0e-4
+  wm_loss_coef: 1.0
+  log_every_steps: 5000
+
+intrinsic:
+  embed_dim: 128
+  lr: 1.0e-4
+  reward_clip: 5.0
+  reward_coef: 0.1
+  update_every_steps: 1
+
+replay:
+  hot_capacity: 4096
+  warm_capacity: 32768
+  cold_max_shards: 8
+  cold_shard_size: 4096
+  per_alpha: 0.6
+  min_size_to_sample: 1024
+  sample_every_steps: 4
+  batch_size_offpolicy: 128
+  archive_subdir: "replay"
+
+coverage:
+  num_buckets: 4096
+  log_every_steps: 5000
+
+train:
+  ppo_clip: 0.2
+  ppo_epochs: 4
+  entropy_coef: 0.01
+  value_coef: 0.5
+  gamma: 0.99
+  gae_lambda: 0.95
