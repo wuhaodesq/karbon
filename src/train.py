@@ -210,9 +210,13 @@ class HybridActorCritic(nn.Module):
         self.value_head = nn.Linear(d_model, 1)
 
     def forward(self, obs_u8: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        # Inline permute (matches Stage 0-3 checkpoint behavior)
-        x = obs_u8.permute(0, 3, 1, 2).float() / 255.0
-        feats = self.encoder(x)  # (B, d_model)
+        if self.use_vision:
+            # VisionEncoder (DINOv2) handles its own permute/normalize
+            feats = self.encoder(obs_u8)
+        else:
+            # Inline CNN expects (B, C, H, W)
+            x = obs_u8.permute(0, 3, 1, 2).float() / 255.0
+            feats = self.encoder(x)
         # Treat each observation as an INDEPENDENT sequence of length 1.
         # This avoids TTT-Linear's inner W blowing up across unrelated batch
         # elements (which would cause NaN when B is large, e.g. 512).
