@@ -55,6 +55,18 @@ from src.memory import (
 )
 from src.models import HybridBackbone, RSSM, RSSMConfig
 from src.models.vision_encoder import CNNEncoder, VisionEncoder, build_encoder
+from src.models.number_sense import NumberSense
+from src.models.rule_induction import RuleInductionEngine
+from src.models.causal_discovery import CausalDiscovery
+from src.models.cross_modal_bridges import CrossModalManager
+from src.models.creativity_orchestrator import CreativityOrchestrator
+from src.models.llm_fusion import LLMFusionBridge
+from src.models.developmental_memory import MemoryManager
+from src.models.theory_of_mind import TheoryOfMind
+from src.models.homeostatic_drives import HomeostaticDrives
+from src.models.long_range_planner import LongRangePlanner
+from src.models.emotion_system import EmotionSystem
+from src.models.concept_graph import ConceptGraph
 from src.monitoring import HealthChecker, MemoryWatcher, WatcherConfig
 from src.platform import data_dir, get_device, get_device_info, stage_ckpt_path
 from src.utils import (
@@ -100,10 +112,13 @@ class ActorCritic(nn.Module):
         self.policy_head = nn.Linear(hidden, num_actions)
         self.value_head = nn.Linear(hidden, 1)
 
-    def forward(self, obs_u8: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        # obs_u8: (B, H, W, C) uint8 → (B, C, H, W) float
+    def forward(
+        self, obs_u8: torch.Tensor, return_hidden: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         x = obs_u8.permute(0, 3, 1, 2).float() / 255.0
         z = self.trunk(self.encoder(x))
+        if return_hidden:
+            return self.policy_head(z), self.value_head(z).squeeze(-1), z
         return self.policy_head(z), self.value_head(z).squeeze(-1)
 
 
@@ -143,21 +158,30 @@ class HybridActorCritic(nn.Module):
         use_vision_encoder: bool = False,
         vision_model_name: str = "dinov2_vits14",
         vision_freeze: bool = True,
+        use_slot_attention: bool = False,
+        slot_num_slots: int = 7,
+        slot_dim: int = 128,
+        slot_num_iterations: int = 3,
     ) -> None:
         super().__init__()
-        # Snap d_model up to a multiple of n_heads
         if d_model % n_heads != 0:
             d_model = ((d_model // n_heads) + 1) * n_heads
-        # d_model must also be even for sinusoidal position encoding
         if d_model % 2 != 0:
             d_model += 1
         self.d_model = d_model
 
-        # --- Encoder: inline CNN (backward-compatible with Stage 0-3 checkpoints) ---
-        # Use CNNEncoder/VisionEncoder only when use_vision_encoder=True.
-        # When False, use the old inline Sequential so Stage 0-3 weights load.
         self.use_vision = use_vision_encoder
-        if use_vision_encoder:
+        self.use_slots = use_slot_attention
+        if use_slot_attention:
+            from src.models.slot_attention import SlotAttention
+            self.encoder = SlotAttention(
+                d_model=d_model,
+                num_slots=slot_num_slots,
+                slot_dim=slot_dim,
+                num_iterations=slot_num_iterations,
+            )
+            logger.info("HybridActorCritic: using SlotAttention (num_slots=%d)", slot_num_slots)
+        elif use_vision_encoder:
             try:
                 self.encoder = VisionEncoder(
                     d_model=d_model,
@@ -209,23 +233,22 @@ class HybridActorCritic(nn.Module):
         self.policy_head = nn.Linear(d_model, num_actions)
         self.value_head = nn.Linear(d_model, 1)
 
-    def forward(self, obs_u8: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        if self.use_vision:
-            # VisionEncoder (DINOv2) handles its own permute/normalize
+    def forward(
+        self, obs_u8: torch.Tensor, return_hidden: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if self.use_slots:
+            seq = self.encoder(obs_u8)  # (B, num_slots, d_model)
+        elif self.use_vision:
             feats = self.encoder(obs_u8)
+            seq = feats.unsqueeze(1)
         else:
-            # Inline CNN expects (B, C, H, W)
             x = obs_u8.permute(0, 3, 1, 2).float() / 255.0
             feats = self.encoder(x)
-        # Treat each observation as an INDEPENDENT sequence of length 1.
-        # This avoids TTT-Linear's inner W blowing up across unrelated batch
-        # elements (which would cause NaN when B is large, e.g. 512).
-        # The Hybrid backbone still applies TTT + SWA + FFN per obs, but with
-        # trivial (length-1) temporal context. Full temporal context is a
-        # Stage 3+ concern (world model uses actual observation sequences).
-        seq = feats.unsqueeze(1)        # (B, 1, d_model) — B independent seqs
-        seq_out = self.backbone(seq)     # (B, 1, d_model)
-        z = seq_out.squeeze(1)          # (B, d_model)
+            seq = feats.unsqueeze(1)
+        seq_out = self.backbone(seq)
+        z = seq_out.mean(dim=1) if self.use_slots else seq_out.squeeze(1)
+        if return_hidden:
+            return self.policy_head(z), self.value_head(z).squeeze(-1), z
         return self.policy_head(z), self.value_head(z).squeeze(-1)
 
 
@@ -429,16 +452,61 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
 
     # --- Env
     env_cfg = config["env"]
-    env = MiniGridWrapper(
-        env_id=env_cfg["id"],
-        seed=42,
-        max_episode_steps=env_cfg.get("max_episode_steps"),
-        auto_reset=True,
-    )
+    env_id = str(env_cfg.get("id", "MiniGrid-Empty-5x5-v0"))
+    if env_id == "PhysicsSandbox":
+        from src.envs.physics_sandbox import PhysicsSandbox
+        env = PhysicsSandbox(
+            num_objects=int(env_cfg.get("num_objects", 3)),
+            seed=42,
+            max_episode_steps=env_cfg.get("max_episode_steps", 200),
+            render_size=int(env_cfg.get("render_size", 64)),
+            gravity=float(env_cfg.get("gravity", -9.8)),
+            action_force=float(env_cfg.get("action_force", 50.0)),
+        )
+        logger.info("Env: PhysicsSandbox (2D physics, %d objects)", env_cfg.get("num_objects", 3))
+    elif env_id == "SocialTeacher":
+        from src.envs.social_teacher import SocialTeacherWrapper
+        env = SocialTeacherWrapper(
+            num_objects=int(env_cfg.get("num_objects", 3)),
+            seed=42,
+            max_episode_steps=env_cfg.get("max_episode_steps", 200),
+            render_size=int(env_cfg.get("render_size", 64)),
+        )
+        logger.info("Env: SocialTeacherWrapper (2D physics + teacher, %d objects)", env_cfg.get("num_objects", 3))
+    elif env_id == "ThreeDWorld":
+        from src.envs.three_d_world import ThreeDWorld
+        env = ThreeDWorld(
+            num_objects=int(env_cfg.get("num_objects", 100)),
+            seed=42,
+            max_episode_steps=env_cfg.get("max_episode_steps", 500),
+            render_size=int(env_cfg.get("render_size", 256)),
+            action_force=float(env_cfg.get("action_force", 2.0)),
+            developmental_age=float(env_cfg.get("developmental_age", 0.0)),
+        )
+        logger.info("Env: ThreeDWorld (3D home, %d objects)", env_cfg.get("num_objects", 100))
+    elif env_id == "ExtendedThreeDWorld":
+        from src.envs.extended_3d_world import ExtendedThreeDWorld
+        env = ExtendedThreeDWorld(
+            num_objects=int(env_cfg.get("num_objects", 500)),
+            num_siblings=int(env_cfg.get("num_siblings", 2)),
+            seed=42,
+            max_episode_steps=env_cfg.get("max_episode_steps", 500),
+            render_size=int(env_cfg.get("render_size", 256)),
+            developmental_age=float(env_cfg.get("developmental_age", 0.0)),
+        )
+        logger.info("Env: ExtendedThreeDWorld (4 rooms + %d siblings)", env_cfg.get("num_siblings", 2))
+    else:
+        env = MiniGridWrapper(
+            env_id=env_id,
+            seed=42,
+            max_episode_steps=env_cfg.get("max_episode_steps"),
+            auto_reset=True,
+        )
+        logger.info("Env: %s  obs_shape=%s  actions=%d", env_cfg["id"], obs_shape, num_actions)
+
     obs = env.reset()
     obs_shape = env.observation_shape
     num_actions = env.action_space_n
-    logger.info("Env: %s  obs_shape=%s  actions=%d", env_cfg["id"], obs_shape, num_actions)
 
     # --- Model
     model_cfg = config["model"]
@@ -456,8 +524,17 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             use_vision_encoder=bool(model_cfg.get("use_vision_encoder", False)),
             vision_model_name=str(model_cfg.get("vision_model", "dinov2_vits14")),
             vision_freeze=bool(model_cfg.get("vision_freeze", True)),
+            use_slot_attention=bool(model_cfg.get("use_slot_attention", False)),
+            slot_num_slots=int(model_cfg.get("slot_num_slots", 7)),
+            slot_dim=int(model_cfg.get("slot_dim", 128)),
+            slot_num_iterations=int(model_cfg.get("slot_num_iterations", 3)),
         ).to(device)
-        vision_tag = " + VisionEncoder" if model_cfg.get("use_vision_encoder") else ""
+        tag_parts = []
+        if model_cfg.get("use_slot_attention"):
+            tag_parts.append(f"SlotAttention ({model_cfg.get('slot_num_slots', 7)} slots)")
+        if model_cfg.get("use_vision_encoder"):
+            tag_parts.append("VisionEncoder")
+        vision_tag = " + " + " + ".join(tag_parts) if tag_parts else ""
         logger.info("Model: HybridActorCubit (d_model=%d, layers=%d%s)",
                     model.d_model, int(model_cfg.get("hybrid_n_layers", 3)), vision_tag)
     else:
@@ -500,12 +577,16 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
 
     # --- Stage 1: intrinsic motivation + coverage + replay ---
     intrinsic_cfg = config.get("intrinsic")
+    curiosity_cfg = config.get("curiosity")
     replay_cfg = config.get("replay")
     coverage_cfg = config.get("coverage")
 
     rnd: RND | None = None
     replay: BoundedReplayBuffer | None = None
     coverage: BoundedCoverage | None = None
+    # Phase 0+: curiosity from RSSM uncertainty instead of RND
+    curiosity_mode = str(curiosity_cfg.get("mode", "none")) if curiosity_cfg else "none"
+    curiosity_coef = float(curiosity_cfg.get("coef", 0.5)) if curiosity_cfg else 0.0
 
     if stage >= 1 and intrinsic_cfg:
         rnd = RND(
@@ -518,6 +599,11 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         ).to(device)
         logger.info("RND enabled (embed_dim=%d, reward_coef=%s)",
                     rnd.config.embed_dim, intrinsic_cfg.get("reward_coef", 0.1))
+
+    if curiosity_mode == "rssm_uncertainty":
+        logger.info("Curiosity: RSSM uncertainty (coef=%.2f)", curiosity_coef)
+    elif curiosity_mode == "rnd" and rnd is not None:
+        logger.info("Curiosity: RND (coef=%.2f)", curiosity_coef)
 
     if stage >= 1 and replay_cfg:
         replay = BoundedReplayBuffer(
@@ -543,7 +629,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     wm_cfg = config.get("world_model")
     wm: RSSM | None = None
     wm_optimizer: torch.optim.Optimizer | None = None
-    if stage >= 3 and wm_cfg:
+    if stage >= 3 and wm_cfg and bool(wm_cfg.get("enabled", True)):
         obs_dim_flat = int(np.prod(obs_shape))
         wm = RSSM(RSSMConfig(
             obs_dim=obs_dim_flat,
@@ -732,6 +818,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             self_model = SelfModel(
                 d_model=int(cognitive_cfg.get("self_model_d_model", 384)),
                 hidden=int(cognitive_cfg.get("self_model_hidden", 64)),
+                temporal=True,
             ).to(device)
             logger.info("SelfModel enabled (metacognition)")
 
@@ -757,6 +844,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 max_rules=int(cognitive_cfg.get("logic_max_rules", 64)),
                 max_variables=int(cognitive_cfg.get("logic_max_variables", 16)),
                 match_threshold=float(cognitive_cfg.get("logic_match_threshold", 0.7)),
+                use_trainable_unifier=True,
             )
             health.register("logic_engine", logic_engine)
             logger.info("LogicEngine enabled (variables + quantification + forward chaining)")
@@ -917,6 +1005,193 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             except Exception as exc:
                 logger.warning("LanguageGenerator load failed (%s), using template", exc)
 
+    # --- Phase 0+: Developmental modules (7 new improvements) ---
+    num_sense_cfg = config.get("number_sense")
+    social_cfg = config.get("social_teacher")
+    rule_ind_cfg = config.get("rule_induction")
+    causal_cfg = config.get("causal_discovery")
+    growth_cfg = config.get("model_growth")
+    xmodal_cfg = config.get("cross_modal")
+
+    number_sense: NumberSense | None = None
+    num_sense_optimizer: torch.optim.Optimizer | None = None
+    rule_engine: RuleInductionEngine | None = None
+    causal_disc: CausalDiscovery | None = None
+    model_grower_v2: Any = None
+    xmodal_manager: CrossModalManager | None = None
+
+    if num_sense_cfg and bool(num_sense_cfg.get("enabled", False)):
+        slot_count = int(model_cfg.get("slot_num_slots", 7))
+        slot_d = int(model_cfg.get("slot_dim", int(model_cfg.get("hidden_size", 128))))
+        number_sense = NumberSense(
+            num_slots=slot_count, slot_dim=slot_d,
+            max_count=int(num_sense_cfg.get("max_count", 10)),
+            hidden=int(num_sense_cfg.get("hidden", 32)),
+        ).to(device)
+        num_sense_optimizer = torch.optim.Adam(
+            number_sense.parameters(),
+            lr=float(num_sense_cfg.get("lr", 3e-4)),
+        )
+        logger.info("NumberSense enabled (max_count=%d)", num_sense_cfg.get("max_count", 10))
+
+    if rule_ind_cfg and bool(rule_ind_cfg.get("enabled", False)):
+        rule_engine = RuleInductionEngine(
+            num_slots=int(model_cfg.get("slot_num_slots", 7)),
+            max_rules=int(rule_ind_cfg.get("max_rules", 128)),
+            max_chain_depth=int(rule_ind_cfg.get("max_chain_depth", 5)),
+            min_confidence=float(rule_ind_cfg.get("min_confidence", 0.3)),
+            induction_min_positive=int(rule_ind_cfg.get("induction_min_positive", 3)),
+        )
+        health.register("rule_engine", rule_engine)
+        logger.info("RuleInductionEngine enabled (max_rules=%d)", rule_engine.capacity)
+
+    if causal_cfg and bool(causal_cfg.get("enabled", False)):
+        causal_disc = CausalDiscovery(
+            num_actions=num_actions,
+            max_edges=int(causal_cfg.get("max_edges", 256)),
+            min_intervention_effect=float(causal_cfg.get("min_intervention_effect", 0.01)),
+        )
+        health.register("causal_edges", causal_disc)
+        logger.info("CausalDiscovery enabled (max_edges=%d)", causal_disc.capacity)
+
+    if growth_cfg and bool(growth_cfg.get("enabled", False)):
+        from src.models.model_growth_v2 import ModelGrowerV2, GrowthConfigV2
+        model_grower_v2 = ModelGrowerV2(
+            d_model=int(model_cfg.get("hidden_size", 128)),
+            n_heads=int(model_cfg.get("hybrid_n_heads", 4)),
+            config=GrowthConfigV2(
+                initial_layers=int(model_cfg.get("hybrid_n_layers", 2)),
+                max_layers=int(growth_cfg.get("max_layers", 20)),
+                min_steps_between_growths=int(growth_cfg.get("min_steps_between_growths", 100_000)),
+                grow_trigger_lp_threshold=float(growth_cfg.get("grow_trigger_lp_threshold", 0.05)),
+                grow_trigger_coverage=float(growth_cfg.get("grow_trigger_coverage", 0.3)),
+                distill_steps=int(growth_cfg.get("distill_steps", 100)),
+                distill_lr=float(growth_cfg.get("distill_lr", 1e-3)),
+            ),
+        ).to(device)
+        logger.info("ModelGrowerV2 enabled (max_layers=%d)", growth_cfg.get("max_layers", 20))
+
+    if xmodal_cfg and bool(xmodal_cfg.get("enabled", False)):
+        xmodal_manager = CrossModalManager(
+            touch_dim=int(xmodal_cfg.get("touch_dim", 6)),
+            plan_dim=int(xmodal_cfg.get("plan_dim", 128)),
+            obs_dim=64 * 64 * 3,
+            lang_dim=int(xmodal_cfg.get("lang_dim", 3584)),
+        ).to(device)
+        logger.info("CrossModalManager enabled")
+
+    # --- Creativity orchestrator
+    creativity_orch: CreativityOrchestrator | None = None
+    creativity_cfg = config.get("creativity")
+    if creativity_cfg and bool(creativity_cfg.get("enabled", False)):
+        creativity_orch = CreativityOrchestrator(
+            d_model=int(model_cfg.get("hidden_size", 128)),
+            num_actions=num_actions,
+            trigger_every_steps=int(creativity_cfg.get("trigger_every_steps", 1000)),
+            max_ideas=int(creativity_cfg.get("max_ideas", 200)),
+        ).to(device)
+        health.register("creativity", creativity_orch)
+        logger.info("CreativityOrchestrator enabled (trigger_every=%d)", creativity_orch._trigger_every)
+
+    # --- Phase 9: LLM Fusion ---
+    llm_fusion: LLMFusionBridge | None = None
+    llm_cfg = config.get("llm_fusion")
+    if llm_cfg and bool(llm_cfg.get("enabled", False)):
+        try:
+            obs_dim_flat = int(np.prod(obs_shape))
+            llm_fusion = LLMFusionBridge(
+                llm_model_name=str(llm_cfg.get("model", "Qwen/Qwen2.5-7B-Instruct")),
+                slot_dim=int(model_cfg.get("slot_dim", int(model_cfg.get("hidden_size", 128)))),
+                num_slots=int(model_cfg.get("slot_num_slots", 7)),
+                num_actions=num_actions,
+                obs_dim=obs_dim_flat,
+                llm_max_new_tokens=int(llm_cfg.get("max_new_tokens", 64)),
+                llm_call_interval=int(llm_cfg.get("call_interval_steps", 50)),
+            ).to(device)
+            logger.info("LLM Fusion: %s (available=%s)", llm_cfg.get("model"), llm_fusion.is_available)
+        except Exception as exc:
+            logger.warning("LLM Fusion load failed (%s)", exc)
+
+    # --- Enhanced Memory System ---
+    mem_cfg = config.get("developmental_memory")
+    memory_manager: MemoryManager | None = None
+    if mem_cfg and bool(mem_cfg.get("enabled", False)):
+        memory_manager = MemoryManager(
+            d_model=int(model_cfg.get("hidden_size", 128)),
+            episodic_max=int(mem_cfg.get("episodic_max", 10000)),
+            semantic_max=int(mem_cfg.get("semantic_max", 1000)),
+            autobiographical_max=int(mem_cfg.get("autobiographical_max", 100)),
+            surprise_threshold=float(mem_cfg.get("surprise_threshold", 0.01)),
+            consolidation_every_steps=int(mem_cfg.get("consolidation_every_steps", 50000)),
+        ).to(device)
+        health.register("memory", memory_manager)
+        logger.info("MemoryManager enabled (episodic=%d, semantic=%d)",
+                     mem_cfg.get("episodic_max", 10000),
+                     mem_cfg.get("semantic_max", 1000))
+
+    # --- Theory of Mind ---
+    tom_cfg = config.get("theory_of_mind")
+    theory_of_mind: TheoryOfMind | None = None
+    if tom_cfg and bool(tom_cfg.get("enabled", False)):
+        theory_of_mind = TheoryOfMind(
+            d_model=int(model_cfg.get("hidden_size", 128)),
+            num_actions=num_actions,
+            num_slots=int(model_cfg.get("slot_num_slots", 7)),
+        ).to(device)
+        logger.info("TheoryOfMind enabled")
+
+    # --- Homeostatic Drives ---
+    drives_cfg = config.get("homeostatic_drives")
+    homeostatic_drives: HomeostaticDrives | None = None
+    if drives_cfg and bool(drives_cfg.get("enabled", False)):
+        homeostatic_drives = HomeostaticDrives(
+            curiosity_decay=float(drives_cfg.get("curiosity_decay", 0.002)),
+            competence_decay=float(drives_cfg.get("competence_decay", 0.001)),
+            social_decay=float(drives_cfg.get("social_decay", 0.003)),
+            safety_decay=float(drives_cfg.get("safety_decay", 0.001)),
+            rest_decay=float(drives_cfg.get("rest_decay", 0.005)),
+        ).to(device)
+        health.register("drives", homeostatic_drives)
+        logger.info("HomeostaticDrives enabled (5 drives)")
+
+    # --- Long-Range Planner ---
+    planner_cfg = config.get("long_range_planner")
+    long_range_planner: LongRangePlanner | None = None
+    if planner_cfg and bool(planner_cfg.get("enabled", False)):
+        long_range_planner = LongRangePlanner(
+            num_actions=num_actions,
+            max_depth=int(planner_cfg.get("max_depth", 10)),
+            max_nodes=int(planner_cfg.get("max_nodes", 500)),
+            num_simulations=int(planner_cfg.get("num_simulations", 50)),
+        ).to(device)
+        logger.info("LongRangePlanner enabled (depth=%d)", planner_cfg.get("max_depth", 10))
+
+    # --- Emotion System ---
+    emotion_cfg = config.get("emotion_system")
+    emotion_system: EmotionSystem | None = None
+    if emotion_cfg and bool(emotion_cfg.get("enabled", False)):
+        emotion_system = EmotionSystem(
+            pleasure_decay=float(emotion_cfg.get("pleasure_decay", 0.01)),
+            frustration_decay=float(emotion_cfg.get("frustration_decay", 0.02)),
+            surprise_decay=float(emotion_cfg.get("surprise_decay", 0.05)),
+            fear_decay=float(emotion_cfg.get("fear_decay", 0.03)),
+        ).to(device)
+        health.register("emotions", emotion_system)
+        logger.info("EmotionSystem enabled")
+
+    # --- Concept Graph ---
+    graph_cfg = config.get("concept_graph")
+    concept_graph: ConceptGraph | None = None
+    if graph_cfg and bool(graph_cfg.get("enabled", False)):
+        concept_graph = ConceptGraph(
+            d_model=int(model_cfg.get("hidden_size", 128)),
+            max_nodes=int(graph_cfg.get("max_nodes", 1000)),
+            max_edges=int(graph_cfg.get("max_edges", 5000)),
+        ).to(device)
+        health.register("concept_graph", concept_graph)
+        logger.info("ConceptGraph enabled (max_nodes=%d, max_edges=%d)",
+                     graph_cfg.get("max_nodes", 1000), graph_cfg.get("max_edges", 5000))
+
     state = TrainState(step=0, episode=0)
 
     if resume is not None:
@@ -961,7 +1236,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     ckpt_every = int(train_cfg.get("ckpt_every_steps", 200))
 
     # Stage 1 knobs
-    intrinsic_coef = float(intrinsic_cfg.get("reward_coef", 0.1)) if intrinsic_cfg else 0.0
+    intrinsic_coef = float(intrinsic_cfg.get("reward_coef", 0.1)) if intrinsic_cfg else curiosity_coef if curiosity_mode != "none" else 0.0
     rnd_update_every = int(intrinsic_cfg.get("update_every_steps", 1)) if intrinsic_cfg else 0
     coverage_log_every = int(coverage_cfg.get("log_every_steps", 5000)) if coverage_cfg else 0
     replay_sample_every = int(replay_cfg.get("sample_every_steps", 4)) if replay_cfg else 0
@@ -1001,6 +1276,25 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         cognitive_cfg.get("symbolic_extraction_reward_threshold", 0.3)
     ) if cognitive_cfg else 0.3
     last_reflection_ep = 0
+    # Per-episode trajectory buffers for rule extraction and LLM reflection
+    rollout_hidden_states: list[torch.Tensor] = []
+    rollout_actions: list[int] = []
+    rollout_rewards: list[float] = []
+    rollout_trajectory: list[dict] = []
+    _collect_cognitive = (symbolic_layer is not None) or (reflection_loop is not None)
+
+    # Phase 0 knobs
+    num_sense_train_every = int(num_sense_cfg.get("train_every_episodes", 10)) if num_sense_cfg else 0
+    rule_induce_every = int(rule_ind_cfg.get("induction_every_episodes", 20)) if rule_ind_cfg else 0
+    causal_intervene_every = int(causal_cfg.get("intervene_every_steps", 500)) if causal_cfg else 0
+    xmodal_train_every = int(xmodal_cfg.get("train_every_steps", 1000)) if xmodal_cfg else 0
+    num_sense_last_train = 0
+    rule_induce_last_ep = 0
+    causal_last_intervene = 0
+    xmodal_last_train = 0
+    # Trajectory buffers for rule induction predicates
+    episode_predicates: list[dict[str, bool]] = []
+    episode_true_counts: list[int] = []
 
     t0 = time.time()
     logger.info(
@@ -1035,17 +1329,156 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         while not buffer.full():
             obs_t = _obs_to_tensor(obs, device)
             with torch.no_grad():
-                logits, value = model(obs_t)
+                if _collect_cognitive:
+                    logits, value, hidden = model(obs_t, return_hidden=True)
+                else:
+                    logits, value = model(obs_t)
                 dist = torch.distributions.Categorical(logits=logits)
                 action = dist.sample()
                 logprob = dist.log_prob(action)
+
+            # --- Phase 0: collect slot output for number sense + rule predicates ---
+            slot_states_for_step: torch.Tensor | None = None
+            if (number_sense is not None or rule_engine is not None) and model.use_slots:
+                with torch.no_grad():
+                    slot_states_for_step = model.encoder(obs_t).squeeze(0)  # (num_slots, d_model)
+                if rule_engine is not None:
+                    preds = rule_engine.extract_predicates(slot_states_for_step.unsqueeze(0))
+                    episode_predicates.append(preds)
 
             step_out = env.step(int(action.item()))
             extrinsic_r = step_out.reward
             total_r = extrinsic_r
 
-            # --- Stage 1: intrinsic reward from RND ---
-            if rnd is not None:
+            # --- Collect hidden state for cognitive modules ---
+            if _collect_cognitive:
+                rollout_hidden_states.append(
+                    hidden.squeeze(0).detach().cpu()
+                    if hidden.dim() == 2 else hidden.detach().cpu()
+                )
+                rollout_actions.append(int(action.item()))
+                rollout_rewards.append(float(total_r))
+                rollout_trajectory.append({
+                    "action": int(action.item()),
+                    "reward": float(total_r),
+                })
+
+            # --- Homeostatic drives: compute intrinsic motivation ---
+            if homeostatic_drives is not None:
+                try:
+                    success = extrinsic_r > 0.5
+                    danger = 0.0
+                    if hasattr(env, '_agent'):
+                        ax, ay = env._agent.x, env._agent.y
+                        hw = getattr(env, '_hw', 1.0)
+                        wall_dist = hw - max(abs(ax), abs(ay), 0.05)
+                        danger = max(0.0, 1.0 - wall_dist)
+                    movement = float(abs(getattr(env._agent, 'vx', 0)) + abs(getattr(env._agent, 'vy', 0)))
+                    social_dist = 1.0  # default far
+                    drive_rewards = homeostatic_drives.tick(
+                        novelty=int_r if curiosity_mode != "none" else 0.0,
+                        success=success,
+                        caregiver_proximity=social_dist,
+                        danger_level=danger,
+                        movement_level=min(1.0, movement),
+                    )
+                    total_r += drive_rewards.get("total", 0.0) * 0.5
+                except Exception:
+                    pass
+
+            # --- Emotion system: update from experience ---
+            if emotion_system is not None:
+                try:
+                    emotion_system.update(
+                        reward=float(extrinsic_r),
+                        surprise=float(int_r) if curiosity_mode != "none" else 0.0,
+                        danger_level=0.0,
+                        success=extrinsic_r > 0.5,
+                        episode_done=bool(step_out.terminated or step_out.truncated),
+                    )
+                except Exception:
+                    pass
+            int_r = 0.0
+            if curiosity_mode == "rssm_uncertainty" and wm is not None:
+                with torch.no_grad():
+                    obs_flat = obs_t.float().reshape(1, -1) / 255.0
+                    wm_state = wm.initial_state(1, device)
+                    dummy_action = F.one_hot(action, num_actions).float().unsqueeze(0)
+                    wm_state, _ = wm.imagine_step(wm_state, dummy_action)
+                    pred_obs = wm.decode(wm_state)
+                    int_r = float(F.mse_loss(pred_obs, obs_flat).item())
+                intrinsic_coef = curiosity_coef
+                total_r = extrinsic_r + intrinsic_coef * int_r
+
+            # --- Concept graph: bind cross-modal observations ---
+            if concept_graph is not None and model.use_slots and state.step % 100 == 0:
+                try:
+                    with torch.no_grad():
+                        slot_out = model.encoder(obs_t).squeeze(0)
+                        modality_data: dict[str, Any] = {
+                            "slot": slot_out.mean(dim=0),
+                        }
+                        if xmodal_manager is not None:
+                            prop = torch.tensor(getattr(step_out, 'proprio', [0.0]*12),
+                                              device=device).float()
+                            touch_emb = xmodal_manager.touch_bridge.touch_to_lang(prop.unsqueeze(0))
+                            modality_data["touch"] = touch_emb.squeeze(0)
+                        concept_graph.bind_cross_modal(modality_data, step=state.step)
+                except Exception:
+                    pass
+            if memory_manager is not None:
+                try:
+                    surprise_val = int_r if curiosity_mode != "none" else 0.0
+                    current_ep = env.summary().get("episodes", 0)
+                    tags = []
+                    if extrinsic_r > 0.5:
+                        tags.append("high_reward")
+                    if hasattr(model, 'use_slots') and model.use_slots:
+                        with torch.no_grad():
+                            slot_out = model.encoder(obs_t)
+                            hidden_for_mem = slot_out.squeeze(0).mean(dim=0)
+                    else:
+                        hidden_for_mem = torch.randn(model.d_model, device=device)
+                    memory_manager.store_experience(
+                        hidden_state=hidden_for_mem,
+                        action=int(action.item()),
+                        reward=float(total_r),
+                        surprise=float(surprise_val),
+                        global_step=state.step,
+                        episode_id=int(current_ep),
+                        tags=tags,
+                    )
+                except Exception:
+                    pass
+
+            # --- Phase 0: creativity reward ---
+            if creativity_orch is not None and creativity_orch.should_trigger(state.step):
+                try:
+                    slot_input = model.encoder(obs_t).squeeze(0) if model.use_slots else None
+                    wm_state = wm.initial_state(1, device) if wm is not None else None
+                    creativity_result = creativity_orch.creative_cycle(
+                        step=state.step,
+                        slot_states=slot_input if slot_input is not None else torch.randn(7, model.d_model, device=device),
+                        skill_library=skills,
+                        world_model=wm,
+                        causal_graph=causal_disc,
+                        wm_state=wm_state,
+                        divergent_gen=divergent_gen,
+                        transformational=transformational,
+                    )
+                    total_r = creativity_orch.add_creativity_reward(total_r, creativity_result)
+                except Exception:
+                    pass
+
+            # --- Phase 9: LLM scene description + policy modulation ---
+            if llm_fusion is not None and llm_fusion.is_available and model.use_slots:
+                with torch.no_grad():
+                    slot_out = model.encoder(obs_t)
+                    # Get scene description (cached, not called every step)
+                    _scene_desc = llm_fusion.describe_scene(slot_out)
+                    # Modulate policy with LLM reasoning
+                    logits = llm_fusion.modulate_policy(slot_out, logits)
+            elif rnd is not None:
                 with torch.no_grad():
                     int_r = float(rnd.intrinsic_reward(obs_t).item())
                 total_r = extrinsic_r + intrinsic_coef * int_r
@@ -1071,7 +1504,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     reward=total_r,
                     next_obs=step_out.obs,
                     done=step_out.terminated or step_out.truncated,
-                    priority=1.0 + abs(int_r) if rnd is not None else 1.0,
+                    priority=1.0 + abs(int_r) if (rnd is not None or curiosity_mode != "none") else 1.0,
                 ))
 
             # --- Stage 1: RND predictor SGD ---
@@ -1095,26 +1528,155 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 # --- Stage 7: extract symbolic rules from successful episodes ---
                 if symbolic_layer is not None and ep_ret > symbolic_extract_threshold:
                     try:
-                        symbolic_layer.extract_rules(
-                            hidden_states=[batch_obs_t.squeeze(0) for batch_obs_t in
-                                          [torch.from_numpy(obs).unsqueeze(0).to(device)]],
-                            actions=[int(action.item())],
-                            rewards=[ep_ret],
-                            descriptions=[f"IF see {curr_active_task.tag if curr_active_task else 'env'} THEN action"],
-                        )
+                        # Compute per-step advantages from rollout buffer
+                        if len(rollout_hidden_states) > 0 and len(buffer.rewards) > 0:
+                            n_rollout = min(len(rollout_hidden_states), len(buffer.rewards))
+                            buf_rewards = buffer.rewards[:n_rollout].cpu().tolist()
+                            buf_vals = buffer.values[:n_rollout].cpu().tolist()
+                            # Simple advantage: reward - baseline for steps where baseline exists
+                            with torch.no_grad():
+                                # Use mean return as crude advantage proxy
+                                mean_ret_val = ep_ret / max(1, n_rollout)
+                                step_advantages = [r - mean_ret_val for r in buf_rewards]
+                            symbolic_layer.extract_rules(
+                                hidden_states=rollout_hidden_states[:n_rollout],
+                                actions=rollout_actions[:n_rollout],
+                                rewards=rollout_rewards[:n_rollout],
+                                advantages=step_advantages,
+                                descriptions=[f"IF see {curr_active_task.tag if curr_active_task else 'env'} THEN act"],
+                            )
+                        else:
+                            symbolic_layer.extract_rules(
+                                hidden_states=rollout_hidden_states or [torch.from_numpy(obs).to(device)],
+                                actions=rollout_actions or [int(action.item())],
+                                rewards=rollout_rewards or [float(ep_ret)],
+                            )
                     except Exception:
-                        pass  # never crash training for symbolic extraction
+                        pass
 
                 # --- Stage 7: reflection after episode ---
                 if reflection_loop is not None:
                     try:
+                        # Record steps first
+                        if rollout_trajectory:
+                            for i, t_step in enumerate(rollout_trajectory[-32:]):
+                                idx = max(0, len(rollout_hidden_states) - 32 + i) if rollout_hidden_states else 0
+                                h = rollout_hidden_states[min(idx, len(rollout_hidden_states) - 1)] if rollout_hidden_states else torch.randn(384)
+                                if i < len(rollout_hidden_states):
+                                    h = rollout_hidden_states[max(0, len(rollout_hidden_states) - 32 + i)]
+                                reflection_loop.record_step(
+                                    hidden_state=h,
+                                    action=int(t_step.get("action", 0)),
+                                    reward=float(t_step.get("reward", 0)),
+                                    done=True,
+                                )
                         reflection = reflection_loop.end_episode(ep_ret)
                         if reflection is not None and inner_dialogue is not None:
-                            lessons = inner_dialogue.generate(reflection)
-                            for lesson in lessons[:2]:  # log first 2 lessons
+                            lessons = inner_dialogue.generate(
+                                reflection, trajectory_data=rollout_trajectory[-32:],
+                            )
+                            for lesson in lessons[:2]:
                                 logger.info("[reflection] %s", lesson)
                     except Exception:
-                        pass  # never crash training for reflection
+                        pass
+
+                # Clear per-episode trajectory buffers
+                rollout_hidden_states.clear()
+                rollout_actions.clear()
+                rollout_rewards.clear()
+                rollout_trajectory.clear()
+
+                # --- Phase 9: LLM reflection after episode ---
+                if llm_fusion is not None and llm_fusion.is_available:
+                    try:
+                        scene = llm_fusion.describe_scene(
+                            model.encoder(obs_t) if model.use_slots else obs_t
+                        )
+                        lessons = llm_fusion.reflect(ep_ret, scene)
+                        for lesson in lessons[:2]:
+                            logger.info("[llm_refl] %s", lesson)
+                    except Exception:
+                        pass
+
+                # --- Enhanced memory: promote significant events to life story ---
+                if memory_manager is not None and ep_ret > 0.5:
+                    try:
+                        scene_desc = llm_fusion.describe_scene(
+                            model.encoder(obs_t) if model.use_slots and llm_fusion is not None else obs_t
+                        ) if llm_fusion is not None and llm_fusion.is_available else "an episode"
+                        task = curr_active_task.tag if curr_active_task else "sandbox"
+                        description = f"Completed {task}: return={ep_ret:.2f}, scene={scene_desc[:60]}"
+                        lesson = f"Learned to navigate {task}" if ep_ret > 0.7 else f"Explored {task}"
+                        memory_manager.promote_to_life_event(
+                            step=state.step,
+                            description=description,
+                            importance=float(ep_ret),
+                            episode_id=int(env.summary().get("episodes", 0)),
+                            lesson=lesson,
+                        )
+                    except Exception:
+                        pass
+
+                # --- Theory of Mind update ---
+                if theory_of_mind is not None and hasattr(env, '_agent'):
+                    try:
+                        theory_of_mind.reset_beliefs()
+                    except Exception:
+                        pass
+
+                # --- Emotion: log dominant feeling ---
+                if emotion_system is not None:
+                    try:
+                        dom = emotion_system.state.dominant
+                        if dom != "neutral":
+                            logger.debug("[emotion] feeling: %s", dom)
+                    except Exception:
+                        pass
+
+                # --- Phase 0: number sense training (episode end) ---
+                if (number_sense is not None and num_sense_optimizer is not None
+                        and len(episode_true_counts) > 0):
+                    summary = env.summary()
+                    current_ep = summary.get("episodes", 0)
+                    if current_ep - num_sense_last_train >= num_sense_train_every:
+                        slot_batch = model.encoder(obs_t)
+                        true_count = torch.tensor([len(env._objects) if hasattr(env, '_objects') else 3],
+                                                  dtype=torch.long, device=device)
+                        n_loss = number_sense.loss(slot_batch, true_count)
+                        num_sense_optimizer.zero_grad()
+                        n_loss.backward()
+                        num_sense_optimizer.step()
+                        num_sense_last_train = current_ep
+                episode_true_counts.clear()
+
+                # --- Phase 0: rule induction (episode end) ---
+                if rule_engine is not None and episode_predicates:
+                    summary = env.summary()
+                    current_ep = summary.get("episodes", 0)
+                    if current_ep - rule_induce_last_ep >= rule_induce_every:
+                        rule_engine.record_episode(
+                            predicates_sequence=episode_predicates,
+                            actions=rollout_actions if rollout_actions else [0],
+                            outcome=float(ep_ret),
+                        )
+                        new_rules = rule_engine.induce_rules()
+                        if new_rules:
+                            logger.info("[rule_induction] %d new rules induced", len(new_rules))
+                        rule_induce_last_ep = current_ep
+                episode_predicates.clear()
+
+                # --- Phase 0: causal discovery intervention ---
+                if (causal_disc is not None and wm is not None
+                        and state.step - causal_last_intervene >= causal_intervene_every):
+                    if model.use_slots:
+                        with torch.no_grad():
+                            slot_states = model.encoder(obs_t).squeeze(0)
+                            wm_state = wm.initial_state(1, device)
+                            effects = causal_disc.intervene(
+                                wm, wm_state, int(action.item()),
+                                slot_states, state.step,
+                            )
+                    causal_last_intervene = state.step
 
             if state.step >= total_steps:
                 break
@@ -1241,8 +1803,82 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         if sleep_loop is not None:
             sleep_loop.tick(step=state.step)
 
+        # --- Enhanced memory: consolidation (episodic → semantic) ---
+        if memory_manager is not None and memory_manager.should_consolidate(state.step):
+            try:
+                cons_result = memory_manager.consolidate(state.step)
+                if cons_result.get("new_facts", 0) + cons_result.get("updated_facts", 0) > 0:
+                    logger.info("[memory] consolidation: %d new, %d updated facts",
+                                cons_result["new_facts"], cons_result["updated_facts"])
+            except Exception:
+                pass
+
+        # --- Phase 0: model growth check ---
+        if model_grower_v2 is not None and coverage is not None:
+            lp = float(1.0 - env.summary().get("mean_return", 0.0))
+            cov = coverage.coverage_ratio()
+            if model_grower_v2.should_grow(state.step, lp, cov):
+                try:
+                    model, optimizer, grow_rec = model_grower_v2.grow(
+                        model, optimizer, state.step, n_layers_to_add=1,
+                    )
+                    logger.info("[growth] grown to %d layers (step=%d)",
+                                grow_rec["new_layers"], state.step)
+                except Exception as exc:
+                    logger.error("[growth] failed: %s", exc)
+
+        # --- Phase 0: cross-modal bridge training ---
+        if (xmodal_manager is not None and hasattr(env, '_agent')
+                and state.step - xmodal_last_train >= xmodal_train_every):
+            try:
+                prop = torch.tensor(env._agent.proprio if hasattr(env._agent, 'proprio')
+                                    else [0.0]*6, device=device).float()
+                lang_emb = xmodal_manager.touch_bridge.touch_to_lang(prop.unsqueeze(0))
+                # Simple reconciliation loss: touch→lang→touch should return original
+                recon = xmodal_manager.touch_bridge.lang_to_touch(lang_emb)
+                t_loss = F.mse_loss(recon, prop)
+                opt_xmodal = torch.optim.Adam(xmodal_manager.parameters(), lr=1e-4)
+                opt_xmodal.zero_grad()
+                t_loss.backward()
+                opt_xmodal.step()
+                xmodal_last_train = state.step
+            except Exception:
+                pass
+
         # Health sweep after each rollout+update cycle
         health.sweep()
+
+        # --- Concept graph: periodic ingestion ---
+        if concept_graph is not None and state.step % 2000 == 0:
+            try:
+                if memory_manager is not None and len(memory_manager.semantic) > 0:
+                    facts = list(memory_manager.semantic._facts.values())[:20]
+                    concept_graph.update_from_semantic(facts, state.step)
+                if causal_disc is not None:
+                    edges = [
+                        (e.source, e.target, e.strength)
+                        for e in causal_disc._graph.edges.values()
+                        if e.strength > 0.3
+                    ][:10]
+                    if edges:
+                        concept_graph.update_from_causal(edges, state.step)
+            except Exception:
+                pass
+
+        # --- Long-range planning: periodic replan ---
+        if (long_range_planner is not None and wm is not None
+                and state.step % max(1, planner_cfg.get("plan_every_steps", 500)) < rollout_capacity):
+            try:
+                obs_t = _obs_to_tensor(obs, device)
+                wm_obs = obs_t.float().reshape(1, -1) / 255.0
+                action_onehot = F.one_hot(torch.tensor([0]), num_actions).float().to(device)
+                wm_state = wm.initial_state(1, device)
+                wm_state, _ = wm.observe_step(wm_state, action_onehot, wm_obs)
+                plan = long_range_planner.plan(wm_state, wm, model, obs_t)
+                if plan:
+                    logger.debug("[plan] new plan: %s (len=%d)", plan[:5], len(plan))
+            except Exception:
+                pass
 
         # --- Stage 7: symbolic rule override on next batch ---
         if symbolic_layer is not None:
@@ -1395,6 +2031,33 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 extra["logic_engine_state"] = logic_engine.state_dict()
             if reflection_loop is not None:
                 extra["reflection_state"] = reflection_loop.state_dict()
+            if number_sense is not None:
+                extra["number_sense_state"] = number_sense.state_dict()
+            if rule_engine is not None:
+                extra["rule_engine_state"] = rule_engine.state_dict()
+            if causal_disc is not None:
+                extra["causal_discovery_state"] = causal_disc.state_dict()
+            if model_grower_v2 is not None:
+                extra["model_grower_v2_state"] = model_grower_v2.state_dict()
+            if creativity_orch is not None:
+                extra["creativity_state"] = creativity_orch.state_dict()
+            if llm_fusion is not None:
+                extra["llm_fusion_state"] = {
+                    k: v for k, v in llm_fusion.state_dict().items()
+                    if not k.startswith("_llm")
+                }
+            if memory_manager is not None:
+                extra["memory_manager_state"] = memory_manager.state_dict()
+            if theory_of_mind is not None:
+                extra["theory_of_mind_state"] = theory_of_mind.state_dict()
+            if homeostatic_drives is not None:
+                extra["homeostatic_drives_state"] = homeostatic_drives.state_dict()
+            if emotion_system is not None:
+                extra["emotion_system_state"] = emotion_system.state_dict()
+            if long_range_planner is not None:
+                extra["long_range_planner_state"] = long_range_planner.state_dict()
+            if concept_graph is not None:
+                extra["concept_graph_state"] = concept_graph.state_dict()
             # NB: replay state not serialized here (too big for on-policy ckpts;
             # rely on data disk to persist replay across restarts).
             save_ckpt(

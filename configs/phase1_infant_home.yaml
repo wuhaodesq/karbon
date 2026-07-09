@@ -1,0 +1,122 @@
+# Phase 1 · 3D Home World (婴儿家庭)
+# Developmental AI: infant-level learning in a 3D home environment.
+#
+# Environment: ThreeDWorld (MuJoCo) — room with furniture + 100 objects + caregiver.
+# Encoder: SlotAttention (zero-trained) + TTT-Hybrid backbone.
+# Curiosity: RSSM prediction uncertainty.
+# All 7 developmental modules active.
+
+stage: 1
+phase: 1
+name: "phase1_infant_home"
+
+model:
+  use_hybrid_backbone: true
+  hybrid_n_layers: 3
+  hybrid_n_heads: 4
+  hybrid_swa_window: 8
+  hybrid_ttt_mini_batch: 4
+  hybrid_ffn_hidden_mult: 4
+  hybrid_dropout: 0.0
+  hidden_size: 128
+  use_slot_attention: true
+  slot_num_slots: 16
+  slot_dim: 128
+  slot_num_iterations: 3
+  use_vision_encoder: false
+
+env:
+  id: "ThreeDWorld"
+  num_objects: 100
+  max_episode_steps: 500
+  render_size: 256
+  action_force: 2.0
+  developmental_age: 0.0
+
+train:
+  ppo_clip: 0.2
+  ppo_epochs: 4
+  entropy_coef: 0.02
+  value_coef: 0.5
+  gamma: 0.99
+  gae_lambda: 0.95
+  learning_rate: 3.0e-4
+  total_steps: 3000000
+
+curiosity:
+  enabled: true
+  mode: "rssm_uncertainty"
+  coef: 0.5
+
+world_model:
+  enabled: true
+  embed_dim: 128
+  h_dim: 128
+  z_dim: 32
+  hidden: 128
+  max_rollout_steps: 4
+  lr: 1.0e-3
+  update_every_steps: 8
+  log_every_steps: 5000
+
+replay:
+  enabled: true
+  capacity_gpu: 4096
+  capacity_cpu: 32768
+  capacity_ssd: 36864
+  min_size: 256
+  batch_size: 64
+  per_alpha: 0.6
+  sample_every_steps: 8
+
+skills:
+  enabled: true
+  gpu_capacity: 256
+  cpu_capacity: 2048
+  cold_shard_size: 128
+  cold_max_shards: 64
+  merge_threshold: 0.85
+  extraction_reward_threshold: 0.1
+
+number_sense:
+  enabled: true
+  max_count: 20
+  hidden: 32
+  train_every_episodes: 10
+  lr: 3.0e-4
+
+rule_induction:
+  enabled: true
+  max_rules: 256
+  max_chain_depth: 5
+  min_confidence: 0.3
+  induction_min_positive: 3
+  induction_every_episodes: 20
+
+causal_discovery:
+  enabled: true
+  max_edges: 512
+  min_intervention_effect: 0.01
+  intervene_every_steps: 500
+
+model_growth:
+  enabled: true
+  max_layers: 20
+  min_steps_between_growths: 100000
+  grow_trigger_lp_threshold: 0.05
+  grow_trigger_coverage: 0.3
+  distill_steps: 100
+  distill_lr: 1.0e-3
+
+cross_modal:
+  enabled: true
+  touch_dim: 12
+  plan_dim: 128
+  lang_dim: 3584
+  bridge_hidden: 128
+  train_every_steps: 1000
+
+monitor:
+  sample_interval_s: 2.0
+  slope_alarm_gb_per_hour: 0.5
+  empty_cache_every_steps: 1000

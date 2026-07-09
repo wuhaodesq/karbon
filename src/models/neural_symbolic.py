@@ -346,6 +346,11 @@ class NeuralSymbolicLayer(nn.Module):
         self._num_actions = num_actions
         self._match_threshold = match_threshold
         self._extraction_reward_threshold = extraction_reward_threshold
+
+        # Contrastive head: learns to separate rule condition embeddings
+        # so that cosine similarity becomes discriminative (not random).
+        self.contrastive_proj = nn.Linear(d_model, d_model)
+        self.contrastive_temp = nn.Parameter(torch.tensor(0.07))
         self._override_threshold = override_confidence_threshold
 
         self.rule_memory = RuleMemory(max_rules=max_rules, d_model=d_model)
@@ -427,17 +432,19 @@ class NeuralSymbolicLayer(nn.Module):
         hidden_states: list[torch.Tensor],
         actions: list[int],
         rewards: list[float],
+        advantages: list[float] | None = None,
         descriptions: list[str] | None = None,
     ) -> list[Rule]:
         """Extract rules from an episode's trajectory.
 
-        For transitions with reward > threshold, extract:
-            "IF hidden_state ≈ X THEN action = A"
+        Uses advantage-based filtering: only transitions with positive advantage
+        (better than expected) yield rules. Falls back to reward threshold.
 
         Args:
             hidden_states: list of (d_model,) tensors, one per step.
             actions: list of action indices.
             rewards: list of rewards received.
+            advantages: optional GAE advantages for smarter extraction.
             descriptions: optional human-readable descriptions.
 
         Returns:
@@ -445,24 +452,104 @@ class NeuralSymbolicLayer(nn.Module):
         """
         new_rules: list[Rule] = []
         for t in range(len(hidden_states)):
-            if rewards[t] < self._extraction_reward_threshold:
-                continue
+            # Prefer advantage (>0 means better than baseline), fall back to reward
+            if advantages is not None and t < len(advantages):
+                if advantages[t] <= 0:
+                    continue
+                confidence = 0.5 + 0.5 * float(torch.sigmoid(torch.tensor(advantages[t] * 5.0)))
+            else:
+                if rewards[t] <= 0:
+                    continue
+                confidence = min(1.0, float(torch.sigmoid(torch.tensor(rewards[t] * 3.0))))
             h = hidden_states[t]
             if h.dim() == 1:
                 h = h.unsqueeze(0)
             h_projected = self.rule_projection(h.squeeze(0))
             action = actions[t]
             desc = descriptions[t] if descriptions and t < len(descriptions) else ""
-            confidence = min(1.0, rewards[t])  # higher reward → higher confidence
             rule = self.rule_memory.add(
                 condition_embedding=h_projected,
                 action=action,
                 description=desc,
-                confidence=confidence,
-                priority=rewards[t],
+                confidence=float(confidence),
+                priority=float(confidence),
             )
             new_rules.append(rule)
+        # Temporal composition: chain consecutive extracted rules
+        composed = self._compose_temporal_rules(new_rules, hidden_states, actions)
+        new_rules.extend(composed)
         return new_rules
+
+    def _compose_temporal_rules(
+        self,
+        rules: list[Rule],
+        hidden_states: list[torch.Tensor],
+        actions: list[int],
+    ) -> list[Rule]:
+        """Compose pairs of consecutive rules into two-step chains.
+
+        If step t extracts rule A and step t+1 extracts rule B, create:
+            "IF hidden ≈ X THEN after action A, IF hidden ≈ Y THEN action B"
+        Stored as a new rule with condition = A's embedding, action = B's action.
+        """
+        if len(rules) < 2:
+            return []
+        composed: list[Rule] = []
+        # Map step indices to rules
+        rule_by_step: dict[int, Rule] = {}
+        for t, h in enumerate(hidden_states):
+            h_proj = self.rule_projection(h.squeeze(0) if h.dim() == 2 else h)
+            for r in rules:
+                if torch.equal(h_proj, r.condition_embedding):
+                    rule_by_step[t] = r
+                    break
+        sorted_steps = sorted(rule_by_step.keys())
+        for i in range(len(sorted_steps) - 1):
+            s1, s2 = sorted_steps[i], sorted_steps[i + 1]
+            if s2 == s1 + 1:
+                r1 = rule_by_step[s1]
+                r2 = rule_by_step[s2]
+                chain_cond = (r1.condition_embedding + r2.condition_embedding) * 0.5
+                chain_conf = min(r1.confidence, r2.confidence) * 0.9
+                chain_desc = f"{r1.description} → {r2.description}"
+                cr = self.rule_memory.add(
+                    condition_embedding=chain_cond,
+                    action=r2.action,
+                    description=chain_desc,
+                    confidence=float(chain_conf),
+                    priority=float(chain_conf),
+                )
+                composed.append(cr)
+        return composed
+
+    def contrastive_loss(self, rule_batch: list[Rule]) -> torch.Tensor:
+        """InfoNCE contrastive loss on rule condition embeddings.
+
+        Pushes same-action rule embeddings together and different-action apart.
+        This makes cosine-similarity rule matching genuinely discriminative.
+        """
+        if len(rule_batch) < 2:
+            return torch.tensor(0.0, device=self.contrastive_temp.device)
+        n = len(rule_batch)
+        embeddings = torch.stack([
+            self.contrastive_proj(r.condition_embedding.to(self.contrastive_temp.device))
+            for r in rule_batch
+        ])
+        embeddings = F.normalize(embeddings, dim=-1)
+        sim = embeddings @ embeddings.T / self.contrastive_temp.clamp(min=0.01)
+        actions = torch.tensor([r.action for r in rule_batch], device=sim.device)
+        labels = (actions.unsqueeze(0) == actions.unsqueeze(1)).float()
+        labels.fill_diagonal_(0.0)
+        # InfoNCE per row
+        loss = 0.0
+        for i in range(n):
+            pos_mask = labels[i] > 0
+            if pos_mask.sum() == 0:
+                continue
+            pos = sim[i][pos_mask]
+            all_logits = sim[i]
+            loss = loss - pos.log_softmax(dim=0).mean()
+        return loss / max(1, n)
 
     def feedback(self, reward: float, decay: float = 0.95) -> None:
         """Update the last matched rule's confidence based on outcome.

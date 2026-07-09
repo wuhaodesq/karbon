@@ -46,6 +46,43 @@ logger = logging.getLogger(__name__)
 
 
 # =====================================================================
+# 0. TrainableUnifier — learned matching instead of cosine similarity
+# =====================================================================
+
+
+class TrainableUnifier(nn.Module):
+    """Replaces cosine-similarity unification with a trainable bilinear matcher.
+
+    Given a hidden state h and a variable category embedding c, predicts
+    whether h is an instance of c via learned projections + dot product.
+
+    Architecture:
+        h → key_proj(h)   \
+                            → dot(h', c') → sigmoid → match_prob [0, 1]
+        c → query_proj(c) /
+
+    Trained via BCE: match (h, correct_var) = 1, (h, wrong_var) = 0.
+    """
+
+    def __init__(self, d_model: int = 384) -> None:
+        super().__init__()
+        self.key_proj = nn.Linear(d_model, d_model)
+        self.query_proj = nn.Linear(d_model, d_model)
+
+    def forward(
+        self, hidden: torch.Tensor, category_embedding: torch.Tensor,
+    ) -> torch.Tensor:
+        h = self.key_proj(hidden)
+        c = self.query_proj(category_embedding)
+        return torch.sigmoid((h * c).sum(dim=-1))
+
+    def unify(
+        self, hidden_state: torch.Tensor, variable_embeddings: torch.Tensor,
+    ) -> torch.Tensor:
+        return self.forward(hidden_state, variable_embeddings)
+
+
+# =====================================================================
 # 1. Variable — symbolic variable binding
 # =====================================================================
 
@@ -161,6 +198,7 @@ class LogicEngine:
         max_variables: int = 16,
         max_proof_depth: int = 5,
         match_threshold: float = 0.7,
+        use_trainable_unifier: bool = False,
     ) -> None:
         self._d_model = d_model
         self._max_rules = int(max_rules)
@@ -171,6 +209,11 @@ class LogicEngine:
         self._rules: dict[int, QuantifiedRule] = {}
         self._variables: dict[str, Variable] = {}
         self._next_rule_id = 0
+
+        # Trainable unifier replaces cosine similarity
+        self._unifier: TrainableUnifier | None = (
+            TrainableUnifier(d_model) if use_trainable_unifier else None
+        )
 
     @property
     def capacity(self) -> int:
@@ -212,17 +255,32 @@ class LogicEngine:
     ) -> list[tuple[Variable, float]]:
         """Find all variables whose category matches the given hidden state.
 
-        This is VARIABLE UNIFICATION — the core of symbolic reasoning.
-        Returns list of (variable, similarity) pairs above threshold.
+        Uses the trainable bilinear matcher when available; falls back to cosine.
+        Returns list of (variable, match_prob) pairs above threshold.
         """
         matches: list[tuple[Variable, float]] = []
-        for var in self._variables.values():
-            sim = var.match(hidden_state, self._threshold)
-            if sim >= self._threshold:
-                matches.append((var, sim))
-                # Record binding (bounded)
-                if len(var.bindings) < 32:
-                    var.bindings.append(hidden_state.detach().clone())
+        if not self._variables:
+            return matches
+
+        vars_list = list(self._variables.values())
+        if self._unifier is not None:
+            # Trainable matcher
+            for var in vars_list:
+                prob = float(self._unifier.unify(
+                    hidden_state.unsqueeze(0), var.category_embedding.unsqueeze(0),
+                ).item())
+                if prob >= self._threshold:
+                    matches.append((var, prob))
+                    if len(var.bindings) < 32:
+                        var.bindings.append(hidden_state.detach().clone())
+        else:
+            # Cosine fallback
+            for var in vars_list:
+                sim = var.match(hidden_state, self._threshold)
+                if sim >= self._threshold:
+                    matches.append((var, sim))
+                    if len(var.bindings) < 32:
+                        var.bindings.append(hidden_state.detach().clone())
         return matches
 
     # ---------------------------------------------------------- rules
@@ -336,6 +394,113 @@ class LogicEngine:
                 new_rules.append(new_rule)
 
         return new_rules
+
+    def backward_chain(
+        self, goal_variable_name: str, goal_action: int,
+    ) -> list[list[QuantifiedRule]]:
+        """Goal-directed backward chaining: find rule chains that lead to goal_action.
+
+        Given a goal (variable + desired action), walk backwards through rules
+        to find all chains of rules that could lead to achieving that goal.
+        Each chain is a list of rules in execution order (first → ... → goal).
+
+        Bounded: max_proof_depth limits chain length.
+        """
+        chains: list[list[QuantifiedRule]] = []
+        # Find rules whose action matches the goal
+        candidate_start = [
+            r for r in self._rules.values()
+            if r.action == goal_action and r.variable.name == goal_variable_name
+        ]
+        if not candidate_start:
+            return chains
+
+        # For each direct rule, add single-rule chain
+        for r in candidate_start:
+            chains.append([r])
+
+        # Extend chains by looking for rules whose action matches other rules' variables
+        for depth in range(self._max_depth - 1):
+            new_chains: list[list[QuantifiedRule]] = []
+            for chain in chains:
+                first_rule = chain[0]
+                # Find rules whose action could set up first_rule's condition
+                precursors = [
+                    r for r in self._rules.values()
+                    if r.variable.name == first_rule.variable.name and r.id != first_rule.id
+                ]
+                for precursor in precursors:
+                    new_chain = [precursor] + chain
+                    if not any(
+                        set(r.id for r in c) == set(r.id for r in new_chain)
+                        for c in (chains + new_chains)
+                    ):
+                        new_chains.append(new_chain)
+            if not new_chains:
+                break
+            chains.extend(new_chains)
+
+        return chains
+
+    def build_variable_from_observations(
+        self,
+        name: str,
+        var_type: VariableType,
+        observations: list[torch.Tensor],
+        n_clusters: int = 3,
+    ) -> Variable:
+        """Build a variable category from observed hidden states via K-means.
+
+        Instead of random initialization, clusters the observed embeddings
+        and uses the centroid of the largest cluster as the category embedding.
+        This makes the variable actually represent what the agent has seen.
+        """
+        if not observations:
+            return self.define_variable(name, var_type, torch.randn(self._d_model))
+        stacked = torch.stack([o.detach() for o in observations])
+        if stacked.shape[0] < n_clusters:
+            centroid = stacked.mean(dim=0)
+        else:
+            # Simple iterative K-means (bounded: max 10 iterations, n_clusters ≤ 8)
+            k = min(n_clusters, stacked.shape[0])
+            centroids = stacked[torch.randperm(stacked.shape[0])[:k]].clone()
+            for _ in range(10):
+                dists = torch.cdist(stacked, centroids)
+                assignments = dists.argmin(dim=1)
+                new_centroids = torch.stack([
+                    stacked[assignments == j].mean(dim=0)
+                    for j in range(k) if (assignments == j).sum() > 0
+                ])
+                if new_centroids.shape[0] == k and (new_centroids - centroids).abs().max() < 1e-4:
+                    break
+                if new_centroids.shape[0] == k:
+                    centroids = new_centroids
+            # Use the centroid with the most members
+            sizes = [(assignments == j).sum().item() for j in range(k)]
+            centroid = centroids[sizes.index(max(sizes))]
+        return self.define_variable(name, var_type, centroid)
+
+    def unifier_loss(
+        self,
+        positive_pairs: list[tuple[torch.Tensor, torch.Tensor]],
+        negative_pairs: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> torch.Tensor:
+        """BCE loss for training the unifier.
+
+        positive_pairs: list of (hidden_state, correct_variable_embedding)
+        negative_pairs: list of (hidden_state, wrong_variable_embedding)
+        """
+        if self._unifier is None:
+            return torch.tensor(0.0)
+        loss = 0.0
+        for h, v in positive_pairs:
+            pred = self._unifier(h.unsqueeze(0), v.unsqueeze(0))
+            loss = loss + F.binary_cross_entropy(pred, torch.ones_like(pred))
+        for h, v in negative_pairs:
+            pred = self._unifier(h.unsqueeze(0), v.unsqueeze(0))
+            loss = loss + F.binary_cross_entropy(pred, torch.zeros_like(pred))
+        n = max(1, len(positive_pairs) + len(negative_pairs))
+        return loss / n
 
     # ---------------------------------------------------------- reasoning
 
@@ -459,7 +624,7 @@ class LogicEngine:
     # ---------------------------------------------------------- persistence
 
     def state_dict(self) -> dict:
-        return {
+        sd: dict[str, Any] = {
             "d_model": self._d_model,
             "max_rules": self._max_rules,
             "max_vars": self._max_vars,
@@ -489,6 +654,9 @@ class LogicEngine:
                 for v in self._variables.values()
             ],
         }
+        if self._unifier is not None:
+            sd["unifier_state"] = self._unifier.state_dict()
+        return sd
 
     def load_state_dict(self, state: dict) -> None:
         self._d_model = int(state["d_model"])
@@ -522,3 +690,6 @@ class LogicEngine:
                 derivation_chain=r_dict["derivation_chain"],
                 usage_count=r_dict["usage_count"],
             )
+
+        if "unifier_state" in state and self._unifier is not None:
+            self._unifier.load_state_dict(state["unifier_state"])

@@ -87,18 +87,24 @@ class SelfModel(nn.Module):
     - familiarity: supervised on coverage_tracker (has this state been seen?)
     - progress: supervised on LP delta (is return improving?)
 
-    Or trained end-to-end via PPO (the self-assessment modulates exploration).
+    When ``temporal=True``, applies a small GRU over the hidden state sequence
+    before the shared trunk, enabling the model to distinguish "I've seen this
+    exact state before" from "I've seen something LIKE this before."
 
     Bounded: 3 × d_model params ≈ 1k. No state accumulation (Axiom 1).
-
-    元认知模块：读自己的 hidden state，输出"我有多确信/熟悉/在进步"。
     """
 
-    def __init__(self, d_model: int, hidden: int = 64) -> None:
+    def __init__(self, d_model: int, hidden: int = 64, temporal: bool = True) -> None:
         super().__init__()
+        self._temporal = temporal
+        if temporal:
+            self.temporal_encoder = nn.GRU(d_model, hidden, batch_first=True, num_layers=1)
+            trunk_input = hidden
+        else:
+            trunk_input = d_model
         # Shared trunk
         self.trunk = nn.Sequential(
-            nn.Linear(d_model, hidden),
+            nn.Linear(trunk_input, hidden),
             nn.GELU(),
             nn.Linear(hidden, hidden),
             nn.GELU(),
@@ -112,14 +118,24 @@ class SelfModel(nn.Module):
         """Read the agent's own hidden state.
 
         Args:
-            hidden_state: (B, d_model) — the output of the Hybrid backbone
-                (after squeeze from seq dimension).
+            hidden_state: (B, d_model) — single-step, or
+                          (B, T, d_model) — sequence (temporal mode only).
 
         Returns:
             dict with keys "confidence", "familiarity", "progress".
             Each is (B, 1) in [0, 1] via sigmoid.
         """
-        h = self.trunk(hidden_state)
+        if self._temporal and hidden_state.dim() == 3:
+            # (B, T, d_model) → GRU → last hidden → trunk
+            _, h_n = self.temporal_encoder(hidden_state)
+            trunk_in = h_n[-1]  # (1, B, hidden) → (B, hidden)
+        elif self._temporal:
+            # Single step: add time dim
+            _, h_n = self.temporal_encoder(hidden_state.unsqueeze(1))
+            trunk_in = h_n[-1]
+        else:
+            trunk_in = hidden_state
+        h = self.trunk(trunk_in)
         return {
             "confidence": torch.sigmoid(self.confidence_head(h)),
             "familiarity": torch.sigmoid(self.familiarity_head(h)),
@@ -229,6 +245,7 @@ class ReflectionLoop:
         reflection_every_episodes: int = 10,
     ) -> None:
         self.self_model = self_model
+        self._temporal = getattr(self_model, "_temporal", False)
         self._max = int(max_reflections)
         self._reflections: deque[EpisodeReflection] = deque(maxlen=self._max)  # BOUNDS-OK: maxlen bounded
         self._every = int(reflection_every_episodes)
@@ -248,6 +265,7 @@ class ReflectionLoop:
         action: int,
         reward: float,
         done: bool,
+        observation_text: str = "",
     ) -> None:
         """Record one step's data for the current episode."""
         self._trajectory.append({
@@ -255,13 +273,13 @@ class ReflectionLoop:
             "action": action,
             "reward": reward,
             "done": done,
+            "observation_text": observation_text,
         })
 
     def end_episode(self, episode_return: float) -> EpisodeReflection | None:
         """Called at episode end. Returns a Reflection if it's time to reflect."""
         self._episode_count += 1
 
-        # Always compute a brief reflection
         if not self._trajectory:
             r = EpisodeReflection(
                 episode_return=episode_return,
@@ -272,10 +290,13 @@ class ReflectionLoop:
             self._trajectory.clear()
             return r if self._episode_count % self._every == 0 else None
 
-        # Stack hidden states and get self-assessments
-        hiddens = torch.stack([t["hidden"] for t in self._trajectory])
+        # Stack hidden states and get self-assessments (temporal if supported)
+        hiddens = torch.stack([t["hidden"].reshape(-1) for t in self._trajectory])  # (T, d_model)
         with torch.no_grad():
-            assessments = self.self_model.forward(hiddens)
+            if self._temporal:
+                assessments = self.self_model.forward(hiddens.unsqueeze(0))  # (1, T, d_model)
+            else:
+                assessments = self.self_model.forward(hiddens)
 
         conf = float(assessments["confidence"].mean().item())
         fam = float(assessments["familiarity"].mean().item())
@@ -284,11 +305,11 @@ class ReflectionLoop:
         # Generate adjustments
         adjustments: dict[str, float] = {}
         if fam < 0.3:
-            adjustments["exploration_epsilon_boost"] = 0.05  # explore more
+            adjustments["exploration_epsilon_boost"] = 0.05
         if conf < 0.3 and episode_return < 0:
-            adjustments["learning_rate_boost"] = 1.5  # learn faster from failure
+            adjustments["learning_rate_boost"] = 1.5
         if conf > 0.9 and episode_return > 0.5:
-            adjustments["exploration_epsilon_decay"] = 0.95  # exploit more
+            adjustments["exploration_epsilon_decay"] = 0.95
 
         reflection = EpisodeReflection(
             episode_return=episode_return,
@@ -356,12 +377,15 @@ class InnerDialogue:
     Two modes:
     - ``mode="template"``: rule-based natural language from reflection fields.
       Zero VRAM, zero dependencies, always available.
-    - ``mode="llm"``: uses a small local LLM (e.g., Qwen-7B) for richer
-      dialogue. Requires ~6 GB VRAM + transformers library.
+    - ``mode="llm"``: uses a small local LLM (e.g., Qwen-1.5B) for richer
+      dialogue. Requires ~3 GB VRAM + transformers library.
+
+    In LLM mode, the model receives:
+    - The agent's identity ("You are an RL agent navigating a grid world")
+    - The actual trajectory (observations, actions, rewards)
+    - Structured request for JSON output with lessons + strategy changes
 
     Bounded: generates text on demand, no state accumulation (Axiom 1).
-
-    内心独白：把反思转成自然语言。模板模式零依赖，LLM 模式需要小模型。
     """
 
     def __init__(
@@ -369,10 +393,12 @@ class InnerDialogue:
         mode: str = "template",
         llm_model_name: str = "Qwen/Qwen2.5-1.5B-Instruct",
         max_new_tokens: int = 128,
+        task_description: str = "navigate a MiniGrid world to reach the green goal square",
     ) -> None:
         self._mode = mode
         self._llm_model_name = llm_model_name
         self._max_new_tokens = max_new_tokens
+        self._task_description = task_description
         self._llm = None
         self._tokenizer = None
 
@@ -402,14 +428,20 @@ class InnerDialogue:
     def mode(self) -> str:
         return self._mode
 
-    def generate(self, reflection: EpisodeReflection) -> list[str]:
+    def generate(
+        self,
+        reflection: EpisodeReflection,
+        trajectory_data: list[dict] | None = None,
+    ) -> list[str]:
         """Generate natural-language lessons from a reflection.
 
-        Returns a list of lesson strings. In template mode, these are
-        rule-based. In LLM mode, they are generated by the language model.
+        In LLM mode with trajectory_data, feeds the actual steps to the model
+        for grounded analysis. In template mode, uses heuristic rules.
+
+        Returns a list of lesson strings.
         """
         if self._mode == "llm" and self._llm is not None and self._tokenizer is not None:
-            return self._generate_llm(reflection)
+            return self._generate_llm(reflection, trajectory_data)
         return self._generate_template(reflection)
 
     def _generate_template(self, r: EpisodeReflection) -> list[str]:
@@ -417,37 +449,35 @@ class InnerDialogue:
         lessons: list[str] = []
 
         status = "succeeded" if r.success else "failed"
-        lessons.append(f"I {status} this episode with return {r.episode_return:.3f}.")
+        lessons.append(f"Episode result: {status}, return={r.episode_return:.3f}")
 
         if r.mean_confidence < 0.3:
-            lessons.append("I was very uncertain about my actions. I should explore more to build confidence.")
+            lessons.append("Uncertain about actions — need more exploration to build confidence.")
         elif r.mean_confidence > 0.9 and not r.success:
-            lessons.append("I was overconfident but failed. I need to reconsider my strategy.")
+            lessons.append("Overconfident but failed — reconsider strategy.")
         elif r.mean_confidence > 0.8 and r.success:
-            lessons.append("I felt confident and succeeded. This task is becoming familiar.")
+            lessons.append("Confident and successful — task becoming familiar.")
 
         if r.mean_familiarity < 0.3:
-            lessons.append("I encountered many unfamiliar states. This is a good learning opportunity.")
+            lessons.append("Many unfamiliar states encountered — good learning opportunity.")
         elif r.mean_familiarity > 0.8:
-            lessons.append("I've seen most of these states before. I should consider moving to a harder task.")
+            lessons.append("Familiar states dominate — consider switching to a harder task.")
 
         if r.mean_progress > 0.6:
-            lessons.append("I'm making good progress on this task.")
+            lessons.append("Making good progress on this task.")
         elif r.mean_progress < 0.2 and r.success:
-            lessons.append("I've plateaued on this task. Time to try something new.")
+            lessons.append("Plateaued on this task — time to try something new.")
 
-        if "exploration_epsilon_boost" in r.adjustments:
-            lessons.append("Adjusting: increasing exploration to discover new strategies.")
-        if "learning_rate_boost" in r.adjustments:
-            lessons.append("Adjusting: increasing learning rate to recover from failure faster.")
-        if "exploration_epsilon_decay" in r.adjustments:
-            lessons.append("Adjusting: reducing exploration to exploit my confident policy.")
+        for adj_key in r.adjustments:
+            lessons.append(f"Parameter adjustment: {adj_key} = {r.adjustments[adj_key]:.3f}")
 
         return lessons
 
-    def _generate_llm(self, r: EpisodeReflection) -> list[str]:
+    def _generate_llm(
+        self, r: EpisodeReflection, trajectory_data: list[dict] | None = None,
+    ) -> list[str]:
         """Use a small LLM to generate richer inner dialogue."""
-        prompt = self._build_prompt(r)
+        prompt = self._build_prompt(r, trajectory_data)
         inputs = self._tokenizer(prompt, return_tensors="pt").to(self._llm.device)
         with torch.no_grad():
             outputs = self._llm.generate(
@@ -458,19 +488,34 @@ class InnerDialogue:
                 pad_token_id=self._tokenizer.eos_token_id,
             )
         text = self._tokenizer.decode(outputs[0], skip_special_tokens=True)
-        # Extract the generated part (after the prompt)
         generated = text[len(prompt):].strip()
-        # Split into sentences as lessons
-        lessons = [s.strip() for s in generated.split(".") if s.strip()]
-        return lessons[:5]  # limit to 5 lessons
+        lessons = [s.strip() for s in generated.split("\n") if s.strip()]
+        return lessons[:5]
 
-    def _build_prompt(self, r: EpisodeReflection) -> str:
-        return (
-            f"You are an AI agent reflecting on a completed episode.\n"
-            f"Episode result: {'success' if r.success else 'failure'}\n"
-            f"Return: {r.episode_return:.3f}\n"
-            f"Average confidence: {r.mean_confidence:.2f}\n"
-            f"Average familiarity: {r.mean_familiarity:.2f}\n"
-            f"Average progress: {r.mean_progress:.2f}\n"
-            f"What did you learn? What should you do differently next time?\n"
-        )
+    def _build_prompt(
+        self, r: EpisodeReflection, trajectory_data: list[dict] | None = None,
+    ) -> str:
+        action_names = ["turn_left", "turn_right", "forward", "pick_up", "drop", "toggle", "done"]
+        lines = [
+            f"You are an RL agent trying to {self._task_description}.",
+            f"You just finished an episode.",
+            f"",
+            f"Episode result: {'success' if r.success else 'failure'}",
+            f"Return (cumulative reward): {r.episode_return:.3f}",
+            f"Average confidence: {r.mean_confidence:.2f}",
+            f"Average familiarity: {r.mean_familiarity:.2f}",
+            f"Average progress: {r.mean_progress:.2f}",
+        ]
+        if trajectory_data:
+            lines.append("")
+            lines.append("Recent steps:")
+            # Show last 8 steps (bounded)
+            for step in trajectory_data[-8:]:
+                a = int(step.get("action", 0))
+                a_name = action_names[a] if a < len(action_names) else f"action_{a}"
+                rw = step.get("reward", 0)
+                lines.append(f"  action={a_name}, reward={rw}")
+        lines.append("")
+        lines.append("Analyze your performance. Output JSON (no markdown):")
+        lines.append('{"lessons": ["lesson 1", "lesson 2"], "strategy_change": "what to do differently"}')
+        return "\n".join(lines)

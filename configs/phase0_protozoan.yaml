@@ -1,0 +1,189 @@
+# Phase 0 · Protozoan (新生)
+# Developmental AI: newborn-level sensorimotor learning in physics sandbox.
+#
+# Core changes from old Stage system:
+#   1. Environment: PhysicsSandbox (2D) instead of MiniGrid
+#   2. Curiosity: RSSM prediction uncertainty instead of RND MSE
+#   3. Encoder: SlotAttention (from zero) instead of CNN/DINOv2
+#
+# Reuses: PPO, RSSM world model, BoundedReplayBuffer, SkillLibrary,
+#         AutoCurriculum, EWC, GenerativeReplayVAE, SleepConsolidation.
+#
+# Goal: agent learns to touch, push, and track objects.
+# Exit criterion: coverage > 10%, mean_return > 0.5 on 3-object sandbox.
+
+stage: 0
+phase: 0
+name: "phase0_protozoan"
+
+model:
+  use_hybrid_backbone: true
+  hybrid_n_layers: 2
+  hybrid_n_heads: 4
+  hybrid_swa_window: 8
+  hybrid_ttt_mini_batch: 4
+  hybrid_ffn_hidden_mult: 4
+  hybrid_dropout: 0.0
+  hidden_size: 128
+  # Phase 0 uses Slot Attention instead of CNN/DINOv2
+  use_slot_attention: true
+  slot_num_slots: 7
+  slot_dim: 128
+  slot_num_iterations: 3
+  use_vision_encoder: false
+
+env:
+  id: "PhysicsSandbox"
+  num_objects: 3
+  max_episode_steps: 200
+  render_size: 64
+  gravity: -9.8
+  action_force: 50.0
+
+train:
+  ppo_clip: 0.2
+  ppo_epochs: 4
+  entropy_coef: 0.02
+  value_coef: 0.5
+  gamma: 0.99
+  gae_lambda: 0.95
+  learning_rate: 3.0e-4
+  total_steps: 3000000
+
+# Phase 0 curiosity: use RSSM prediction error instead of RND
+curiosity:
+  enabled: true
+  mode: "rssm_uncertainty"  # "rssm_uncertainty" | "rnd" | "none"
+  coef: 0.5
+
+world_model:
+  enabled: true
+  embed_dim: 128
+  h_dim: 128
+  z_dim: 32
+  hidden: 128
+  max_rollout_steps: 4
+  lr: 1.0e-3
+  update_every_steps: 8
+  log_every_steps: 5000
+
+replay:
+  enabled: true
+  capacity_gpu: 4096
+  capacity_cpu: 32768
+  capacity_ssd: 36864
+  min_size: 256
+  batch_size: 64
+  per_alpha: 0.6
+  sample_every_steps: 8
+
+skills:
+  enabled: true
+  gpu_capacity: 256
+  cpu_capacity: 2048
+  cold_shard_size: 128
+  cold_max_shards: 64
+  merge_threshold: 0.85
+  extraction_reward_threshold: 0.1
+
+curriculum:
+  enabled: false  # Phase 0: no curriculum yet, just one sandbox
+
+continual:
+  ewc_enabled: false   # Phase 0: EWC not needed yet
+  gr_enabled: false    # Phase 0: GR VAE not needed yet
+  sleep_enabled: true  # keep sleep for skill merge
+
+monitor:
+  sample_interval_s: 2.0
+  slope_alarm_gb_per_hour: 0.5
+  empty_cache_every_steps: 1000
+
+# --- 7 New Modules (developmental improvements) ---
+
+number_sense:
+  enabled: true
+  max_count: 10
+  hidden: 32
+  train_every_episodes: 10
+  lr: 3.0e-4
+
+social_teacher:
+  enabled: true
+  imitation_reward: 0.3
+  attention_reward: 0.1
+  correction_penalty: 0.01
+
+rule_induction:
+  enabled: true
+  max_rules: 128
+  max_chain_depth: 5
+  min_confidence: 0.3
+  induction_min_positive: 3
+  induction_every_episodes: 20
+
+causal_discovery:
+  enabled: true
+  max_edges: 256
+  min_intervention_effect: 0.01
+  intervene_every_steps: 500
+
+model_growth:
+  enabled: true
+  max_layers: 20
+  min_steps_between_growths: 100000
+  grow_trigger_lp_threshold: 0.05
+  grow_trigger_coverage: 0.3
+  distill_steps: 100
+  distill_lr: 1.0e-3
+
+cross_modal:
+  enabled: true
+  touch_dim: 6
+  plan_dim: 128
+  lang_dim: 3584
+  bridge_hidden: 128
+  train_every_steps: 1000
+
+creativity:
+  enabled: true
+  trigger_every_steps: 2000
+  max_ideas: 200
+
+developmental_memory:
+  enabled: true
+  episodic_max: 10000
+  semantic_max: 1000
+  autobiographical_max: 100
+  surprise_threshold: 0.01
+  consolidation_every_steps: 50000
+
+theory_of_mind:
+  enabled: true
+
+homeostatic_drives:
+  enabled: true
+  curiosity_decay: 0.002
+  competence_decay: 0.001
+  social_decay: 0.003
+  safety_decay: 0.001
+  rest_decay: 0.005
+
+long_range_planner:
+  enabled: true
+  max_depth: 10
+  max_nodes: 500
+  num_simulations: 50
+  plan_every_steps: 500
+
+emotion_system:
+  enabled: true
+  pleasure_decay: 0.01
+  frustration_decay: 0.02
+  surprise_decay: 0.05
+  fear_decay: 0.03
+
+concept_graph:
+  enabled: true
+  max_nodes: 1000
+  max_edges: 5000
