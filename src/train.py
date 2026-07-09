@@ -1865,6 +1865,28 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             except Exception:
                 pass
 
+        # --- J-space monitoring: track reasoning subspace emergence ---
+        if state.step > 0 and state.step % 10000 < rollout_capacity:
+            try:
+                with torch.no_grad():
+                    sample_obs = _obs_to_tensor(obs, device)
+                    _, _, hidden = model(sample_obs, return_hidden=True)
+                    hidden_flat = hidden.reshape(-1)
+                    max_act = hidden_flat.abs().max()
+                    sparsity = float((hidden_flat.abs() > 0.01 * max_act).float().mean())
+                    top_vals, top_dims = hidden_flat.abs().topk(min(16, hidden_flat.shape[0]))
+                    normed = hidden_flat.abs() / (hidden_flat.abs().sum() + 1e-8)
+                    dim_entropy = float(-(normed * (normed + 1e-8).log()).sum())
+                    max_entropy = float(np.log(hidden_flat.shape[0]))
+                    dim_concentration = 1.0 - dim_entropy / max_entropy
+                    logger.info(
+                        "[jspace] sparsity=%.3f concentration=%.3f top_dims=%s",
+                        sparsity, dim_concentration,
+                        str(top_dims[:8].tolist()),
+                    )
+            except Exception:
+                pass
+
         # --- Long-range planning: periodic replan ---
         if (long_range_planner is not None and wm is not None
                 and state.step % max(1, planner_cfg.get("plan_every_steps", 500)) < rollout_capacity):
