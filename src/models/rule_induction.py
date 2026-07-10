@@ -118,10 +118,11 @@ class RuleInductionEngine:
         self._next_id = 0
 
         # Accumulated predicate statistics (跨 episode 累积，定期衰减)
-        self._positive_combos: dict[str, dict[int, int]] = {}  # pred_sig → {action: count}
-        self._negative_combos: dict[str, dict[int, int]] = {}
-        self._accumulation_decay: float = 0.95  # per-episode decay
+        self._positive_combos: dict[str, dict[int, float]] = {}  # pred_sig → {action: float count}
+        self._negative_combos: dict[str, dict[int, float]] = {}
+        self._accumulation_decay: float = 0.98  # per-episode decay (slow, floats preserve signal)
         self._episodes_accumulated: int = 0
+        self._decay_every: int = 5  # only decay every N episodes, not every single one
 
         # Color centroids (learnt from slot stats)
         self._color_centroids: dict[str, torch.Tensor] = {}
@@ -214,48 +215,57 @@ class RuleInductionEngine:
             sig = "&".join(true_preds[:6])
 
             if outcome > 0:
-                self._positive_combos.setdefault(sig, {}).setdefault(action, 0)
-                self._positive_combos[sig][action] += 1
+                self._positive_combos.setdefault(sig, {}).setdefault(action, 0.0)
+                self._positive_combos[sig][action] += 1.0
             else:
-                self._negative_combos.setdefault(sig, {}).setdefault(action, 0)
-                self._negative_combos[sig][action] += 1
+                self._negative_combos.setdefault(sig, {}).setdefault(action, 0.0)
+                self._negative_combos[sig][action] += 1.0
 
         self._episodes_accumulated += 1
 
-        # Check for rules that now meet the threshold
+        # Check for rules that now meet the float threshold
         for sig, action_counts in self._positive_combos.items():
-            for action, pos_count in action_counts.items():
-                neg_count = self._negative_combos.get(sig, {}).get(action, 0)
+            for action, pos_count in list(action_counts.items()):
+                neg_count = self._negative_combos.get(sig, {}).get(action, 0.0)
                 total = pos_count + neg_count
-                if total < self._induction_min_pos:
+                if total < float(self._induction_min_pos):
                     continue
                 confidence = pos_count / total if total > 0 else 0.0
                 if confidence < self._min_confidence:
                     continue
-
+                # Deduplicate: check if a rule with this sig+action already exists
                 pred_tuples = [
                     _parse_predicate_tuple(p) for p in sig.split("&") if p
                 ]
+                already_exists = any(
+                    set(r.if_predicates) == set(pred_tuples) and
+                    r.then_predicate == ("action", (action,))
+                    for r in self._rules.values()
+                )
+                if already_exists:
+                    continue
                 rule = InducedRule(
                     if_predicates=[pt for pt in pred_tuples if pt is not None],
                     then_predicate=("action", (action,)),
                     confidence=confidence,
-                    positive_examples=pos_count,
-                    negative_examples=neg_count,
+                    positive_examples=int(pos_count),
+                    negative_examples=int(neg_count),
                     derivation_id=-1,
                 )
                 self._add_rule(rule)
                 new_rules.append(rule)
 
-        # Decay accumulated statistics (old patterns fade)
-        for combos in [self._positive_combos, self._negative_combos]:
-            for sig in list(combos.keys()):
-                for action in list(combos[sig].keys()):
-                    combos[sig][action] = int(combos[sig][action] * self._accumulation_decay)
-                    if combos[sig][action] < 1:
-                        del combos[sig][action]
-                if not combos[sig]:
-                    del combos[sig]
+        # Decay only when enough episodes accumulated, and use float decay
+        if self._episodes_accumulated > 0 and self._episodes_accumulated % self._decay_every == 0:
+            for combos in [self._positive_combos, self._negative_combos]:
+                for sig in list(combos.keys()):
+                    for action in list(combos[sig].keys()):
+                        combos[sig][action] *= self._accumulation_decay
+                        # Only delete if truly negligible (below 0.1, not 1.0)
+                        if combos[sig][action] < 0.1:
+                            del combos[sig][action]
+                    if not combos[sig]:
+                        del combos[sig]
 
         return new_rules
 
