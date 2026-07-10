@@ -197,6 +197,9 @@ metacognition_v2:
   cluster_max_cats: 50
   cluster_every_steps: 5000
 
+iq_boost:
+  enabled: true
+
 # --- Phase 1+: Dreamer-style imagination training (sample efficiency 10x) ---
 imagination:
   enabled: false  # enable after Phase 0 baseline passes exit criterion

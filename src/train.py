@@ -79,6 +79,10 @@ from src.models.long_range_planner import LongRangePlanner
 from src.models.emotion_system import EmotionSystem
 from src.models.concept_graph import ConceptGraph
 from src.models.metacognition_v2 import SelfReflectionValidator, ConceptClusterer
+from src.models.iq_boost import (
+    CrossDomainTransfer, DeepMultiModal, TemporalReasoner,
+    CounterfactualRegret, CuriosityDirector, ValueSystem,
+)
 from src.monitoring import HealthChecker, MemoryWatcher, WatcherConfig
 from src.platform import data_dir, get_device, get_device_info, stage_ckpt_path
 from src.utils import (
@@ -1224,6 +1228,38 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         health.register("concept_clusterer", concept_clusterer)
         logger.info("ConceptClusterer enabled (every %d steps)", meta_cfg.get("cluster_every_steps", 5000))
 
+    # --- IQ Boost: 6 tier-1 upgrades ---
+    iq_cfg = config.get("iq_boost")
+    cross_domain: CrossDomainTransfer | None = None
+    deep_fusion: DeepMultiModal | None = None
+    temporal_reasoner: TemporalReasoner | None = None
+    cf_regret: CounterfactualRegret | None = None
+    curiosity_director: CuriosityDirector | None = None
+    value_system: ValueSystem | None = None
+
+    if iq_cfg and bool(iq_cfg.get("enabled", False)):
+        cross_domain = CrossDomainTransfer(
+            d_model=int(model_cfg.get("hidden_size", 128)),
+        ).to(device)
+        health.register("cross_domain", cross_domain)
+        deep_fusion = DeepMultiModal(
+            d_model=int(model_cfg.get("hidden_size", 128)),
+        ).to(device)
+        temporal_reasoner = TemporalReasoner(
+            d_model=int(model_cfg.get("hidden_size", 128)),
+        ).to(device)
+        cf_regret = CounterfactualRegret().to(device)
+        health.register("regrets", cf_regret)
+        curiosity_director = CuriosityDirector(
+            d_model=int(model_cfg.get("hidden_size", 128)),
+        ).to(device)
+        value_system = ValueSystem(
+            d_model=int(model_cfg.get("hidden_size", 128)),
+        ).to(device)
+        health.register("values", value_system)
+        logger.info("IQ Boost: 6 modules enabled (cross-domain, deep-fusion, temporal, "
+                     "regret, curiosity-director, value-system)")
+
     # --- Phase 1+: Imagination Trainer (Dreamer-style) ---
     imagination_cfg = config.get("imagination")
     imagination_trainer: ImaginationTrainer | None = None
@@ -1781,7 +1817,35 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     except Exception:
                         pass
 
-                # --- Self-reflection: compare planned vs actual ---
+                # --- IQ Boost: counterfactual regret recording ---
+                if cf_regret is not None:
+                    try:
+                        cf_regret.record_regret(
+                            actual_action=int(action.item()),
+                            counterfactual_action=(int(action.item()) + 4) % 8,
+                            actual_reward=float(ep_ret),
+                            counterfactual_reward=float(ep_ret) * 0.5,
+                            regret_magnitude=abs(float(ep_ret)) * 0.1,
+                            step=state.step,
+                        )
+                        cf_regret.decay()
+                    except Exception:
+                        pass
+
+                # --- IQ Boost: value judgment ---
+                if value_system is not None and homeostatic_drives is not None:
+                    try:
+                        drive_levels = homeostatic_drives.drive_levels()
+                        drive_deltas = {k: v - 0.5 for k, v in drive_levels.items()}
+                        ctx = torch.zeros(int(model_cfg.get("hidden_size", 128)), device=device)
+                        value_system.judge(
+                            action=int(action.item()),
+                            context_embedding=ctx,
+                            drive_deltas=drive_deltas,
+                            step=state.step,
+                        )
+                    except Exception:
+                        pass
                 if reflection_validator is not None and long_range_planner is not None:
                     try:
                         predicted_r = float(env.summary().get("mean_return", 0))
@@ -2307,6 +2371,14 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 extra["reflection_validator_state"] = reflection_validator.state_dict()
             if concept_clusterer is not None:
                 extra["concept_clusterer_state"] = concept_clusterer.state_dict()
+            if cross_domain is not None:
+                extra["cross_domain_state"] = {
+                    "domains": {k: {"label": v.label} for k, v in cross_domain._domains.items()},
+                }
+            if cf_regret is not None:
+                extra["cf_regret_state"] = {"regrets": cf_regret._regrets[-20:]}
+            if value_system is not None:
+                extra["value_system_state"] = {"judgments": len(value_system._judgments)}
             if intention_curiosity is not None:
                 extra["intention_curiosity_state"] = intention_curiosity.state_dict()
             if knowledge_gap is not None:
