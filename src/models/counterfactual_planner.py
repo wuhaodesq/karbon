@@ -68,8 +68,12 @@ class CounterfactualPlanner(nn.Module):
         wm_state: Any,               # initial RSSMState
         slot_states: torch.Tensor,   # current observation
         device: torch.device,
+        policy_model: Any = None,    # optional: use value_head for better proxy
     ) -> float:
         """Evaluate one plan via RSSM imagination.
+
+        If policy_model is provided, uses its value_head for reward proxy
+        (trained on real rewards). Otherwise falls back to decoded.norm().
 
         Returns predicted total reward for this plan.
         """
@@ -87,16 +91,20 @@ class CounterfactualPlanner(nn.Module):
             try:
                 state, prior = wm.imagine_step(state, action_onehot)
                 decoded = wm.decode(state)
-                # Reward proxy: norm change in decoded state
-                step_reward = float(decoded.norm().item()) * 0.01
+                # Use policy value head if available (better proxy)
+                if policy_model is not None:
+                    decoded_flat = decoded.reshape(1, -1)
+                    with torch.no_grad():
+                        step_reward = float(policy_model.value_head(decoded_flat).item())
+                else:
+                    step_reward = float(decoded.norm().item()) * 0.01
+                step_reward = float(step_reward)
                 total_predicted += step_reward
-                # Uncertainty: prior distribution entropy
                 if hasattr(prior, 'stddev'):
                     uncertainty += float(prior.stddev.mean().item())
             except Exception:
                 break
 
-        # Penalize uncertainty
         score = total_predicted - self._uncertainty_penalty * uncertainty
         return score
 
@@ -107,6 +115,7 @@ class CounterfactualPlanner(nn.Module):
         wm_state: Any,               # initial state
         slot_states: torch.Tensor,
         device: torch.device,
+        policy_model: Any = None,
     ) -> list[int] | None:
         """Generate candidate plans and select the best via RSSM simulation.
 
@@ -131,7 +140,7 @@ class CounterfactualPlanner(nn.Module):
         # Evaluate all candidates
         scores: list[tuple[list[int], float]] = []
         for plan in candidates:
-            score = self.evaluate_plan(plan, wm, wm_state, slot_states, device)
+            score = self.evaluate_plan(plan, wm, wm_state, slot_states, device, policy_model)
             scores.append((plan, score))
 
         if not scores:

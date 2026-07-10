@@ -2360,7 +2360,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     slot_states = model.encoder(obs_t).squeeze(0) if model.use_slots else obs_t
                     best = cf_planner.select_best(
                         long_range_planner, wm, wm_state,
-                        slot_states, device,
+                        slot_states, device, policy_model=model,
                     )
                     if best is not None:
                         plan = best
