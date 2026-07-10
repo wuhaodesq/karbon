@@ -124,6 +124,7 @@ class RSSMConfig:
     hidden: int = 128
     max_rollout_steps: int = 15   # bounded — Axiom 1
     kl_free_nats: float = 1.0
+    reward_loss_weight: float = 1.0  # weight of the reward-prediction term
 
 
 @dataclass
@@ -153,6 +154,7 @@ class RSSM(nn.Module):
         self.config = config
         c = config
 
+        self._reward_loss_weight = float(c.reward_loss_weight)
         self.encoder = ObsEncoder(c.obs_dim, c.embed_dim, hidden=c.hidden)
         self.decoder = ObsDecoder(c.h_dim, c.z_dim, c.obs_dim, hidden=c.hidden)
 
@@ -165,6 +167,12 @@ class RSSM(nn.Module):
         self.posterior_dist = LatentDistribution(
             c.h_dim + c.embed_dim, c.z_dim, hidden=c.hidden
         )
+
+        # Reward predictor:  r̂_t = Reward(h_t, z_t)  (Dreamer-style).
+        # Grounds planning in objective environment reward rather than the
+        # policy's value estimate, so System 2 can discover plans the current
+        # policy would not choose. Fixed-size MLP -> bounded (Axiom 1).
+        self.reward_head = _MLP(c.h_dim + c.z_dim, 1, hidden=c.hidden, depth=1)
 
     # ---------------------------------------------------- initial state
 
@@ -224,19 +232,27 @@ class RSSM(nn.Module):
             prior,
         )
 
-    # ------------------------------------------------------ decode
-
     def decode(self, state: RSSMState) -> torch.Tensor:
         return self.decoder(state.h, state.z)
+
+    # ------------------------------------------------------ reward
+
+    def predict_reward(self, state: RSSMState) -> torch.Tensor:
+        """Predict instantaneous reward from a latent state. Returns (B,)."""
+        return self.reward_head(torch.cat([state.h, state.z], dim=-1)).squeeze(-1)
 
     # ------------------------------------------------------ full-sequence loss
 
     def compute_loss(
         self,
-        obs_seq: torch.Tensor,          # (B, T, obs_dim)
-        action_seq_onehot: torch.Tensor,  # (B, T, action_dim)
+        obs_seq: torch.Tensor,
+        action_seq_onehot: torch.Tensor,
+        reward_seq: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
-        """Compute reconstruction + KL loss over a rollout.
+        """Compute reconstruction + KL (+ reward) loss over a rollout.
+
+        When ``reward_seq`` (B, T, 1) is provided, an MSE reward-prediction
+        loss is added so the world model learns objective environment reward.
 
         Rollout length ``T`` must not exceed ``config.max_rollout_steps``.
         """
@@ -254,6 +270,7 @@ class RSSM(nn.Module):
 
         recon_losses: list[torch.Tensor] = []
         kl_losses: list[torch.Tensor] = []
+        reward_losses: list[torch.Tensor] = []
 
         for t in range(T):
             state, prior, posterior = self.observe_step(
@@ -268,14 +285,33 @@ class RSSM(nn.Module):
             kl = torch.clamp(kl, min=self.config.kl_free_nats).mean()
             kl_losses.append(kl)
 
+            if reward_seq is not None:
+                r_target = reward_seq[:, t].squeeze(-1)
+                # Reward from the posterior state (what the agent was in).
+                r_pred = self.predict_reward(state)
+                reward_losses.append(F.mse_loss(r_pred, r_target))
+                # Reward from the prior (imagined) state. At planning time
+                # rewards are predicted from imagine_step (prior) states, not
+                # posterior ones, so training on both narrows the train/serve
+                # gap (Dreamer-style).
+                prior_state, _ = self.imagine_step(state, action_seq_onehot[:, t, :])
+                r_pred_prior = self.predict_reward(prior_state)
+                reward_losses.append(F.mse_loss(r_pred_prior, r_target))
+
         recon_loss_total = torch.stack(recon_losses).mean()
         kl_loss_total = torch.stack(kl_losses).mean()
         total = recon_loss_total + kl_loss_total
-        return {
+        out: dict[str, torch.Tensor] = {
             "loss": total,
             "recon_loss": recon_loss_total,
             "kl_loss": kl_loss_total,
         }
+        if reward_losses:
+            reward_loss_total = torch.stack(reward_losses).mean()
+            total = total + self._reward_loss_weight * reward_loss_total
+            out["reward_loss"] = reward_loss_total
+        out["loss"] = total
+        return out
 
     # --------------------------------------------- imagined rollout
 

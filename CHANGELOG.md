@@ -32,6 +32,34 @@ All notable changes to this project are documented here.
 - New config sections in `configs/phase0_protozoan.yaml`: `imagination`,
   `intention`, `knowledge_gap`, `social_curiosity`, `audio`.
 
+### Changed (Counterfactual Planner — reward proxy fix)
+
+- **RSSM reward head** (`src/models/world_model.py`) — added a bounded
+  `reward_head` (predicts `r̂_t = Reward(h_t, z_t)`) and `predict_reward()`
+  method. `compute_loss` now accepts an optional `reward_seq` and adds an MSE
+  reward-prediction term, trained from replay `reward` in the world-model
+  update step (`src/train.py`). This grounds counterfactual planning in
+  **objective environment reward** instead of the policy's value estimate
+  (Dreamer-style), so System 2 can surface plans the current policy would not
+  choose.
+- **CounterfactualPlanner** (`src/models/counterfactual_planner.py`) — now
+  scores plans via `wm.predict_reward` (removed the broken `policy_model.
+  value_head(decoded)` path that mismatched latent/obs dimensions and silently
+  no-op'd). Also fixed two correctness bugs: prediction/actual history is now a
+  bounded `deque` (Axiom 1), and `planning_accuracy` pairs predictions with
+  actuals correctly instead of misaligning via `pop(0)`.
+- **Reward-head train/serve gap narrowed** — `compute_loss` now also predicts
+  reward from the **prior (imagined) state** (`imagine_step`) in addition to the
+  posterior state, since at planning time rewards are scored from prior states.
+  This reduces the posterior-vs-prior distribution gap (Dreamer-style).
+- **`planning_accuracy` is now apples-to-apples** — `evaluate_plan` returns the
+  predicted **first-step** reward (the action actually executed) alongside the
+  total plan score; `select_best` records that for validation against the single
+  observed reward, instead of comparing a multi-step summed total to a 1-step
+  reward. Added `reward_loss_weight` config (`RSSMConfig` + `phase2` yaml) to
+  balance the reward term.
+- World-model training log now reports `rew=` (reward-loss) alongside recon/kl.
+
 ## [v1.1.0-stage7-cloud] - 2026-07-09
 
 ### Stage 7 COMPLETED - ALL 7 STAGES DONE

@@ -661,6 +661,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             hidden=int(wm_cfg.get("hidden", 128)),
             max_rollout_steps=int(wm_cfg.get("max_rollout_steps", 10)),
             kl_free_nats=float(wm_cfg.get("kl_free_nats", 1.0)),
+            reward_loss_weight=float(wm_cfg.get("reward_loss_weight", 1.0)),
         )).to(device)
         wm_optimizer = torch.optim.Adam(wm.parameters(), lr=float(wm_cfg.get("lr", 3e-4)))
         logger.info("RSSM world model enabled (params=%d)", wm.num_parameters())
@@ -2116,8 +2117,11 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 actions_onehot = F.one_hot(
                     sample["action"].to(torch.long), num_classes=num_actions
                 ).float().reshape(bsz, T, num_actions)
-                wm_out = wm.compute_loss(obs_flat, actions_onehot)
-                wm_loss = wm_out["loss"]
+                # Reward (B, T, 1) for the world-model reward head, if present.
+                reward_seq = None
+                if "reward" in sample and sample["reward"] is not None:
+                    reward_seq = sample["reward"].reshape(bsz, T, 1).float()
+                wm_out = wm.compute_loss(obs_flat, actions_onehot, reward_seq=reward_seq)
                 wm_optimizer.zero_grad(set_to_none=True)
                 wm_loss.backward()
                 torch.nn.utils.clip_grad_norm_(wm.parameters(), max_norm=1.0)
@@ -2126,6 +2130,9 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     "loss": float(wm_out["loss"].item()),
                     "recon": float(wm_out["recon_loss"].item()),
                     "kl": float(wm_out["kl_loss"].item()),
+                    "reward": float(
+                        wm_out.get("reward_loss", torch.zeros(())).item()
+                    ),
                 }
             except (ValueError, IndexError, RuntimeError) as exc:
                 logger.debug("world model update skipped: %s", exc)
@@ -2355,12 +2362,11 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 # Generate base plan
                 plan = long_range_planner.plan(wm_state, wm, model, obs_t)
 
-                # Counterfactual validation: evaluate alternatives
+                # Counterfactual validation: evaluate alternatives via the
+                # world model's reward head (predicted reward, not policy value).
                 if cf_planner is not None:
-                    slot_states = model.encoder(obs_t).squeeze(0) if model.use_slots else obs_t
                     best = cf_planner.select_best(
-                        long_range_planner, wm, wm_state,
-                        slot_states, device, policy_model=model,
+                        long_range_planner, wm, wm_state, device,
                     )
                     if best is not None:
                         plan = best
@@ -2397,7 +2403,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             if replay is not None:
                 extras.append(f"replay={len(replay)}/{replay.capacity}")
             if wm is not None:
-                extras.append(f"wm={wm_last_loss['loss']:.3f}(r={wm_last_loss['recon']:.3f},kl={wm_last_loss['kl']:.3f})")
+                extras.append(f"wm={wm_last_loss['loss']:.3f}(r={wm_last_loss['recon']:.3f},kl={wm_last_loss['kl']:.3f},rew={wm_last_loss['reward']:.4f})")
             if imagination_trainer is not None and imagination_last_loss:
                 extras.append(f"img={imagination_last_loss.get('total_loss', 0):.4f}")
             if skills is not None:

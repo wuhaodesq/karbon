@@ -26,6 +26,9 @@
 | 任务模板 | Task Template | — | 课程池中一个描述任务的数据结构 |
 | 世界模型 | World Model | WM | 内部环境模拟器 |
 | 递归状态空间模型 | Recurrent State-Space Model | RSSM | Dreamer 式世界模型，隐状态=(h_det, z_stoch) |
+| 奖励预测头 | Reward Head | - | RSSM 内 `r̂_t=Reward(h_t,z_t)`，从想象状态预测客观环境奖励，供反事实规划打分 |
+| 奖励损失权重 | Reward Loss Weight | - | `reward_loss_weight`：世界模型训练中 reward 预测项相对 recon/KL 的权重，配置驱动 |
+| 反事实规划 | Counterfactual Planning | - | 行动前用 RSSM 想象候选计划并据 reward 头打分，挑选最优方案再执行（System 2） |
 | 技能库 | Skill Library | SL | 存储可复用技能的有界集合 |
 | 低秩适配 | Low-Rank Adaptation | LoRA | 用于压缩技能表示 |
 | 在线弹性权重固化 | Online Elastic Weight Consolidation | oEWC | 单份累积的 Fisher 保护 |

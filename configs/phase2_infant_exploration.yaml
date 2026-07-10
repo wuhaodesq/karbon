@@ -62,6 +62,7 @@ world_model:
   max_rollout_steps: 4
   lr: 3.0e-3
   update_every_steps: 4
+  reward_loss_weight: 1.0
   log_every_steps: 5000
 
 replay:
