@@ -146,7 +146,8 @@ class ProgramSynthesizer:
                         try:
                             from src.models.rule_induction import InducedRule
                             pred_tuples = [
-                                _parse_simple(p) for p in pred_str
+                                _parse_simple(pred_str)
+                                for pred_str in c["if_predicates"]
                             ]
                             rule = InducedRule(
                                 if_predicates=[p for p in pred_tuples if p],
@@ -305,6 +306,7 @@ class TemporalAbstractor:
 
         self._sequence_buffer: list[list[str]] = []
         self._patterns: dict[str, dict] = {}  # seq_sig → {count, avg_reward, ...}
+        self._reported: set[str] = set()       # sigs already emitted as patterns
 
     def record_step(self, predicates: list[str], reward: float) -> None:
         """Record one step's predicates for pattern extraction."""
@@ -332,17 +334,17 @@ class TemporalAbstractor:
                 else:
                     self._patterns[sig] = {"count": 1, "length": seq_len}
 
-        # Find patterns meeting threshold
+        # Find patterns meeting threshold (report each sig only once)
         for sig, info in self._patterns.items():
-            if info["count"] >= self._min_occurrences:
-                if not any(p["sig"] == sig for p in self._saved_patterns()):
-                    pattern = {
-                        "sig": sig,
-                        "count": info["count"],
-                        "length": info["length"],
-                        "description": f"Temporal pattern (length={info['length']}, seen {info['count']}x): {sig}",
-                    }
-                    new_patterns.append(pattern)
+            if info["count"] >= self._min_occurrences and sig not in self._reported:
+                pattern = {
+                    "sig": sig,
+                    "count": info["count"],
+                    "length": info["length"],
+                    "description": f"Temporal pattern (length={info['length']}, seen {info['count']}x): {sig}",
+                }
+                new_patterns.append(pattern)
+                self._reported.add(sig)
 
         self._sequence_buffer.clear()
 
