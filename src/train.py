@@ -1322,6 +1322,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     cf_planner: CounterfactualPlanner | None = None
     if plan_cfg and bool(plan_cfg.get("enabled", False)):
         cf_planner = CounterfactualPlanner(
+            num_actions=num_actions,
             num_candidates=int(plan_cfg.get("num_candidates", 5)),
             max_imagine_steps=int(plan_cfg.get("max_imagine_steps", 8)),
         ).to(device)

@@ -44,19 +44,21 @@ class CounterfactualPlanner(nn.Module):
 
     def __init__(
         self,
-        num_candidates: int = 5,       # how many plans to compare
-        max_imagine_steps: int = 8,    # how far to imagine each plan
-        min_confidence: float = 0.3,   # below this, fall back to original plan
-        uncertainty_penalty: float = 0.1,  # penalize uncertain predictions
+        num_actions: int = 8,          # adaptive: matches env action space
+        num_candidates: int = 5,
+        max_imagine_steps: int = 8,
+        min_confidence: float = 0.3,
+        uncertainty_penalty: float = 0.1,
     ) -> None:
         super().__init__()
+        self._num_actions = num_actions
         self._num_candidates = num_candidates
         self._max_steps = max_imagine_steps
         self._min_conf = min_confidence
         self._uncertainty_penalty = uncertainty_penalty
 
         self._best_plan: list[int] = []
-        self._predicted_rewards: list[float] = []
+        self._all_predicted: list[float] = []  # store all predictions (not just top-3)
         self._actual_rewards: list[float] = []
 
     def evaluate_plan(
@@ -80,7 +82,7 @@ class CounterfactualPlanner(nn.Module):
 
         for step_action in plan[:self._max_steps]:
             action_onehot = F.one_hot(
-                torch.tensor([step_action]), 8,
+                torch.tensor([step_action]), self._num_actions,
             ).float().to(device)
             try:
                 state, prior = wm.imagine_step(state, action_onehot)
@@ -122,7 +124,8 @@ class CounterfactualPlanner(nn.Module):
 
         # Random variants
         for _ in range(self._num_candidates - len(candidates)):
-            rand_plan = [np.random.randint(0, 8) for _ in range(min(4, self._max_steps))]
+            rand_plan = [np.random.randint(0, self._num_actions)
+                        for _ in range(min(4, self._max_steps))]
             candidates.append(rand_plan)
 
         # Evaluate all candidates
@@ -143,7 +146,7 @@ class CounterfactualPlanner(nn.Module):
             return None
 
         self._best_plan = best_plan
-        self._predicted_rewards = [s[1] for s in scores[:3]]
+        self._all_predicted = [s[1] for s in scores]
         logger.debug(
             "[cf_plan] best score=%.3f vs runner-up=%.3f (n=%d)",
             best_score,
@@ -157,21 +160,21 @@ class CounterfactualPlanner(nn.Module):
     ) -> float:
         """Compare actual reward with predicted. Returns planning accuracy."""
         self._actual_rewards.append(actual_reward)
-        if len(self._predicted_rewards) > 0:
-            predicted = self._predicted_rewards.pop(0)
+        if self._all_predicted:
+            predicted = self._all_predicted.pop(0)  # FIFO, matches top-1
             error = abs(actual_reward - predicted)
             return max(0.0, 1.0 - error)
         return 0.5
 
     @property
     def planning_accuracy(self) -> float:
-        if not self._actual_rewards or not self._predicted_rewards:
+        if not self._actual_rewards:
             return 0.5
         actuals = self._actual_rewards[-50:]
-        predicteds = self._predicted_rewards[-50:]
-        if not actuals or not predicteds:
+        predicted = self._all_predicted[-min(50, len(self._all_predicted)):]
+        if not actuals or not predicted:
             return 0.5
-        errors = [abs(a - p) for a, p in zip(actuals, predicteds)]
+        errors = [abs(a - p) for a, p in zip(actuals, predicted)]
         return max(0.0, 1.0 - np.mean(errors))
 
     def summary(self) -> dict:
