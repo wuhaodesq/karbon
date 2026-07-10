@@ -203,6 +203,9 @@ iq_boost:
 abstract_reasoning:
   enabled: true
 
+tier2_cognitive:
+  enabled: true
+
 # --- Phase 1+: Dreamer-style imagination training (sample efficiency 10x) ---
 imagination:
   enabled: false  # enable after Phase 0 baseline passes exit criterion

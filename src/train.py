@@ -84,6 +84,7 @@ from src.models.iq_boost import (
     CounterfactualRegret, CuriosityDirector, ValueSystem,
 )
 from src.models.abstract_reasoning import MicroPrologMath, IdentityNarrative
+from src.models.tier2_cognitive import Analogizer, BeliefDepth2, MoralConnector, SurpriseHumor
 from src.monitoring import HealthChecker, MemoryWatcher, WatcherConfig
 from src.platform import data_dir, get_device, get_device_info, stage_ckpt_path
 from src.utils import (
@@ -1272,6 +1273,20 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         ).to(device)
         logger.info("AbstractReasoning: MicroPrologMath + IdentityNarrative enabled")
 
+    # --- Tier 2 Cognitive: metaphor, belief, moral, humor ---
+    tier2_cfg = config.get("tier2_cognitive")
+    analogizer: Analogizer | None = None
+    belief_depth2: BeliefDepth2 | None = None
+    moral_connector: MoralConnector | None = None
+    surprise_humor: SurpriseHumor | None = None
+    if tier2_cfg and bool(tier2_cfg.get("enabled", False)):
+        analogizer = Analogizer(d_model=int(model_cfg.get("hidden_size", 128))).to(device)
+        belief_depth2 = BeliefDepth2()
+        moral_connector = MoralConnector().to(device)
+        surprise_humor = SurpriseHumor().to(device)
+        health.register("surprise_humor", surprise_humor)
+        logger.info("Tier2 Cognitive: Analogizer + BeliefDepth2 + MoralConnector + SurpriseHumor")
+
     # --- Phase 1+: Imagination Trainer (Dreamer-style) ---
     imagination_cfg = config.get("imagination")
     imagination_trainer: ImaginationTrainer | None = None
@@ -1879,6 +1894,30 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         dom = emotion_system.state.dominant
                         if dom != "neutral":
                             logger.debug("[emotion] feeling: %s", dom)
+                    except Exception:
+                        pass
+
+                # --- Tier 2: moral evaluation ---
+                if moral_connector is not None and value_system is not None and emotion_system is not None:
+                    try:
+                        drives = homeostatic_drives.drive_levels() if homeostatic_drives else {}
+                        moral = moral_connector.evaluate_action(value_system, emotion_system, drives)
+                        if moral["evaluation"] not in ("neutral", "maybe good"):
+                            logger.info("[moral] %s: %s (conf=%.2f)",
+                                       moral["evaluation"], moral["reason"], moral["confidence"])
+                    except Exception:
+                        pass
+
+                # --- Tier 2: metaphor discovery ---
+                if analogizer is not None and concept_graph is not None:
+                    try:
+                        nodes = list(concept_graph._nodes.values())
+                        if len(nodes) > 20:
+                            source = nodes[min(len(nodes) - 1, (state.step // 10000) % len(nodes))]
+                            if source.name:
+                                metaphor = analogizer.generate_metaphor_statement(concept_graph, source.name)
+                                if "can't think" not in metaphor:
+                                    logger.info("[metaphor] %s", metaphor)
                     except Exception:
                         pass
 
