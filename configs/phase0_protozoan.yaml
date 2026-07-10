@@ -154,7 +154,7 @@ developmental_memory:
   enabled: true
   episodic_max: 10000
   semantic_max: 1000
-  autobiographical_max: 500000
+  autobiographical_max: 500000000
   surprise_threshold: 0.01
   consolidation_every_steps: 50000
 
