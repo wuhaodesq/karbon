@@ -83,6 +83,7 @@ from src.models.iq_boost import (
     CrossDomainTransfer, DeepMultiModal, TemporalReasoner,
     CounterfactualRegret, CuriosityDirector, ValueSystem,
 )
+from src.models.abstract_reasoning import MicroPrologMath, IdentityNarrative
 from src.monitoring import HealthChecker, MemoryWatcher, WatcherConfig
 from src.platform import data_dir, get_device, get_device_info, stage_ckpt_path
 from src.utils import (
@@ -1260,6 +1261,17 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         logger.info("IQ Boost: 6 modules enabled (cross-domain, deep-fusion, temporal, "
                      "regret, curiosity-director, value-system)")
 
+    # --- Abstract Reasoning: micro-math + identity narrative ---
+    reason_cfg = config.get("abstract_reasoning")
+    micro_math: MicroPrologMath | None = None
+    identity_narrative: IdentityNarrative | None = None
+    if reason_cfg and bool(reason_cfg.get("enabled", False)):
+        micro_math = MicroPrologMath()
+        identity_narrative = IdentityNarrative(
+            d_model=int(model_cfg.get("hidden_size", 128)),
+        ).to(device)
+        logger.info("AbstractReasoning: MicroPrologMath + IdentityNarrative enabled")
+
     # --- Phase 1+: Imagination Trainer (Dreamer-style) ---
     imagination_cfg = config.get("imagination")
     imagination_trainer: ImaginationTrainer | None = None
@@ -2147,6 +2159,19 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 new_cats = concept_clusterer.cluster(concept_graph, state.step)
                 if new_cats:
                     logger.info("[concept] discovered %d new categories", len(new_cats))
+            except Exception:
+                pass
+
+        # --- Identity Narrative: periodic self-reflection ---
+        if (identity_narrative is not None and memory_manager is not None
+                and state.step > 0 and state.step % 50000 < rollout_capacity):
+            try:
+                events = memory_manager.autobiographical._events
+                if len(events) >= 20:
+                    identity = identity_narrative(events)
+                    logger.info("[identity] %s (events=%d, openness=%.2f)",
+                               identity["narrative"][:80], len(events),
+                               identity["traits"]["openness"])
             except Exception:
                 pass
 

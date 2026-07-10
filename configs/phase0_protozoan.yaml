@@ -154,7 +154,7 @@ developmental_memory:
   enabled: true
   episodic_max: 10000
   semantic_max: 1000
-  autobiographical_max: 100
+  autobiographical_max: 500000
   surprise_threshold: 0.01
   consolidation_every_steps: 50000
 
@@ -198,6 +198,9 @@ metacognition_v2:
   cluster_every_steps: 5000
 
 iq_boost:
+  enabled: true
+
+abstract_reasoning:
   enabled: true
 
 # --- Phase 1+: Dreamer-style imagination training (sample efficiency 10x) ---
