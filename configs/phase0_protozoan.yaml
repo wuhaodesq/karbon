@@ -187,3 +187,58 @@ concept_graph:
   enabled: true
   max_nodes: 1000
   max_edges: 5000
+
+metacognition_v2:
+  reflection_enabled: true
+  reflection_max: 500
+  clustering_enabled: true
+  cluster_min_size: 3
+  cluster_min_edges: 3
+  cluster_max_cats: 50
+  cluster_every_steps: 5000
+
+# --- Phase 1+: Dreamer-style imagination training (sample efficiency 10x) ---
+imagination:
+  enabled: false  # enable after Phase 0 baseline passes exit criterion
+  imagination_horizon: 8
+  imagination_batch: 32
+  discount: 0.99
+  actor_entropy_scale: 0.01
+  critic_loss_scale: 0.5
+  update_every_steps: 16
+  min_replay_size: 256
+  lambda_gae: 0.95
+  lr: 3.0e-4
+
+# --- Phase 1+: Intention achievement curiosity ---
+intention:
+  enabled: false  # enable after RSSM is well-trained
+  error_mode: kl
+  coef: 0.5
+  ema_decay: 0.99
+  reward_clip: 5.0
+  min_steps_before_active: 1000
+
+# --- Phase 1+: Knowledge gap detection ---
+knowledge_gap:
+  enabled: false  # enable when slot attention is mature
+  num_slots: 7
+  ema_decay: 0.99
+  gap_threshold: 1.5
+  boost_factor: 2.0
+  update_every_steps: 50
+
+# --- Phase 3+: Social curiosity (caregiver prediction) ---
+social_curiosity:
+  enabled: false  # enable in Phase 3 (imitation) or Phase 4 (language)
+  action_predictor_hidden: 64
+  social_coef: 0.3
+  ema_decay: 0.99
+  reward_clip: 5.0
+
+# --- Phase 4+: Audio encoder ---
+audio:
+  enabled: false  # enable in Phase 4 (language grounding)
+  sample_rate: 16000
+  n_mels: 64
+  hidden: 64

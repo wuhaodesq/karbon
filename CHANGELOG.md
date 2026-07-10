@@ -3,6 +3,35 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+## [Unreleased]
+
+### Added (Phase 0+: 工程补缺口 A-G)
+
+- **Imagination Trainer** (`src/training/imagination_trainer.py`) — Dreamer-style
+  world-model-driven imagination training. Uses RSSM to generate N-step imagined
+  trajectories, then trains actor-critic on imagined data for ~10x sample
+  efficiency (DEV_PLAN.md gap D).
+- **Intention Achievement Curiosity** (`src/intrinsic/intention_curiosity.py`) —
+  replaces blunt RND with action-conditioned curiosity: compares RSSM prior
+  (predicted next state) vs posterior (actual state) to reward states where the
+  agent's own model of cause-and-effect fails (DEV_PLAN.md gap C).
+- **Knowledge Gap Detector** (`src/intrinsic/knowledge_gap.py`) — tracks per-slot
+  (per-concept) prediction accuracy via EMA. Concepts with sustained high error
+  are identified as knowledge gaps; curiosity is boosted for gap-related states
+  (DEV_PLAN.md gap C).
+- **Social Curiosity** (`src/intrinsic/social_curiosity.py`) — predicts caregiver
+  next action; prediction error = social curiosity reward. For Phase 3+
+  imitation/social learning (DEV_PLAN.md gap C).
+- **Audio Encoder** (`src/sensory/audio_encoder.py`) — lightweight mel-spectrogram
+  CNN encoder (~0.1 GB). Optional torchaudio dependency with NumPy fallback
+  (DEV_PLAN.md gap B).
+- **Episodic memory with surprise gating** preserved as `src/models/developmental_memory.py`
+  (already implemented — gap G covered by existing MemoryManager).
+- All new modules wired into `src/train.py` training loop with config-driven
+  enable/disable, checkpointing, and logging.
+- New config sections in `configs/phase0_protozoan.yaml`: `imagination`,
+  `intention`, `knowledge_gap`, `social_curiosity`, `audio`.
+
 ## [v1.1.0-stage7-cloud] - 2026-07-09
 
 ### Stage 7 COMPLETED - ALL 7 STAGES DONE

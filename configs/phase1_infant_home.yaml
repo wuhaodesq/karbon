@@ -120,3 +120,49 @@ monitor:
   sample_interval_s: 2.0
   slope_alarm_gb_per_hour: 0.5
   empty_cache_every_steps: 1000
+
+# --- Phase 1+: Dreamer-style imagination training (sample efficiency 10x) ---
+imagination:
+  enabled: true
+  imagination_horizon: 8
+  imagination_batch: 32
+  discount: 0.99
+  actor_entropy_scale: 0.01
+  critic_loss_scale: 0.5
+  update_every_steps: 16
+  min_replay_size: 256
+  lambda_gae: 0.95
+  lr: 3.0e-4
+
+# --- Phase 1+: Intention achievement curiosity ---
+intention:
+  enabled: true
+  error_mode: kl
+  coef: 0.5
+  ema_decay: 0.99
+  reward_clip: 5.0
+  min_steps_before_active: 1000
+
+# --- Phase 1+: Knowledge gap detection ---
+knowledge_gap:
+  enabled: false  # enable after slot attention matures (~50K steps)
+  num_slots: 16
+  ema_decay: 0.99
+  gap_threshold: 1.5
+  boost_factor: 2.0
+  update_every_steps: 50
+
+# --- Phase 3+: Social curiosity ---
+social_curiosity:
+  enabled: false  # enable in Phase 3 (imitation)
+  action_predictor_hidden: 64
+  social_coef: 0.3
+  ema_decay: 0.99
+  reward_clip: 5.0
+
+# --- Phase 4+: Audio encoder ---
+audio:
+  enabled: false  # enable in Phase 4 (language grounding)
+  sample_rate: 16000
+  n_mels: 64
+  hidden: 64

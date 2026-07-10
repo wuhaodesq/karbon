@@ -43,7 +43,16 @@ from src.continual import (
 )
 from src.curriculum import AutoCurriculum, AutoCurriculumConfig, TaskTemplate
 from src.envs import MiniGridWrapper
-from src.intrinsic import RND, RNDConfig
+from src.intrinsic import (
+    IntentionConfig,
+    IntentionCuriosity,
+    KnowledgeGapConfig,
+    KnowledgeGapDetector,
+    RND,
+    RNDConfig,
+    SocialCuriosity,
+    SocialCuriosityConfig,
+)
 from src.memory import (
     BoundedReplayBuffer,
     BoundedSkillLibrary,
@@ -55,6 +64,8 @@ from src.memory import (
 )
 from src.models import HybridBackbone, RSSM, RSSMConfig
 from src.models.vision_encoder import CNNEncoder, VisionEncoder, build_encoder
+from src.sensory import AudioEncoder, AudioEncoderConfig
+from src.training import ImaginationConfig, ImaginationTrainer
 from src.models.number_sense import NumberSense
 from src.models.rule_induction import RuleInductionEngine
 from src.models.causal_discovery import CausalDiscovery
@@ -67,6 +78,7 @@ from src.models.homeostatic_drives import HomeostaticDrives
 from src.models.long_range_planner import LongRangePlanner
 from src.models.emotion_system import EmotionSystem
 from src.models.concept_graph import ConceptGraph
+from src.models.metacognition_v2 import SelfReflectionValidator, ConceptClusterer
 from src.monitoring import HealthChecker, MemoryWatcher, WatcherConfig
 from src.platform import data_dir, get_device, get_device_info, stage_ckpt_path
 from src.utils import (
@@ -1192,6 +1204,119 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         logger.info("ConceptGraph enabled (max_nodes=%d, max_edges=%d)",
                      graph_cfg.get("max_nodes", 1000), graph_cfg.get("max_edges", 5000))
 
+    # --- Self-Reflection Validator + Concept Clusterer ---
+    reflection_validator: SelfReflectionValidator | None = None
+    concept_clusterer: ConceptClusterer | None = None
+    meta_cfg = config.get("metacognition_v2")
+    if meta_cfg and bool(meta_cfg.get("reflection_enabled", False)):
+        reflection_validator = SelfReflectionValidator(
+            max_records=int(meta_cfg.get("reflection_max", 500)),
+        ).to(device)
+        health.register("reflection_validator", reflection_validator)
+        logger.info("SelfReflectionValidator enabled")
+    if meta_cfg and bool(meta_cfg.get("clustering_enabled", False)):
+        concept_clusterer = ConceptClusterer(
+            min_cluster_size=int(meta_cfg.get("cluster_min_size", 3)),
+            min_shared_edges=int(meta_cfg.get("cluster_min_edges", 3)),
+            max_categories=int(meta_cfg.get("cluster_max_cats", 50)),
+            cluster_every_steps=int(meta_cfg.get("cluster_every_steps", 5000)),
+        ).to(device)
+        health.register("concept_clusterer", concept_clusterer)
+        logger.info("ConceptClusterer enabled (every %d steps)", meta_cfg.get("cluster_every_steps", 5000))
+
+    # --- Phase 1+: Imagination Trainer (Dreamer-style) ---
+    imagination_cfg = config.get("imagination")
+    imagination_trainer: ImaginationTrainer | None = None
+    imagination_last_loss: dict[str, float] = {}
+    if imagination_cfg and bool(imagination_cfg.get("enabled", False)):
+        imagination_trainer = ImaginationTrainer(
+            config=ImaginationConfig(
+                imagination_horizon=int(imagination_cfg.get("imagination_horizon", 8)),
+                imagination_batch=int(imagination_cfg.get("imagination_batch", 32)),
+                discount=float(imagination_cfg.get("discount", 0.99)),
+                actor_entropy_scale=float(imagination_cfg.get("actor_entropy_scale", 0.01)),
+                critic_loss_scale=float(imagination_cfg.get("critic_loss_scale", 0.5)),
+                update_every_steps=int(imagination_cfg.get("update_every_steps", 16)),
+                min_replay_size=int(imagination_cfg.get("min_replay_size", 256)),
+                lambda_gae=float(imagination_cfg.get("lambda_gae", 0.95)),
+                lr=float(imagination_cfg.get("lr", 3e-4)),
+            ),
+            device=device,
+        )
+        logger.info("ImaginationTrainer enabled (horizon=%d, batch=%d)",
+                     imagination_cfg.get("imagination_horizon", 8),
+                     imagination_cfg.get("imagination_batch", 32))
+
+    # --- Phase 1+: Intention Achievement Curiosity ---
+    intention_cfg = config.get("intention")
+    intention_curiosity: IntentionCuriosity | None = None
+    if intention_cfg and bool(intention_cfg.get("enabled", False)):
+        intention_curiosity = IntentionCuriosity(
+            IntentionConfig(
+                error_mode=str(intention_cfg.get("error_mode", "kl")),
+                coef=float(intention_cfg.get("coef", 0.5)),
+                ema_decay=float(intention_cfg.get("ema_decay", 0.99)),
+                reward_clip=float(intention_cfg.get("reward_clip", 5.0)),
+                min_steps_before_active=int(intention_cfg.get("min_steps_before_active", 1000)),
+            ),
+        ).to(device)
+        logger.info("IntentionCuriosity enabled (mode=%s, coef=%.2f)",
+                     intention_cfg.get("error_mode", "kl"),
+                     intention_cfg.get("coef", 0.5))
+
+    # --- Phase 1+: Knowledge Gap Detector ---
+    kgap_cfg = config.get("knowledge_gap")
+    knowledge_gap: KnowledgeGapDetector | None = None
+    if kgap_cfg and bool(kgap_cfg.get("enabled", False)):
+        knowledge_gap = KnowledgeGapDetector(
+            KnowledgeGapConfig(
+                num_slots=int(model_cfg.get("slot_num_slots", 7)),
+                ema_decay=float(kgap_cfg.get("ema_decay", 0.99)),
+                gap_threshold=float(kgap_cfg.get("gap_threshold", 1.5)),
+                boost_factor=float(kgap_cfg.get("boost_factor", 2.0)),
+            ),
+        ).to(device)
+        logger.info("KnowledgeGapDetector enabled (num_slots=%d, boost=%.1f)",
+                     kgap_cfg.get("num_slots", model_cfg.get("slot_num_slots", 7)),
+                     kgap_cfg.get("boost_factor", 2.0))
+
+    # --- Phase 3+: Social Curiosity ---
+    social_cur_cfg = config.get("social_curiosity")
+    social_curiosity: SocialCuriosity | None = None
+    if social_cur_cfg and bool(social_cur_cfg.get("enabled", False)):
+        obs_dim_flat = int(np.prod(obs_shape))
+        social_curiosity = SocialCuriosity(
+            obs_dim=obs_dim_flat,
+            num_actions=num_actions,
+            config=SocialCuriosityConfig(
+                action_predictor_hidden=int(social_cur_cfg.get("action_predictor_hidden", 64)),
+                social_coef=float(social_cur_cfg.get("social_coef", 0.3)),
+                ema_decay=float(social_cur_cfg.get("ema_decay", 0.99)),
+                reward_clip=float(social_cur_cfg.get("reward_clip", 5.0)),
+            ),
+        ).to(device)
+        logger.info("SocialCuriosity enabled (coef=%.2f)", social_cur_cfg.get("social_coef", 0.3))
+
+    # --- Phase 4+: Audio Encoder ---
+    audio_cfg = config.get("audio")
+    audio_encoder: AudioEncoder | None = None
+    if audio_cfg and bool(audio_cfg.get("enabled", False)):
+        try:
+            audio_encoder = AudioEncoder(
+                AudioEncoderConfig(
+                    sample_rate=int(audio_cfg.get("sample_rate", 16000)),
+                    n_mels=int(audio_cfg.get("n_mels", 64)),
+                    d_model=int(model_cfg.get("hidden_size", 128)),
+                    hidden=int(audio_cfg.get("hidden", 64)),
+                ),
+                device=device,
+            ).to(device)
+            logger.info("AudioEncoder enabled (available=%s, params=%d)",
+                         audio_encoder.is_available,
+                         sum(p.numel() for p in audio_encoder.parameters()))
+        except Exception as exc:
+            logger.warning("AudioEncoder init failed (%s)", exc)
+
     state = TrainState(step=0, episode=0)
 
     if resume is not None:
@@ -1296,6 +1421,10 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     episode_predicates: list[dict[str, bool]] = []
     episode_true_counts: list[int] = []
 
+    # --- Phase 0 knobs (from training) ---
+    imagination_update_every = int(imagination_cfg.get("update_every_steps", 16)) if imagination_cfg else 0
+    knowledge_gap_update_every = int(kgap_cfg.get("update_every_steps", 50)) if kgap_cfg else 0
+    knowledge_gap_last_update = 0
     t0 = time.time()
     logger.info(
         "Starting Stage %s: total_steps=%d smoke=%s "
@@ -1409,6 +1538,34 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     int_r = float(F.mse_loss(pred_obs, obs_flat).item())
                 intrinsic_coef = curiosity_coef
                 total_r = extrinsic_r + intrinsic_coef * int_r
+
+            # --- Phase 1+: intention achievement curiosity ---
+            if (intention_curiosity is not None and wm is not None
+                    and intention_curiosity.is_active()):
+                try:
+                    with torch.no_grad():
+                        obs_flat = obs_t.float().reshape(1, -1) / 255.0
+                        wm_state = wm.initial_state(1, device)
+                        action_onehot = F.one_hot(action, num_actions).float().unsqueeze(0)
+                        intent_r = intention_curiosity.intention_reward(
+                            wm, wm_state, action_onehot, obs_flat,
+                        )
+                        int_r = max(int_r, float(intent_r.item()))
+                        total_r = extrinsic_r + curiosity_coef * int_r
+                    intention_curiosity.step()
+                except Exception:
+                    pass
+
+            # --- Phase 1+: knowledge gap boost on curiosity ---
+            if (knowledge_gap is not None and model.use_slots
+                    and int_r > 0):
+                try:
+                    with torch.no_grad():
+                        slot_out = model.encoder(obs_t).squeeze(0)
+                        boost = knowledge_gap.get_gap_boost(slot_out.unsqueeze(0))
+                        total_r += (boost.item() - 1.0) * curiosity_coef * int_r
+                except Exception:
+                    pass
 
             # --- Concept graph: bind cross-modal observations ---
             if concept_graph is not None and model.use_slots and state.step % 100 == 0:
@@ -1618,9 +1775,25 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         pass
 
                 # --- Theory of Mind update ---
-                if theory_of_mind is not None and hasattr(env, '_agent'):
+                if theory_of_mind is not None:
                     try:
                         theory_of_mind.reset_beliefs()
+                    except Exception:
+                        pass
+
+                # --- Self-reflection: compare planned vs actual ---
+                if reflection_validator is not None and long_range_planner is not None:
+                    try:
+                        predicted_r = float(env.summary().get("mean_return", 0))
+                        lesson = reflection_validator.reflect(
+                            expected="plan_execution",
+                            actual_reward=float(ep_ret),
+                            predicted_reward=predicted_r,
+                            step=state.step,
+                            context=f"task_ep{env.summary().get('episodes',0)}",
+                        )
+                        if lesson:
+                            logger.info("[self_reflect] %s", lesson[:100])
                     except Exception:
                         pass
 
@@ -1783,6 +1956,44 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             except (ValueError, IndexError, RuntimeError) as exc:
                 logger.debug("world model update skipped: %s", exc)
 
+        # --- Phase 1+: Dreamer-style imagination training ---
+        if (
+            imagination_trainer is not None
+            and wm is not None
+            and replay is not None
+            and len(replay) >= replay_min_size
+            and imagination_update_every > 0
+            and state.step % imagination_update_every < rollout_capacity
+        ):
+            try:
+                sample, _, _ = replay.sample_prioritized(
+                    min(imagination_trainer.config.imagination_batch, len(replay)),
+                    alpha=per_alpha,
+                )
+                imagination_last_loss = imagination_trainer.train_step(
+                    actor_critic=model,
+                    world_model=wm,
+                    replay_sample=sample,
+                    num_actions=num_actions,
+                )
+            except (ValueError, IndexError, RuntimeError) as exc:
+                logger.debug("imagination update skipped: %s", exc)
+
+        # --- Phase 1+: knowledge gap update ---
+        if (knowledge_gap is not None and wm is not None
+                and state.step - knowledge_gap_last_update >= knowledge_gap_update_every):
+            try:
+                sample_obs = _obs_to_tensor(obs, device).float().reshape(1, -1) / 255.0
+                wm_pred_err = wm_last_loss.get("loss", 0.5)
+                pred_errors = torch.tensor([wm_pred_err], device=device)
+                if model.use_slots:
+                    with torch.no_grad():
+                        slot_out = model.encoder(_obs_to_tensor(obs, device)).squeeze(0)
+                        knowledge_gap.update(slot_out.unsqueeze(0), pred_errors)
+                knowledge_gap_last_update = state.step
+            except Exception:
+                pass
+
         # --- Stage 6: Generative Replay VAE update from replay ---
         if (
             grep_vae is not None
@@ -1865,6 +2076,16 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             except Exception:
                 pass
 
+        # --- Concept clustering: periodic category discovery ---
+        if (concept_clusterer is not None and concept_graph is not None
+                and concept_clusterer.should_cluster(state.step)):
+            try:
+                new_cats = concept_clusterer.cluster(concept_graph, state.step)
+                if new_cats:
+                    logger.info("[concept] discovered %d new categories", len(new_cats))
+            except Exception:
+                pass
+
         # --- J-space monitoring: track reasoning subspace emergence ---
         if state.step > 0 and state.step % 10000 < rollout_capacity:
             try:
@@ -1929,6 +2150,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 extras.append(f"replay={len(replay)}/{replay.capacity}")
             if wm is not None:
                 extras.append(f"wm={wm_last_loss['loss']:.3f}(r={wm_last_loss['recon']:.3f},kl={wm_last_loss['kl']:.3f})")
+            if imagination_trainer is not None and imagination_last_loss:
+                extras.append(f"img={imagination_last_loss.get('total_loss', 0):.4f}")
             if skills is not None:
                 extras.append(f"skills={len(skills)}/{skills.capacity}")
             if curriculum is not None and curr_active_task is not None:
@@ -2080,6 +2303,20 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 extra["long_range_planner_state"] = long_range_planner.state_dict()
             if concept_graph is not None:
                 extra["concept_graph_state"] = concept_graph.state_dict()
+            if reflection_validator is not None:
+                extra["reflection_validator_state"] = reflection_validator.state_dict()
+            if concept_clusterer is not None:
+                extra["concept_clusterer_state"] = concept_clusterer.state_dict()
+            if intention_curiosity is not None:
+                extra["intention_curiosity_state"] = intention_curiosity.state_dict()
+            if knowledge_gap is not None:
+                extra["knowledge_gap_state"] = knowledge_gap.state_dict()
+            if social_curiosity is not None:
+                extra["social_curiosity_state"] = social_curiosity.state_dict()
+            if imagination_trainer is not None:
+                extra["imagination_trainer_state"] = imagination_trainer.state_dict()
+            if audio_encoder is not None:
+                extra["audio_encoder_state"] = audio_encoder.state_dict()
             # NB: replay state not serialized here (too big for on-policy ckpts;
             # rely on data disk to persist replay across restarts).
             save_ckpt(
@@ -2118,6 +2355,10 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         logger.info("Generative Replay VAE final: %s", grep_vae.summary())
     if sleep_loop is not None:
         logger.info("Sleep loop final: %s", sleep_loop.summary())
+    if imagination_trainer is not None and imagination_last_loss:
+        logger.info("Imagination trainer final: %s", imagination_last_loss)
+    if knowledge_gap is not None:
+        logger.info("Knowledge gap final: %s", knowledge_gap.summary())
 
     env.close()
     return 0
