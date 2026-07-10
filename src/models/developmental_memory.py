@@ -391,7 +391,7 @@ class AutobiographicalMemory:
     def __init__(
         self,
         max_events: int = 100,
-        promotion_threshold: float = 2.0,  # min importance to become life event
+        promotion_threshold: float = 0.3,  # lowered: most episodes qualify
     ) -> None:
         self._max = int(max_events)
         self._threshold = float(promotion_threshold)
