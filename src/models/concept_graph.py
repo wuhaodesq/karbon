@@ -189,9 +189,12 @@ class ConceptGraph(nn.Module):
         if not self._nodes:
             return []
         node_list = list(self._nodes.values())
-        q = self._query_proj(query_embedding.unsqueeze(0).to(
-            next(self.parameters()).device))
-        embs = torch.stack([n.embedding.to(q.device) for n in node_list])
+        # Project BOTH query and stored nodes through the same projection
+        q = self._query_proj(query_embedding.unsqueeze(0))
+        embs = torch.stack([
+            self._query_proj(n.embedding.unsqueeze(0).to(q.device)).squeeze(0)
+            for n in node_list
+        ])
         sim = F.cosine_similarity(q, embs, dim=-1)
         top_k = sim.topk(min(k, len(node_list))).indices.tolist()
         return [(node_list[i], float(sim[i].detach())) for i in top_k]

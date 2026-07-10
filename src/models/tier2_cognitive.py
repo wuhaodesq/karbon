@@ -53,7 +53,12 @@ class Analogizer(nn.Module):
         Similarity = (number of shared edges) / (source total edges).
         Returns top-k with shared edges listed.
         """
-        if not hasattr(concept_graph, '_edges') or len(concept_graph._edges) < 10:
+        if not hasattr(concept_graph, '_edges'):
+            return []
+
+        edge_count = len(concept_graph._edges)
+        if edge_count < 10:
+            logger.debug("[analogizer] insufficient edges for metaphor (%d < 10)", edge_count)
             return []
 
         # Find source node
@@ -74,6 +79,8 @@ class Analogizer(nn.Module):
                     source_edges.add((edge.relation_type, tgt_name.name))
 
         if len(source_edges) < 2:
+            logger.debug("[analogizer] source '%s' has only %d edges, need more for metaphor",
+                         source_name, len(source_edges))
             return []
 
         # Compare with all other nodes
