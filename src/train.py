@@ -87,6 +87,7 @@ from src.models.abstract_reasoning import MicroPrologMath, IdentityNarrative
 from src.models.tier2_cognitive import Analogizer, BeliefDepth2, MoralConnector, SurpriseHumor
 from src.models.neuro_symbolic_bridge import Causal2Prolog, Number2Math, SchemaDetector
 from src.models.program_synthesis import ProgramSynthesizer, ActiveExperimenter, TemporalAbstractor
+from src.models.counterfactual_planner import CounterfactualPlanner
 from src.monitoring import HealthChecker, MemoryWatcher, WatcherConfig
 from src.platform import data_dir, get_device, get_device_info, stage_ckpt_path
 from src.utils import (
@@ -1316,6 +1317,16 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         )
         logger.info("ProgramSynthesis: Synthesizer + ActiveExperimenter + TemporalAbstractor")
 
+    # --- Counterfactual Planning ---
+    plan_cfg = config.get("counterfactual_planner")
+    cf_planner: CounterfactualPlanner | None = None
+    if plan_cfg and bool(plan_cfg.get("enabled", False)):
+        cf_planner = CounterfactualPlanner(
+            num_candidates=int(plan_cfg.get("num_candidates", 5)),
+            max_imagine_steps=int(plan_cfg.get("max_imagine_steps", 8)),
+        ).to(device)
+        logger.info("CounterfactualPlanner enabled (candidates=%d)", plan_cfg.get("num_candidates", 5))
+
     # --- Phase 1+: Imagination Trainer (Dreamer-style) ---
     imagination_cfg = config.get("imagination")
     imagination_trainer: ImaginationTrainer | None = None
@@ -2339,9 +2350,23 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 action_onehot = F.one_hot(torch.tensor([0]), num_actions).float().to(device)
                 wm_state = wm.initial_state(1, device)
                 wm_state, _ = wm.observe_step(wm_state, action_onehot, wm_obs)
+
+                # Generate base plan
                 plan = long_range_planner.plan(wm_state, wm, model, obs_t)
+
+                # Counterfactual validation: evaluate alternatives
+                if cf_planner is not None:
+                    slot_states = model.encoder(obs_t).squeeze(0) if model.use_slots else obs_t
+                    best = cf_planner.select_best(
+                        long_range_planner, wm, wm_state,
+                        slot_states, device,
+                    )
+                    if best is not None:
+                        plan = best
+                        logger.debug("[cf_plan] validated plan (len=%d)", len(plan))
+
                 if plan:
-                    logger.debug("[plan] new plan: %s (len=%d)", plan[:5], len(plan))
+                    logger.debug("[plan] plan: %s (len=%d)", plan[:5], len(plan))
             except Exception:
                 pass
 

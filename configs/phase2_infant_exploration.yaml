@@ -167,6 +167,11 @@ program_synthesis:
   max_patterns: 100
   min_occurrences: 3
 
+counterfactual_planner:
+  enabled: true
+  num_candidates: 5
+  max_imagine_steps: 8
+
 monitor:
   sample_interval_s: 2.0
   slope_alarm_gb_per_hour: 0.5
