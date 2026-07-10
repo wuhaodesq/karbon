@@ -85,6 +85,7 @@ from src.models.iq_boost import (
 )
 from src.models.abstract_reasoning import MicroPrologMath, IdentityNarrative
 from src.models.tier2_cognitive import Analogizer, BeliefDepth2, MoralConnector, SurpriseHumor
+from src.models.neuro_symbolic_bridge import Causal2Prolog, Number2Math, SchemaDetector
 from src.monitoring import HealthChecker, MemoryWatcher, WatcherConfig
 from src.platform import data_dir, get_device, get_device_info, stage_ckpt_path
 from src.utils import (
@@ -1287,6 +1288,17 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         health.register("surprise_humor", surprise_humor)
         logger.info("Tier2 Cognitive: Analogizer + BeliefDepth2 + MoralConnector + SurpriseHumor")
 
+    # --- Neuro-Symbolic Bridge ---
+    bridge_cfg = config.get("neuro_symbolic_bridge")
+    causal2prolog: Causal2Prolog | None = None
+    number2math: Number2Math | None = None
+    schema_detector: SchemaDetector | None = None
+    if bridge_cfg and bool(bridge_cfg.get("enabled", False)):
+        causal2prolog = Causal2Prolog()
+        number2math = Number2Math()
+        schema_detector = SchemaDetector()
+        logger.info("NeuroSymbolicBridge: Causal2Prolog + Number2Math + SchemaDetector")
+
     # --- Phase 1+: Imagination Trainer (Dreamer-style) ---
     imagination_cfg = config.get("imagination")
     imagination_trainer: ImaginationTrainer | None = None
@@ -2200,6 +2212,31 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     logger.info("[concept] discovered %d new categories", len(new_cats))
             except Exception:
                 pass
+
+        # --- Neuro-Symbolic Bridge: periodic connection ---
+        if state.step > 0 and state.step % 5000 < rollout_capacity:
+            if causal2prolog is not None and causal_disc is not None and micro_math is not None:
+                try:
+                    n = causal2prolog.feed_to_math(micro_math, causal_disc)
+                    if n > 0:
+                        logger.debug("[bridge] causal2prolog: %d rules", n)
+                except Exception:
+                    pass
+            if number2math is not None and number_sense is not None and micro_math is not None:
+                try:
+                    obs_t = _obs_to_tensor(obs, device)
+                    slot_out = model.encoder(obs_t) if model.use_slots else None
+                    if slot_out is not None:
+                        number2math.observe(number_sense, slot_out.squeeze(0))
+                except Exception:
+                    pass
+            if schema_detector is not None and rule_engine is not None:
+                try:
+                    schemas = schema_detector.extract(rule_engine, state.step)
+                    if schemas:
+                        logger.info("[schema] best: %s", schema_detector.get_best_schema())
+                except Exception:
+                    pass
 
         # --- Identity Narrative: periodic self-reflection ---
         if (identity_narrative is not None and memory_manager is not None

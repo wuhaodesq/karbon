@@ -158,6 +158,9 @@ abstract_reasoning:
 tier2_cognitive:
   enabled: true
 
+neuro_symbolic_bridge:
+  enabled: true
+
 monitor:
   sample_interval_s: 2.0
   slope_alarm_gb_per_hour: 0.5
