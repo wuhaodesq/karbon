@@ -32,16 +32,16 @@ model:
 
 env:
   id: "PhysicsSandbox"
-  num_objects: 5
-  max_episode_steps: 200
+  num_objects: 10
+  max_episode_steps: 300
   render_size: 64
   gravity: -9.8
   action_force: 50.0
 
 train:
   ppo_clip: 0.2
-  ppo_epochs: 4
-  entropy_coef: 0.02
+  ppo_epochs: 6
+  entropy_coef: 0.03
   value_coef: 0.5
   gamma: 0.99
   gae_lambda: 0.95
@@ -51,7 +51,7 @@ train:
 curiosity:
   enabled: true
   mode: "rssm_uncertainty"
-  coef: 0.5
+  coef: 0.8
 
 world_model:
   enabled: true
@@ -60,7 +60,9 @@ world_model:
   z_dim: 32
   hidden: 128
   max_rollout_steps: 4
-  lr: 1.0e-3
+  lr: 3.0e-3
+  update_every_steps: 4
+  log_every_steps: 5000
 
 replay:
   enabled: true
@@ -68,8 +70,9 @@ replay:
   capacity_cpu: 65536
   capacity_ssd: 73728
   min_size: 256
-  batch_size: 128
-  per_alpha: 0.6
+  batch_size: 256
+  per_alpha: 0.8
+  sample_every_steps: 4
 
 skills:
   enabled: true
@@ -77,8 +80,8 @@ skills:
   cpu_capacity: 4096
   cold_shard_size: 128
   cold_max_shards: 64
-  merge_threshold: 0.85
-  extraction_reward_threshold: 0.1
+  merge_threshold: 0.75
+  extraction_reward_threshold: 0.05
 
 number_sense:
   enabled: true
