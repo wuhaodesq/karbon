@@ -83,7 +83,7 @@ class MicroPrologMath:
         if ":-" in axiom_str:
             head_str, body_str = axiom_str.split(":-", 1)
             head = _parse_term(head_str.strip())
-            body_terms = [_parse_term(t.strip()) for t in body_str.split(",")]
+            body_terms = [_parse_term(t.strip()) for t in _split_top_level(body_str)]
             self._rules.append((head, body_terms))
         else:
             term = _parse_term(axiom_str.strip())
@@ -193,18 +193,59 @@ def _parse_term(s: str) -> tuple:
     return tuple([name] + splits)
 
 
+def _split_top_level(s: str) -> list[str]:
+    """Split on commas that are NOT inside parentheses.
+
+    'a(X,Y), b(Y,Z)' → ['a(X,Y)', 'b(Y,Z)'].
+    """
+    parts: list[str] = []
+    depth = 0
+    cur = ""
+    for ch in s:
+        if ch == "(":
+            depth += 1
+            cur += ch
+        elif ch == ")":
+            depth -= 1
+            cur += ch
+        elif ch == "," and depth == 0:
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        parts.append(cur)
+    return [p.strip() for p in parts if p.strip()]
+
+
 def _unify_args(
     goal_args: tuple, fact_args: tuple, bindings: dict[str, str],
 ) -> dict[str, str] | None:
-    """Unify goal args with fact args. Returns extended bindings or None."""
+    """Unify goal args with fact/head args. Returns extended bindings or None.
+
+    Handles binding in both directions: a variable on either side may be
+    bound to a constant on the other (required for rule-head variables
+    instantiated by constant query arguments).
+    """
     sub = dict(bindings)
     for ga, fa in zip(goal_args, fact_args):
-        if _is_var(ga):
-            if ga in sub:
-                if sub[ga] != fa:
+        if _is_var(ga) and _is_var(fa):
+            # Two variables: only fail if BOTH already bound to conflicting
+            # constants. Otherwise leave them free so they can be bound later
+            # (e.g. an output variable solved in a later body goal).
+            if ga in sub and fa in sub:
+                gv, fv = sub[ga], sub[fa]
+                if not _is_var(gv) and not _is_var(fv) and gv != fv:
                     return None
-            else:
-                sub[ga] = fa
+            continue
+        elif _is_var(ga):
+            if ga in sub and sub[ga] != fa:
+                return None
+            sub[ga] = fa
+        elif _is_var(fa):
+            if fa in sub and sub[fa] != ga:
+                return None
+            sub[fa] = ga
         elif ga != fa:
             return None
     return sub
