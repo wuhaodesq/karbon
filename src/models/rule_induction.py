@@ -117,6 +117,12 @@ class RuleInductionEngine:
         self._rules: dict[int, InducedRule] = {}
         self._next_id = 0
 
+        # Accumulated predicate statistics (跨 episode 累积，定期衰减)
+        self._positive_combos: dict[str, dict[int, int]] = {}  # pred_sig → {action: count}
+        self._negative_combos: dict[str, dict[int, int]] = {}
+        self._accumulation_decay: float = 0.95  # per-episode decay
+        self._episodes_accumulated: int = 0
+
         # Color centroids (learnt from slot stats)
         self._color_centroids: dict[str, torch.Tensor] = {}
 
@@ -185,43 +191,41 @@ class RuleInductionEngine:
         self._episode_outcomes = [outcome] * len(actions)
 
     def induce_rules(self) -> list[InducedRule]:
-        """Induce IF-THEN rules from recorded episodes.
+        """Induce IF-THEN rules from accumulated episode statistics.
 
-        For each step in the episode, try to learn:
-            IF (predicates at step t) THEN (action = a_i leads to good outcome)
-
-        Uses simple count-based induction: if a predicate combination appears
-        at least induction_min_pos times with positive outcome, learn a rule.
+        Uses instance-level accumulators that persist across episodes.
+        Statistics are decayed each episode so old patterns fade.
         """
         if not self._episode_predicates:
             return []
 
         new_rules: list[InducedRule] = []
-        positive_combos: dict[str, dict[int, int]] = {}  # pred_combo → {action: positive_count}
-        negative_combos: dict[str, dict[int, int]] = {}
 
+        # Accumulate from this episode
         for t, preds in enumerate(self._episode_predicates):
             if t >= len(self._episode_actions):
                 break
             action = self._episode_actions[t]
             outcome = self._episode_outcomes[min(t, len(self._episode_outcomes) - 1)]
 
-            # Build predicate signature
             true_preds = tuple(sorted(k for k, v in preds.items() if v))
             if not true_preds:
                 continue
-            sig = "&".join(true_preds[:6])  # bounded to 6 predicates per rule
+            sig = "&".join(true_preds[:6])
 
             if outcome > 0:
-                positive_combos.setdefault(sig, {}).setdefault(action, 0)
-                positive_combos[sig][action] += 1
+                self._positive_combos.setdefault(sig, {}).setdefault(action, 0)
+                self._positive_combos[sig][action] += 1
             else:
-                negative_combos.setdefault(sig, {}).setdefault(action, 0)
-                negative_combos[sig][action] += 1
+                self._negative_combos.setdefault(sig, {}).setdefault(action, 0)
+                self._negative_combos[sig][action] += 1
 
-        for sig, action_counts in positive_combos.items():
+        self._episodes_accumulated += 1
+
+        # Check for rules that now meet the threshold
+        for sig, action_counts in self._positive_combos.items():
             for action, pos_count in action_counts.items():
-                neg_count = negative_combos.get(sig, {}).get(action, 0)
+                neg_count = self._negative_combos.get(sig, {}).get(action, 0)
                 total = pos_count + neg_count
                 if total < self._induction_min_pos:
                     continue
@@ -242,6 +246,16 @@ class RuleInductionEngine:
                 )
                 self._add_rule(rule)
                 new_rules.append(rule)
+
+        # Decay accumulated statistics (old patterns fade)
+        for combos in [self._positive_combos, self._negative_combos]:
+            for sig in list(combos.keys()):
+                for action in list(combos[sig].keys()):
+                    combos[sig][action] = int(combos[sig][action] * self._accumulation_decay)
+                    if combos[sig][action] < 1:
+                        del combos[sig][action]
+                if not combos[sig]:
+                    del combos[sig]
 
         return new_rules
 
@@ -349,6 +363,9 @@ class RuleInductionEngine:
     def state_dict(self) -> dict[str, Any]:
         return {
             "next_id": self._next_id,
+            "episodes_accumulated": self._episodes_accumulated,
+            "positive_combos": {sig: dict(acts) for sig, acts in self._positive_combos.items()},
+            "negative_combos": {sig: dict(acts) for sig, acts in self._negative_combos.items()},
             "rules": [
                 {
                     "if_predicates": [(p, tuple(args)) for p, args in r.if_predicates],
@@ -364,6 +381,9 @@ class RuleInductionEngine:
 
     def load_state_dict(self, state: dict[str, Any]) -> None:
         self._next_id = int(state["next_id"])
+        self._episodes_accumulated = int(state.get("episodes_accumulated", 0))
+        self._positive_combos = state.get("positive_combos", {})
+        self._negative_combos = state.get("negative_combos", {})
         self._rules.clear()
         for r_dict in state["rules"]:
             rule = InducedRule(

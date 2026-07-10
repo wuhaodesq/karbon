@@ -35,6 +35,14 @@ from src.models.iq_boost import (
 )
 from src.models.abstract_reasoning import MicroPrologMath, IdentityNarrative
 from src.models.developmental_memory import AutobiographicalMemory
+from src.models.neuro_symbolic_bridge import (
+    Causal2Prolog,
+    Number2Math,
+    SchemaDetector,
+)
+from src.models.causal_discovery import CausalDiscovery
+from src.models.number_sense import NumberSense
+from src.models.rule_induction import RuleInductionEngine
 
 
 D = 8  # small d_model for fast CPU tests
@@ -46,7 +54,7 @@ D = 8  # small d_model for fast CPU tests
 
 
 def _build_graph():
-    g = ConceptGraph(d_model=D, max_nodes=50, max_edges=200)
+    g = ConceptGraph(d_model=D, max_nodes=50, max_edges=200, merge_similarity=0.999)
     ball = g.add_concept(torch.randn(D), name="ball")
     ground = g.add_concept(torch.randn(D), name="ground")
     shape = g.add_concept(torch.randn(D), name="shape")
@@ -254,3 +262,146 @@ def test_autobiographical_memory_promotes_and_stores():
     # Below threshold -> not promoted.
     assert am.add_event(2, "tiny blip", importance=0.1, episode_id=2) is None
     assert "first successful push" in am.get_life_story()
+
+
+# --------------------------------------------------------------------------
+# neuro_symbolic_bridge: Causal2Prolog, Number2Math, SchemaDetector
+# --------------------------------------------------------------------------
+
+
+def test_causal2prolog_converts_strong_edges_only():
+    fake = SimpleNamespace(_graph=SimpleNamespace(edges={
+        ("push", "move"): SimpleNamespace(strength=0.7),
+        ("move", "hit"): SimpleNamespace(strength=0.5),
+        ("weak", "x"): SimpleNamespace(strength=0.1),  # below 0.3 -> skipped
+    }))
+    c = Causal2Prolog(min_strength=0.3)
+    rules = c.convert(fake, step=0)
+    assert "causes(push, move)" in rules
+    assert "causes(weak, x)" not in rules
+
+
+def test_number2math_reasons_about_quantity():
+    class FakeNS:
+        def predict_count(self, x):
+            return torch.tensor(5.0)
+
+    nm = Number2Math()
+    assert nm.observe(FakeNS(), torch.randn(3, D)) == 5
+    assert "5" in nm.query(None, "count")
+    assert "more" in nm.query(None, "more_than_3")
+
+
+def test_schema_detector_extracts_abstract_template():
+    class FakeRule:
+        def __init__(self, action, n_conds, conf):
+            self.then_predicate = ("action", [action])
+            self.if_predicates = [("x",)] * n_conds
+            self.confidence = conf
+
+    class FakeRE:
+        def __init__(self, rules):
+            self._rules = {i: r for i, r in enumerate(rules)}
+
+    re = FakeRE([FakeRule(1, 2, 0.7), FakeRule(1, 2, 0.6), FakeRule(1, 2, 0.8)])
+    sd = SchemaDetector(min_rule_count=3)
+    schemas = sd.extract(re, step=0)
+    assert len(schemas) == 1
+    assert schemas[0]["action"] == 1
+    assert "Action" in sd.get_best_schema()
+
+
+# --------------------------------------------------------------------------
+# Upstream of the bridge: CausalDiscovery, NumberSense, RuleInductionEngine
+# --------------------------------------------------------------------------
+
+
+def test_causal_discovery_records_edges_from_interventions():
+    class FakeWM:
+        def imagine_step(self, state, action_onehot):
+            a = action_onehot.argmax(dim=-1).float().unsqueeze(-1)  # (1,1)
+            return state + a * 0.5, None
+
+        def decode(self, state):
+            return state
+
+    num_slots, slot_dim, dim = 4, 4, 16
+    wm = FakeWM()
+    cd = CausalDiscovery(num_actions=8, max_edges=256)
+    initial = torch.randn(1, dim)
+    slots = torch.randn(num_slots, slot_dim)
+    effects = cd.intervene(wm, initial, actual_action=0, slot_states=slots, step=0)
+    # Multiple counterfactual actions differ -> causal edges should be recorded.
+    assert len(cd) > 0
+    assert any("world_state" in e.target for e in cd._graph.edges.values())
+    assert isinstance(cd.query_why("world_state"), list)
+
+
+def test_number_sense_learns_cardinality():
+    ns = NumberSense(num_slots=7, slot_dim=8, max_count=6, hidden=32)
+    opt = torch.optim.Adam(ns.parameters(), lr=0.03)
+    v = torch.ones(8)
+    for _ in range(200):
+        opt.zero_grad()
+        loss = 0.0
+        for k in range(7):
+            slots = torch.zeros(1, 7, 8)
+            slots[0, :k] = v  # first k slots occupied
+            loss = loss + ns.loss(slots, torch.tensor([k]))
+        loss.backward()
+        opt.step()
+    # Trained -> count signal recoverable.
+    zero = torch.zeros(1, 7, 8)
+    full = torch.ones(1, 7, 8)
+    assert int(ns.predict_count(zero).item()) == 0
+    assert int(ns.predict_count(full).item()) == 6
+    assert ns.compare(zero, full) == "b"
+
+
+def test_rule_induction_extracts_predicates_and_induces_rules():
+    r = RuleInductionEngine(num_slots=4, max_rules=64, induction_min_positive=3)
+
+    # Build slots where slot 0 is occupied/large and slot 1 is near it.
+    slots = torch.zeros(1, 4, 8)
+    slots[0, 0] = 2.0
+    slots[0, 1] = 2.0
+    facts = r.extract_predicates(slots)
+    assert facts.get("exists(s0)") is True
+    assert facts.get("near(s0,s1)") is True
+
+    # NOTE: induce_rules resets its statistics every call (positive_combos is
+    # local), so the same signature must repeat >=3x WITHIN one episode.
+    sigs = [
+        {"exists(s0)": True, "near(s0,s1)": True},
+        {"exists(s1)": True, "large(s1)": True},
+        {"exists(s2)": True, "moving(s2)": True},
+    ]
+    for sig in sigs:
+        r.record_episode([sig, sig, sig], [2, 2, 2], outcome=1.0)
+        r.induce_rules()
+
+    assert len(r) == 3
+    rule = next(iter(r._rules.values()))
+    # Deduction: given the rule's antecedents, derive its consequent.
+    deduced = r.forward_chain({f"{p}({','.join(map(str, a))})": True
+                               for p, a in rule.if_predicates})
+    then_str = f"{rule.then_predicate[0]}({','.join(map(str, rule.then_predicate[1]))})"
+    assert deduced.get(then_str) is True
+
+
+def test_full_chain_rule_induction_to_schema():
+    r = RuleInductionEngine(num_slots=4, max_rules=64, induction_min_positive=3)
+    sigs = [
+        {"exists(s0)": True, "near(s0,s1)": True},
+        {"exists(s1)": True, "large(s1)": True},
+        {"exists(s2)": True, "moving(s2)": True},
+    ]
+    for sig in sigs:
+        r.record_episode([sig, sig, sig], [2, 2, 2], outcome=1.0)
+        r.induce_rules()
+    sd = SchemaDetector(min_rule_count=3)
+    schemas = sd.extract(r, step=0)
+    assert len(schemas) == 1
+    assert schemas[0]["action"] == 2
+
+

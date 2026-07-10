@@ -115,12 +115,10 @@ class Number2Math:
         """Use MicroPrologMath to answer a quantity question.
 
         Supported: "more_than_last(N)" → checks if N > last_count
-                  "add_to_last(N)" → last_count + N
-                  "half_of_last" → last_count // 2
+                   "add_to_last(N)" → last_count + N
+                   "half_of_last" → last_count // 2
         """
-        if micro_math is None:
-            return "math engine not available"
-
+        # Simple quantity questions work from _last_count alone.
         if question == "more_than_3":
             result = self._last_count > 3
             return f"I see {self._last_count} objects, which is {'more' if result else 'not more'} than 3."
@@ -133,6 +131,9 @@ class Number2Math:
                 return f"I see {self._last_count} objects."
         elif question == "count":
             return f"I see {self._last_count} objects."
+
+        if micro_math is None:
+            return "math engine not available"
 
         # Try Prolog
         try:
