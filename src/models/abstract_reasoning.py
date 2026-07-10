@@ -213,6 +213,9 @@ def _unify_args(
 def _is_var(s: str) -> bool:
     return len(s) > 0 and s[0].isupper()
 
+def _apply_sub(term: tuple, bindings: dict[str, str]) -> tuple:
+    return tuple(bindings.get(a, a) for a in term)
+
 
 # =====================================================================
 # 2. IdentityNarrative — personality from life events
