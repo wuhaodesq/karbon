@@ -173,6 +173,9 @@ counterfactual_planner:
   num_candidates: 5
   max_imagine_steps: 8
 
+marginal_gains:
+  enabled: true
+
 monitor:
   sample_interval_s: 2.0
   slope_alarm_gb_per_hour: 0.5

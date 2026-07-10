@@ -88,6 +88,7 @@ from src.models.tier2_cognitive import Analogizer, BeliefDepth2, MoralConnector,
 from src.models.neuro_symbolic_bridge import Causal2Prolog, Number2Math, SchemaDetector
 from src.models.program_synthesis import ProgramSynthesizer, ActiveExperimenter, TemporalAbstractor
 from src.models.counterfactual_planner import CounterfactualPlanner
+from src.models.marginal_gains import KnowledgeGapDetector, CompositionalTester, LearningProgressTracker
 from src.monitoring import HealthChecker, MemoryWatcher, WatcherConfig
 from src.platform import data_dir, get_device, get_device_info, stage_ckpt_path
 from src.utils import (
@@ -1329,6 +1330,17 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         ).to(device)
         logger.info("CounterfactualPlanner enabled (candidates=%d)", plan_cfg.get("num_candidates", 5))
 
+    # --- Marginal Gains ---
+    gap_cfg = config.get("marginal_gains")
+    knowledge_gap: KnowledgeGapDetector | None = None
+    compositional_test: CompositionalTester | None = None
+    lp_tracker: LearningProgressTracker | None = None
+    if gap_cfg and bool(gap_cfg.get("enabled", False)):
+        knowledge_gap = KnowledgeGapDetector().to(device)
+        compositional_test = CompositionalTester()
+        lp_tracker = LearningProgressTracker().to(device)
+        logger.info("MarginalGains: KnowledgeGapDetector + CompositionalTester + LP Tracker")
+
     # --- Phase 1+: Imagination Trainer (Dreamer-style) ---
     imagination_cfg = config.get("imagination")
     imagination_trainer: ImaginationTrainer | None = None
@@ -1863,6 +1875,28 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         added = program_synth.feedback_to_rules(rule_engine)
                         if added > 0:
                             logger.info("[synthesis] %d new rules synthesized", added)
+                    except Exception:
+                        pass
+
+                # --- Learning progress tracking ---
+                if lp_tracker is not None:
+                    try:
+                        summary = env.summary()
+                        lp_result = lp_tracker.update(
+                            float(summary.get("mean_return", 0)), state.step,
+                        )
+                        if lp_result.get("curiosity_boost", 0) > 0:
+                            intrinsic_coef = curiosity_coef + lp_result["curiosity_boost"]
+                    except Exception:
+                        pass
+
+                # --- Compositional generalization test ---
+                if (compositional_test is not None and concept_graph is not None
+                        and state.step % 50000 < rollout_capacity):
+                    try:
+                        result = compositional_test.test(concept_graph)
+                        if result["passed"]:
+                            logger.info("[compositional] passed: %s", result.get("components", "?"))
                     except Exception:
                         pass
 
