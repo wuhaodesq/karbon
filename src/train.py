@@ -2260,7 +2260,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 lang_emb = xmodal_manager.touch_bridge.touch_to_lang(prop.unsqueeze(0))
                 # Simple reconciliation loss: touch→lang→touch should return original
                 recon = xmodal_manager.touch_bridge.lang_to_touch(lang_emb)
-                t_loss = F.mse_loss(recon, prop)
+                t_loss = F.mse_loss(recon.squeeze(0), prop)
                 opt_xmodal = torch.optim.Adam(xmodal_manager.parameters(), lr=1e-4)
                 opt_xmodal.zero_grad()
                 t_loss.backward()
