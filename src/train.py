@@ -86,6 +86,7 @@ from src.models.iq_boost import (
 from src.models.abstract_reasoning import MicroPrologMath, IdentityNarrative
 from src.models.tier2_cognitive import Analogizer, BeliefDepth2, MoralConnector, SurpriseHumor
 from src.models.neuro_symbolic_bridge import Causal2Prolog, Number2Math, SchemaDetector
+from src.models.program_synthesis import ProgramSynthesizer, ActiveExperimenter, TemporalAbstractor
 from src.monitoring import HealthChecker, MemoryWatcher, WatcherConfig
 from src.platform import data_dir, get_device, get_device_info, stage_ckpt_path
 from src.utils import (
@@ -1299,6 +1300,22 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         schema_detector = SchemaDetector()
         logger.info("NeuroSymbolicBridge: Causal2Prolog + Number2Math + SchemaDetector")
 
+    # --- Program Synthesis + Active Experimentation + Temporal Abstraction ---
+    synth_cfg = config.get("program_synthesis")
+    program_synth: ProgramSynthesizer | None = None
+    active_experimenter: ActiveExperimenter | None = None
+    temporal_abstractor: TemporalAbstractor | None = None
+    if synth_cfg and bool(synth_cfg.get("enabled", False)):
+        program_synth = ProgramSynthesizer()
+        active_experimenter = ActiveExperimenter(
+            test_every_steps=int(synth_cfg.get("test_every_steps", 2000)),
+        ).to(device)
+        temporal_abstractor = TemporalAbstractor(
+            max_patterns=int(synth_cfg.get("max_patterns", 100)),
+            min_occurrences=int(synth_cfg.get("min_occurrences", 3)),
+        )
+        logger.info("ProgramSynthesis: Synthesizer + ActiveExperimenter + TemporalAbstractor")
+
     # --- Phase 1+: Imagination Trainer (Dreamer-style) ---
     imagination_cfg = config.get("imagination")
     imagination_trainer: ImaginationTrainer | None = None
@@ -1818,6 +1835,24 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 rollout_rewards.clear()
                 rollout_trajectory.clear()
 
+                # --- Temporal abstraction: extract patterns from episode ---
+                if temporal_abstractor is not None:
+                    try:
+                        patterns = temporal_abstractor.extract_episode_patterns()
+                        if patterns:
+                            logger.info("[temporal] %s", temporal_abstractor.summary())
+                    except Exception:
+                        pass
+
+                # --- Program synthesis: feed synthesized rules ---
+                if program_synth is not None and rule_engine is not None:
+                    try:
+                        added = program_synth.feedback_to_rules(rule_engine)
+                        if added > 0:
+                            logger.info("[synthesis] %d new rules synthesized", added)
+                    except Exception:
+                        pass
+
                 # --- Phase 9: LLM reflection after episode ---
                 if llm_fusion is not None and llm_fusion.is_available:
                     try:
@@ -2235,6 +2270,28 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     schemas = schema_detector.extract(rule_engine, state.step)
                     if schemas:
                         logger.info("[schema] best: %s", schema_detector.get_best_schema())
+                except Exception:
+                    pass
+
+            # --- Program Synthesis: active experimentation ---
+            if (active_experimenter is not None and active_experimenter.should_test(state.step)
+                    and causal_disc is not None and curiosity_director is not None):
+                try:
+                    exp = active_experimenter.propose_experiment(
+                        causal_disc, curiosity_director,
+                        rssm_uncertainty=float(int_r) if curiosity_mode != "none" else 0.0,
+                    )
+                    if exp:
+                        logger.info("[experiment] %s", exp["hypothesis"][:80])
+                        active_experimenter.record_result(exp, float(extrinsic_r), state.step)
+                except Exception:
+                    pass
+
+            # --- Temporal abstraction: record step predicates ---
+            if temporal_abstractor is not None and rule_engine is not None:
+                try:
+                    pred_keys = [k for k, v in episode_predicates[-1].items() if v] if episode_predicates else []
+                    temporal_abstractor.record_step(pred_keys, float(extrinsic_r))
                 except Exception:
                     pass
 

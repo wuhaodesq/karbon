@@ -161,6 +161,12 @@ tier2_cognitive:
 neuro_symbolic_bridge:
   enabled: true
 
+program_synthesis:
+  enabled: true
+  test_every_steps: 2000
+  max_patterns: 100
+  min_occurrences: 3
+
 monitor:
   sample_interval_s: 2.0
   slope_alarm_gb_per_hour: 0.5
