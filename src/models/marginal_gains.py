@@ -1,12 +1,14 @@
-"""Three Marginal-Gain Modules — Knowledge Gap, Compositional Test, LP Tracker.
+"""Two Marginal-Gain Modules — Compositional Test, LP Tracker.
 
-1. KnowledgeGapDetector — "I don't know what this is" → prioritize exploration
-2. CompositionalTester — known "red" + known "ball" → can infer "red ball"?
-3. LearningProgressTracker — flat LP → auto-boost curiosity
+1. CompositionalTester — known "red" + known "ball" → can infer "red ball"?
+2. LearningProgressTracker — flat LP → auto-boost curiosity
 
 All zero GPU. Read existing module states. Pure signal processors.
 
-知识缺口、组合泛化测试、学习进度跟踪。
+Note: knowledge-gap detection lives in ``src.intrinsic.knowledge_gap``
+(EMA per-slot prediction error + curiosity boost); do not duplicate it here.
+
+组合泛化测试、学习进度跟踪。
 """
 
 from __future__ import annotations
@@ -14,100 +16,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import torch
 import torch.nn as nn
 
 logger = logging.getLogger(__name__)
 
 
 # =====================================================================
-# 1. Knowledge Gap Detector
-# =====================================================================
-
-
-class KnowledgeGapDetector(nn.Module):
-    """Detect what the agent DOESN'T know, to prioritize active exploration.
-
-    Two signals:
-    - Slot gap: slot norm < threshold → "that slot is empty or I don't recognize the object"
-    - Graph gap: concept_graph query returns empty → "I've never seen anything like this"
-
-    High knowledge gap → CuriosityDirector weights shift toward exploration.
-    ActiveExperimenter prioritizes testing the unknown.
-    """
-
-    def __init__(
-        self,
-        slot_norm_threshold: float = 0.15,
-        graph_similarity_threshold: float = 0.3,
-        gap_decay: float = 0.95,
-    ) -> None:
-        super().__init__()
-        self._slot_threshold = slot_norm_threshold
-        self._graph_threshold = graph_similarity_threshold
-        self._decay = gap_decay
-        self._gap_level: float = 0.0
-        self._gaps_detected: int = 0
-
-    def detect(
-        self,
-        slot_states: torch.Tensor | None,  # (num_slots, d_model)
-        concept_graph: Any | None,
-    ) -> float:
-        """Return knowledge gap level [0, 1]. 0 = everything known, 1 = pure unknown."""
-        gap_score = 0.0
-        signals = 0
-
-        # Slot gap: how many slots are inactive?
-        if slot_states is not None:
-            slot_norms = slot_states.norm(dim=-1)
-            inactive = (slot_norms < self._slot_threshold * slot_norms.max()).float().mean()
-            gap_score += float(inactive.item())
-            signals += 1
-
-        # Graph gap: how well does query match known concepts?
-        if concept_graph is not None and hasattr(concept_graph, 'find_analog'):
-            try:
-                if slot_states is not None:
-                    query = slot_states.mean(dim=0)
-                    analogs = concept_graph.find_analog(query, k=1)
-                    if not analogs or analogs[0][1] < self._graph_threshold:
-                        gap_score += 1.0
-                    else:
-                        gap_score += 1.0 - analogs[0][1]
-                    signals += 1
-            except Exception:
-                pass
-
-        if signals == 0:
-            return 0.0
-
-        raw_gap = gap_score / signals
-        self._gap_level = self._decay * self._gap_level + (1 - self._decay) * raw_gap
-
-        if raw_gap > 0.5:
-            self._gaps_detected += 1
-            logger.debug("[knowledge_gap] gap=%.2f (slot+graph)", raw_gap)
-
-        return self._gap_level
-
-    def should_explore(self) -> bool:
-        return self._gap_level > 0.4
-
-    @property
-    def gap_level(self) -> float:
-        return self._gap_level
-
-    def summary(self) -> dict:
-        return {
-            "gap_level": self._gap_level,
-            "total_gaps": self._gaps_detected,
-            "should_explore": self.should_explore(),
-        }
-
-
-# =====================================================================
-# 2. Compositional Generalization Tester
+# 1. Compositional Generalization Tester
 # =====================================================================
 
 
@@ -200,7 +115,7 @@ class CompositionalTester:
 
 
 # =====================================================================
-# 3. Learning Progress Tracker
+# 2. Learning Progress Tracker
 # =====================================================================
 
 

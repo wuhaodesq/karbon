@@ -88,7 +88,7 @@ from src.models.tier2_cognitive import Analogizer, BeliefDepth2, MoralConnector,
 from src.models.neuro_symbolic_bridge import Causal2Prolog, Number2Math, SchemaDetector
 from src.models.program_synthesis import ProgramSynthesizer, ActiveExperimenter, TemporalAbstractor
 from src.models.counterfactual_planner import CounterfactualPlanner
-from src.models.marginal_gains import KnowledgeGapDetector, CompositionalTester, LearningProgressTracker
+from src.models.marginal_gains import CompositionalTester, LearningProgressTracker
 from src.monitoring import HealthChecker, MemoryWatcher, WatcherConfig
 from src.platform import data_dir, get_device, get_device_info, stage_ckpt_path
 from src.utils import (
@@ -1332,14 +1332,12 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
 
     # --- Marginal Gains ---
     gap_cfg = config.get("marginal_gains")
-    knowledge_gap: KnowledgeGapDetector | None = None
     compositional_test: CompositionalTester | None = None
     lp_tracker: LearningProgressTracker | None = None
     if gap_cfg and bool(gap_cfg.get("enabled", False)):
-        knowledge_gap = KnowledgeGapDetector().to(device)
         compositional_test = CompositionalTester()
         lp_tracker = LearningProgressTracker().to(device)
-        logger.info("MarginalGains: KnowledgeGapDetector + CompositionalTester + LP Tracker")
+        logger.info("MarginalGains: CompositionalTester + LP Tracker")
 
     # --- Phase 1+: Imagination Trainer (Dreamer-style) ---
     imagination_cfg = config.get("imagination")

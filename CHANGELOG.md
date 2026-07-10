@@ -5,6 +5,23 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Fixed (Marginal Gains integration — name collision & dead code)
+
+- **Removed duplicate `KnowledgeGapDetector` from `src/models/marginal_gains.py`.**
+  It collided by name with the existing, fully-wired
+  `src.intrinsic.knowledge_gap.KnowledgeGapDetector`. The `marginal_gains`
+  import (`src/train.py`) shadowed the intrinsic one, so `knowledge_gap` was
+  constructed as the wrong class and its `get_gap_boost()` / `update()` calls
+  silently failed (swallowed by `try/except`) — a regression of the working
+  knowledge-gap curiosity boost. The marginal-gains copy was also dead code: an
+  unconditional `knowledge_gap = None` reassignment clobbered it right after
+  creation, so its `.detect()` was never called.
+- `marginal_gains` now exposes only the genuinely-new, non-overlapping modules:
+  **`CompositionalTester`** (compositional generalization test over ConceptGraph)
+  and **`LearningProgressTracker`** (plateau detection → curiosity boost), both
+  already correctly wired in `src/train.py`.
+- Added `tests/test_marginal_gains.py` (7 tests, passing).
+
 ### Added (Phase 0+: 工程补缺口 A-G)
 
 - **Imagination Trainer** (`src/training/imagination_trainer.py`) — Dreamer-style
