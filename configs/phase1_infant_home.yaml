@@ -36,9 +36,9 @@ model:
 
 env:
   id: "ThreeDWorld"
-  num_objects: 100
+  num_objects: 30
   max_episode_steps: 500
-  render_size: 256
+  render_size: 128
   action_force: 2.0
   developmental_age: 0.0
 
@@ -50,7 +50,7 @@ train:
   gamma: 0.99
   gae_lambda: 0.95
   learning_rate: 3.0e-4
-  total_steps: 3000000
+  total_steps: 6000000
 
 curiosity:
   enabled: true
