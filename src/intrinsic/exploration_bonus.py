@@ -53,14 +53,16 @@ class ExplorationBonus(nn.Module):
         c = int(obs_shape[2])
         d = c * grid * grid
         # Deterministic mixing weights (Knuth multiplicative hash) so hashing
-        # is stable without carrying RNG state.
-        self._w = (
+        # is stable without carrying RNG state. Registered as buffers so
+        # .to(device) moves them with the module (required for GPU training).
+        w = (
             (torch.arange(d) * 2654435761 + 1) % (self.capacity - 1)
         ).long() + 1
-        self._counts = torch.zeros(self.capacity, dtype=torch.long)  # BOUNDS-OK: fixed
+        self.register_buffer("w", w)                                       # BOUNDS-OK: fixed
+        self.register_buffer("counts", torch.zeros(self.capacity, dtype=torch.long))  # BOUNDS-OK: fixed
 
     def __len__(self) -> int:
-        return int(self._counts.sum().item())
+        return int(self.counts.sum().item())
 
     @torch.no_grad()
     def _hash(self, obs_u8: torch.Tensor) -> torch.Tensor:
@@ -69,24 +71,24 @@ class ExplorationBonus(nn.Module):
         x = obs_u8.float().permute(0, 3, 1, 2) / 255.0  # (B,C,H,W)
         g = F.interpolate(x, size=(self.grid, self.grid), mode="area")  # (B,C,g,g)
         q = (g * 255.0).byte().long().reshape(obs_u8.shape[0], -1)  # (B, d)
-        h = (q * self._w[: q.shape[1]]).sum(dim=1) % self.capacity
+        h = (q * self.w[: q.shape[1]]).sum(dim=1) % self.capacity
         return h.long()
 
     @torch.no_grad()
     def bonus(self, obs_u8: torch.Tensor) -> torch.Tensor:
         """Exploration bonus per observation. Returns a (B,) tensor."""
         h = self._hash(obs_u8)
-        counts = self._counts[h].float()
+        counts = self.counts[h].float()
         return self.coef / torch.sqrt(counts + 1.0)
 
     @torch.no_grad()
     def update(self, obs_u8: torch.Tensor) -> None:
         h = self._hash(obs_u8)
-        self._counts.index_add_(0, h, torch.ones(h.shape[0], dtype=torch.long))
+        self.counts.index_add_(0, h, torch.ones(h.shape[0], dtype=torch.long))
 
     def state_dict(self) -> dict[str, Any]:
-        return {"counts": self._counts.clone()}
+        return {"counts": self.counts.clone()}
 
     def load_state_dict(self, state: dict[str, Any]) -> None:  # type: ignore[override]
-        if "counts" in state and state["counts"].shape == self._counts.shape:
-            self._counts.copy_(state["counts"])
+        if "counts" in state and state["counts"].shape == self.counts.shape:
+            self.counts.copy_(state["counts"])

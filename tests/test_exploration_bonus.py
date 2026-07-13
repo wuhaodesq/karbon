@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import math
+import pytest
 import torch
 
 from src.intrinsic import ExplorationBonus
@@ -45,11 +46,24 @@ class TestExplorationBonusProperties:
         cap = 1024
         eb = ExplorationBonus((16, 16, 3), capacity=cap, coef=0.1, grid=4)
         assert eb.capacity == cap
-        assert eb._counts.shape == (cap,)  # fixed size, Axiom 1
+        assert eb.counts.shape == (cap,)  # fixed size, Axiom 1
         for s in range(200):
             eb.update(_obs(s))
-        assert eb._counts.shape == (cap,)  # structure never grows
+        assert eb.counts.shape == (cap,)  # structure never grows
         assert len(eb) >= 200  # only the counts grow, not the structure
+
+    def test_buffers_follow_to_device(self) -> None:
+        # Regression: w / counts are registered buffers so .to(device)
+        # moves them; otherwise bonus() raises device-mismatch on GPU.
+        eb = ExplorationBonus((16, 16, 3), capacity=1024, coef=0.1, grid=4)
+        if not torch.cuda.is_available():
+            pytest.skip("CUDA not available")
+        eb = eb.to("cuda")
+        assert eb.counts.device.type == "cuda"
+        assert eb.w.device.type == "cuda"
+        a = _obs(0).to("cuda")
+        _ = float(eb.bonus(a).reshape(-1)[0])  # must not raise
+        eb.update(a)
 
     def test_state_dict_roundtrip(self) -> None:
         eb = ExplorationBonus((16, 16, 3), capacity=1024, coef=0.2, grid=4)
@@ -58,7 +72,7 @@ class TestExplorationBonusProperties:
         sd = eb.state_dict()
         eb2 = ExplorationBonus((16, 16, 3), capacity=1024, coef=0.2, grid=4)
         eb2.load_state_dict(sd)
-        assert torch.equal(eb._counts, eb2._counts)
+        assert torch.equal(eb.counts, eb2.counts)
 
 
 class TestExplorationBonusBreaksDeadlock:
