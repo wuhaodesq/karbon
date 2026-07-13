@@ -258,6 +258,7 @@ class HybridActorCritic(nn.Module):
 
         self.policy_head = nn.Linear(d_model, num_actions)
         self.value_head = nn.Linear(d_model, 1)
+        self.obs_shape = tuple(obs_shape)
 
     def forward(
         self, obs_u8: torch.Tensor, return_hidden: bool = False,
@@ -2156,7 +2157,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         indices = torch.randperm(n, device=device)
         mb_size = max(1, n // ppo_minibatches)
         ppo_losses: dict[str, list[float]] = {"policy": [], "value": [], "entropy": [],
-                                               "kl": [], "clipfrac": []}
+                                               "kl": [], "clipfrac": [], "total": []}
         for _ in range(ppo_epochs):
             for start in range(0, n, mb_size):
                 mb_idx = indices[start:start + mb_size]
@@ -2183,6 +2184,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 ppo_losses["entropy"].append(float(entropy.item()))
                 ppo_losses["kl"].append(float(approx_kl.item()))
                 ppo_losses["clipfrac"].append(float(clipfrac.item()))
+                ppo_losses["total"].append(float(loss.item()))
 
         # --- Stage 1: off-policy value refresh from replay (small, extra grad) ---
         if (
@@ -2552,7 +2554,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 state.step,
                 summary["episodes"],
                 summary["mean_return"],
-                float(loss.item()),
+                float(np.mean(ppo_losses["total"])),
                 float(np.mean(ppo_losses["policy"])),
                 float(np.mean(ppo_losses["value"])),
                 float(np.mean(ppo_losses["entropy"])),

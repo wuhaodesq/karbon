@@ -164,6 +164,22 @@ All notable changes to this project are documented here.
   balance the reward term.
 - World-model training log now reports `rew=` (reward-loss) alongside recon/kl.
 
+### Fixed (Model growth obs_shape + PPO loss log consistency)
+
+- `ModelGrowerV2._create_larger_model()` hardcoded `obs_shape=(64,64,3)` when
+  building the grown `HybridActorCritic`. For any env whose real obs is not
+  64×64×3 (e.g. 4-channel / non-square), the grown encoder's first conv
+  `in_channels` would be wrong and silently corrupt the expanded network. Fix:
+  read the real shape from `model.obs_shape` (with `(64,64,3)` only as a
+  fallback). `HybridActorCritic` now also stores `self.obs_shape` at
+  construction (`train.py`), which additionally un-breaks
+  `imagination_trainer`'s `actor_critic.obs_shape` access.
+- PPO log line (`train.py:2551`) printed `loss=` from the **last** minibatch's
+  combined loss while `p=/v=/ent=/kl=/cf=` are means over all minibatches —
+  inconsistent. Now `ppo_losses["total"]` accumulates the combined loss every
+  minibatch and the log reports its mean.
+- Added `tests/test_model_growth_v2.py::TestGrowerV2ObsShapeCarryover` (1 test).
+
 ## [v1.1.0-stage7-cloud] - 2026-07-09
 
 ### Stage 7 COMPLETED - ALL 7 STAGES DONE

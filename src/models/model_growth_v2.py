@@ -239,7 +239,7 @@ class ModelGrowerV2(nn.Module):
 
         device = next(model.parameters()).device
         num_actions = model.policy_head.out_features if hasattr(model.policy_head, 'out_features') else 7
-        obs_shape = (64, 64, 3)  # default, should be configurable
+        obs_shape = getattr(model, "obs_shape", (64, 64, 3))  # P3: carry real obs shape
 
         new_model = HybridActorCritic(
             obs_shape=obs_shape,

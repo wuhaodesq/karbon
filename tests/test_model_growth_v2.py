@@ -21,6 +21,7 @@ from src.models.model_growth_v2 import (
     ModelGrowerV2,
     _carry_over_adam_momentum,
 )
+from src.train import HybridActorCritic
 
 
 class _TinyAC(nn.Module):
@@ -104,6 +105,24 @@ class TestGrowerV2MomentumCarryover:
         carried = b_state["state"][0].get("exp_avg")
         assert carried is not None
         assert torch.isfinite(carried).all()
+
+
+class TestGrowerV2ObsShapeCarryover:
+    def test_created_model_keeps_real_obs_shape(self) -> None:
+        """_create_larger_model must use the *real* observation shape from the
+        source model, not a hardcoded (64,64,3). A mismatch (e.g. a
+        4-channel or non-square obs) would build an encoder whose first conv
+        in_channels is wrong and silently corrupt the grown network."""
+        torch.manual_seed(0)
+        obs_shape = (64, 48, 4)  # deliberately not 64x64x3
+        model = HybridActorCritic(
+            obs_shape=obs_shape, num_actions=8, d_model=32, n_layers=2,
+        )
+        assert model.obs_shape == obs_shape
+
+        grower = ModelGrowerV2(d_model=32, n_heads=4, config=GrowthConfigV2())
+        grown = grower._create_larger_model(model, new_n_layers=3)
+        assert grown.obs_shape == obs_shape
 
 
 if __name__ == "__main__":
