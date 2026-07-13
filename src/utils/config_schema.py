@@ -172,6 +172,9 @@ class TopLevelSchema:
     cognitive: dict | None = None
     language: dict | None = None
     advanced: dict | None = None
+    # Count-based exploration bonus (3D deadlock guard). Top-level so
+    # enabling it does NOT switch on RND / change curiosity mode.
+    exploration_bonus: dict | None = None
 
     def _validate(self) -> None:
         if not self.preset:
