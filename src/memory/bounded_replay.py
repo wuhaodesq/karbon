@@ -118,10 +118,10 @@ class HotRingTier:
 
         self.obs[self._ptr] = torch.from_numpy(tr.obs).to(self._device)
         self.next_obs[self._ptr] = torch.from_numpy(tr.next_obs).to(self._device)
-        self.action[self._ptr] = tr.action
-        self.reward[self._ptr] = tr.reward
+        self.action[self._ptr] = int(tr.action)
+        self.reward[self._ptr] = float(tr.reward)
         self.done[self._ptr] = float(tr.done)
-        self.priority[self._ptr] = tr.priority
+        self.priority[self._ptr] = float(tr.priority)
 
         self._ptr = (self._ptr + 1) % self._capacity
         self._size = min(self._size + 1, self._capacity)
