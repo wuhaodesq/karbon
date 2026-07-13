@@ -1655,8 +1655,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     last_coverage_log_step = 0
 
     # ---- Main loop
-    _prof_env = 0.0
-    _prof_total = 0.0
+    _prof_env = _prof_model = _prof_cog = _prof_buf = _prof_total = 0.0
     _prof_n = 0
     while state.step < total_steps:
         buffer.clear()
@@ -1666,6 +1665,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             t0 = time.perf_counter()
             obs_t = _obs_to_tensor(obs, device)
             with torch.no_grad():
+                t_model = time.perf_counter()
                 if _collect_cognitive:
                     logits, value, hidden = model(obs_t, return_hidden=True)
                 else:
@@ -1673,6 +1673,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 dist = torch.distributions.Categorical(logits=logits)
                 action = dist.sample()
                 logprob = dist.log_prob(action)
+            t_model_end = time.perf_counter()
 
             # --- Phase 0: collect slot output for number sense + rule predicates ---
             slot_states_for_step: torch.Tensor | None = None
@@ -1687,6 +1688,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             step_out = env.step(int(action.item()))
             ta = time.perf_counter()
             extrinsic_r = step_out.reward
+            t_cog = time.perf_counter()
             total_r = extrinsic_r
 
             # --- Collect hidden state for cognitive modules ---
@@ -1861,6 +1863,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 total_r = total_r + eb
                 expl_bonus.update(obs_t)
 
+            t_cog_end = time.perf_counter()
+            t_buf = time.perf_counter()
             buffer.add(
                 obs=obs,
                 action=int(action.item()),
@@ -1869,6 +1873,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 reward=total_r,
                 done=step_out.terminated or step_out.truncated,
             )
+            t_buf_end = time.perf_counter()
 
             # --- Stage 1: coverage tracking ---
             if coverage is not None:
@@ -1895,16 +1900,29 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             # --- lightweight per-step profiler (cloud bottleneck diagnosis) ---
             tb = time.perf_counter()
             _prof_env += (ta - te)
+            _prof_model += (t_model_end - t_model)
+            _prof_cog += (t_cog_end - t_cog)
+            _prof_buf += (t_buf_end - t_buf)
             _prof_total += (tb - t0)
             _prof_n += 1
             if _prof_n >= 1000:
-                _pe = 1000.0 * _prof_env / _prof_n
-                _pt = 1000.0 * _prof_total / _prof_n
+                _n = max(_prof_n, 1)
+                _pt = 1000.0 * _prof_total / _n
+                _pe = 1000.0 * _prof_env / _n
+                _pm = 1000.0 * _prof_model / _n
+                _pc = 1000.0 * _prof_cog / _n
+                _pb = 1000.0 * _prof_buf / _n
+                _po = _pt - _pe - _pm - _pc - _pb
                 logger.info(
-                    "PROF per_step=%.1fms env=%.1fms(%.0f%%) non_env=%.1fms",
-                    _pt, _pe, 100.0 * _pe / max(_pt, 1e-9), _pt - _pe,
+                    "PROF per_step=%.1fms env=%.1f(%.0f%%) model=%.1f(%.0f%%) cog=%.1f(%.0f%%) buf=%.1f(%.0f%%) other=%.1f(%.0f%%)",
+                    _pt,
+                    _pe, 100.0 * _pe / max(_pt, 1e-9),
+                    _pm, 100.0 * _pm / max(_pt, 1e-9),
+                    _pc, 100.0 * _pc / max(_pt, 1e-9),
+                    _pb, 100.0 * _pb / max(_pt, 1e-9),
+                    _po, 100.0 * _po / max(_pt, 1e-9),
                 )
-                _prof_env = _prof_total = 0.0
+                _prof_env = _prof_model = _prof_cog = _prof_buf = _prof_total = 0.0
                 _prof_n = 0
 
             watcher.tick(step=state.step)
