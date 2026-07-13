@@ -5,6 +5,36 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Added (Stage-2 N-env vectorization — throughput)
+
+- **N parallel 3D homes via `src/envs/vec_three_d_world.py`** (`VecEnv` generic
+  serial wrapper + `VecThreeDWorld`, each sub-env seeded `base+ i`). One
+  `env.step` returns a batched `VecStep` (obs `(N,H,W,C)`, reward/terminated/
+  truncated `(N,)`); auto-resets each sub-env on its own `done`.
+- **Batched actor-critic rollout.** The single `model(obs_t)` forward now takes
+  `(N,3,H,W)` and returns `(N, A)` logits / `(N,)` value; `dist` is sampled
+  for all envs at once. World-model curiosity + intention + count-based
+  `expl_bonus` are batched too, so the GPU forward cost grows sub-linearly
+  with `N` while env-steps/iter rise ~`N×`.
+- **`RolloutBuffer` now stores `(T, N, *obs)`** and `as_batch()` flattens to
+  `(T*N, *obs)`. `compute_gae_vec(rewards,values,dones,last_values,...)`
+  computes GAE independently per env column in pure-tensor form (no `.item()`
+  syncs) and is flattened for the PPO update.
+- `phase1_infant_home.yaml` now sets `env.num_envs: 8`.
+- `tests/test_vec_env.py` (CPU, no mujoco) covers VecEnv shapes/auto-reset,
+  `(T,N)` buffer layout + flatten, and per-column parity of `compute_gae_vec`
+  vs the scalar `compute_gae`.
+
+### Known limitation (first cut)
+
+- Single-env-only cognitive blocks (homeostatic drives, emotion, number-sense /
+  rule predicates, knowledge-gap, concept-graph, memory, creativity, LLM fusion,
+  RND, skills/symbolic/reflection episode hooks, causal intervention, cross-modal
+  bridge) are guarded with `n_envs == 1` and **skipped** when `N>1`. The
+  batched hot path (actor-critic + WM curiosity + intention + expl-bonus + replay
+  + PPO + imagination + growth) still runs under `N=8`. Set `env.num_envs: 1`
+  to recover full single-env module coverage.
+
 ### Fixed (Marginal Gains integration — name collision & dead code)
 
 - **Removed duplicate `KnowledgeGapDetector` from `src/models/marginal_gains.py`.**

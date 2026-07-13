@@ -301,16 +301,28 @@ class RolloutBuffer:
     """Fixed-capacity on-policy rollout buffer.
 
     有界容量（Axiom 1）：构造时声明 capacity，任何时候 ``len(self) <= capacity``。
+
+    Vectorization (Stage-2): stores ``(capacity, n_envs, *obs_shape)``
+    transitions — each collected timestep holds ``n_envs`` independent
+    env-steps. Capacity is in *timesteps* (T), so a rollout holds
+    ``T * n_envs`` total transitions. ``as_batch`` flattens to
+    ``(T*n_envs, *obs_shape)`` so the PPO update is unchanged.
     """
 
-    def __init__(self, capacity: int, obs_shape: tuple[int, ...], device: torch.device) -> None:
+    def __init__(
+        self, capacity: int, obs_shape: tuple[int, ...], device: torch.device,
+        n_envs: int = 1,
+    ) -> None:
         self._capacity = int(capacity)
-        self.obs = torch.zeros((capacity, *obs_shape), dtype=torch.uint8, device=device)
-        self.actions = torch.zeros(capacity, dtype=torch.long, device=device)
-        self.logprobs = torch.zeros(capacity, dtype=torch.float32, device=device)
-        self.values = torch.zeros(capacity, dtype=torch.float32, device=device)
-        self.rewards = torch.zeros(capacity, dtype=torch.float32, device=device)
-        self.dones = torch.zeros(capacity, dtype=torch.float32, device=device)
+        self.n_envs = int(n_envs)
+        self.obs = torch.zeros(
+            (capacity, self.n_envs, *obs_shape), dtype=torch.uint8, device=device
+        )
+        self.actions = torch.zeros((capacity, self.n_envs), dtype=torch.long, device=device)
+        self.logprobs = torch.zeros((capacity, self.n_envs), dtype=torch.float32, device=device)
+        self.values = torch.zeros((capacity, self.n_envs), dtype=torch.float32, device=device)
+        self.rewards = torch.zeros((capacity, self.n_envs), dtype=torch.float32, device=device)
+        self.dones = torch.zeros((capacity, self.n_envs), dtype=torch.float32, device=device)
         self._ptr = 0
 
     @property
@@ -329,31 +341,38 @@ class RolloutBuffer:
     def add(
         self,
         obs: np.ndarray,
-        action: int,
-        logprob: float,
-        value: float,
-        reward: float,
-        done: bool,
+        action: np.ndarray,
+        logprob: np.ndarray,
+        value: np.ndarray,
+        reward: np.ndarray,
+        done: np.ndarray,
     ) -> None:
+        """Add ``n_envs`` transitions for one collected timestep.
+
+        Shapes: ``obs`` (n_envs, *obs_shape) uint8; the rest (n_envs,).
+        """
         if self._ptr >= self._capacity:
             raise IndexError("RolloutBuffer full (Axiom 1: no unbounded growth)")
         i = self._ptr
-        self.obs[i] = torch.from_numpy(obs)
-        self.actions[i] = action
-        self.logprobs[i] = logprob
-        self.values[i] = value
-        self.rewards[i] = reward
-        self.dones[i] = float(done)
+        self.obs[i] = torch.from_numpy(np.asarray(obs))
+        self.actions[i] = torch.as_tensor(np.asarray(action)).to(self.actions.dtype)
+        self.logprobs[i] = torch.as_tensor(np.asarray(logprob)).to(self.logprobs.dtype)
+        self.values[i] = torch.as_tensor(np.asarray(value)).to(self.values.dtype)
+        self.rewards[i] = torch.as_tensor(np.asarray(reward)).to(self.rewards.dtype)
+        self.dones[i] = torch.as_tensor(np.asarray(done)).to(self.dones.dtype)
         self._ptr += 1
 
     def as_batch(self) -> TransitionBatch:
+        T = self._ptr
+        N = self.n_envs
+        obs_shape = self.obs.shape[2:]
         return TransitionBatch(
-            obs=self.obs[: self._ptr],
-            actions=self.actions[: self._ptr],
-            logprobs=self.logprobs[: self._ptr],
-            values=self.values[: self._ptr],
-            rewards=self.rewards[: self._ptr],
-            dones=self.dones[: self._ptr],
+            obs=self.obs[:T].reshape(T * N, *obs_shape),
+            actions=self.actions[:T].reshape(T * N),
+            logprobs=self.logprobs[:T].reshape(T * N),
+            values=self.values[:T].reshape(T * N),
+            rewards=self.rewards[:T].reshape(T * N),
+            dones=self.dones[:T].reshape(T * N),
         )
 
 
@@ -455,6 +474,33 @@ def compute_gae(
     return advantages, returns
 
 
+def compute_gae_vec(
+    rewards: torch.Tensor,
+    values: torch.Tensor,
+    dones: torch.Tensor,
+    last_values: torch.Tensor,
+    gamma: float,
+    lam: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Vectorized GAE over N envs. Inputs ``(T, N)``; returns ``(T, N)``.
+
+    Computes GAE independently per env column (no cross-env
+    bootstrapping) and is pure-tensor (no ``.item()`` syncs),
+    which also removes a per-step CUDA-sync bottleneck.
+    """
+    T, N = rewards.shape
+    advantages = torch.zeros_like(rewards)
+    gae = torch.zeros(N, dtype=rewards.dtype, device=rewards.device)
+    for t in reversed(range(T)):
+        next_values = last_values if t == T - 1 else values[t + 1]          # (N,)
+        next_non_terminal = (~dones[t]).float()                               # (N,)
+        delta = rewards[t] + gamma * next_values * next_non_terminal - values[t]  # (N,)
+        gae = delta + gamma * lam * next_non_terminal * gae                    # (N,)
+        advantages[t] = gae
+    returns = advantages + values
+    return advantages, returns
+
+
 # =====================================================================
 # Trainer
 # =====================================================================
@@ -520,7 +566,10 @@ class TrainState:
 
 
 def _obs_to_tensor(obs: np.ndarray, device: torch.device) -> torch.Tensor:
-    return torch.from_numpy(obs).unsqueeze(0).to(device)
+    t = torch.from_numpy(np.asarray(obs))
+    if t.dim() == 3:
+        t = t.unsqueeze(0)
+    return t.to(device)
 
 
 def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
@@ -536,6 +585,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # --- Env
     env_cfg = config["env"]
     env_id = str(env_cfg.get("id", "MiniGrid-Empty-5x5-v0"))
+    n_envs = 1
     if env_id == "PhysicsSandbox":
         from src.envs.physics_sandbox import PhysicsSandbox
         env = PhysicsSandbox(
@@ -558,15 +608,21 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         logger.info("Env: SocialTeacherWrapper (2D physics + teacher, %d objects)", env_cfg.get("num_objects", 3))
     elif env_id == "ThreeDWorld":
         from src.envs.three_d_world import ThreeDWorld
-        env = ThreeDWorld(
+        from src.envs.vec_three_d_world import VecThreeDWorld
+        _kw = dict(
             num_objects=int(env_cfg.get("num_objects", 100)),
-            seed=42,
             max_episode_steps=env_cfg.get("max_episode_steps", 500),
             render_size=int(env_cfg.get("render_size", 256)),
             action_force=float(env_cfg.get("action_force", 2.0)),
             developmental_age=float(env_cfg.get("developmental_age", 0.0)),
         )
-        logger.info("Env: ThreeDWorld (3D home, %d objects)", env_cfg.get("num_objects", 100))
+        n_envs = int(env_cfg.get("num_envs", 1))
+        if n_envs > 1:
+            env = VecThreeDWorld(n_envs=n_envs, **_kw)
+            logger.info("Env: VecThreeDWorld x%d (3D home, %d objects)", n_envs, _kw["num_objects"])
+        else:
+            env = ThreeDWorld(seed=42, **_kw)
+            logger.info("Env: ThreeDWorld (3D home, %d objects)", _kw["num_objects"])
     elif env_id == "ExtendedThreeDWorld":
         from src.envs.extended_3d_world import ExtendedThreeDWorld
         env = ExtendedThreeDWorld(
@@ -590,6 +646,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     obs = env.reset()
     obs_shape = env.observation_shape
     num_actions = env.action_space_n
+    if int(env_cfg.get("num_envs", 1)) > 1 and n_envs == 1:
+        logger.warning("n_envs>1 only supported for ThreeDWorld; falling back to 1")
 
     # --- Model
     model_cfg = config["model"]
@@ -633,7 +691,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
 
     # --- Bounded rollout buffer (declared capacity)
     rollout_capacity = 128 if smoke_only else 512
-    buffer = RolloutBuffer(rollout_capacity, obs_shape, device=device)
+    buffer = RolloutBuffer(rollout_capacity, obs_shape, device=device, n_envs=n_envs)
 
     # --- Health check
     health = HealthChecker(strict=True)
@@ -1665,21 +1723,22 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         # Collect a rollout of exactly `rollout_capacity` steps
         while not buffer.full():
             t0 = time.perf_counter()
-            obs_t = _obs_to_tensor(obs, device)
+            obs_t = _obs_to_tensor(obs, device)  # (N,3,H,W) for vec; (1,3,H,W) single
             with torch.no_grad():
                 t_model = time.perf_counter()
-                if _collect_cognitive:
+                if _collect_cognitive and n_envs == 1:
                     logits, value, hidden = model(obs_t, return_hidden=True)
                 else:
-                    logits, value = model(obs_t)
+                    logits, value = model(obs_t)  # value: (N,)
                 dist = torch.distributions.Categorical(logits=logits)
-                action = dist.sample()
-                logprob = dist.log_prob(action)
+                action = dist.sample()              # (N,)
+                logprob = dist.log_prob(action)     # (N,)
             t_model_end = time.perf_counter()
 
-            # --- Phase 0: collect slot output for number sense + rule predicates ---
+            # --- Phase 0: collect slot output for number sense + rule predicates
+            # (single-env only; per-env predicate buffers are not maintained for vec) ---
             slot_states_for_step: torch.Tensor | None = None
-            if (number_sense is not None or rule_engine is not None) and model.use_slots:
+            if (number_sense is not None or rule_engine is not None) and model.use_slots and n_envs == 1:
                 with torch.no_grad():
                     slot_states_for_step = model._last_slots.squeeze(0)  # (num_slots, d_model)
                 if rule_engine is not None:
@@ -1687,14 +1746,17 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     episode_predicates.append(preds)
 
             te = time.perf_counter()
-            step_out = env.step(int(action.item()))
+            a_np = action.cpu().numpy()
+            step_out = env.step(a_np if n_envs > 1 else int(a_np.item()))
             ta = time.perf_counter()
-            extrinsic_r = step_out.reward
+            done_arr = np.asarray(step_out.terminated) | np.asarray(step_out.truncated)
+            extrinsic_r = np.asarray(step_out.reward, dtype=np.float32)  # (N,) or scalar
+            int_r = np.zeros(n_envs, dtype=np.float32)
             t_cog = time.perf_counter()
-            total_r = extrinsic_r
+            total_r = extrinsic_r.copy()  # (N,) per-env reward accumulator
 
-            # --- Collect hidden state for cognitive modules ---
-            if _collect_cognitive:
+            # --- Collect hidden state for cognitive modules (single-env only) ---
+            if _collect_cognitive and n_envs == 1:
                 rollout_hidden_states.append(
                     hidden.squeeze(0).detach().cpu()
                     if hidden.dim() == 2 else hidden.detach().cpu()
@@ -1707,7 +1769,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 })
 
             # --- Homeostatic drives: compute intrinsic motivation ---
-            if homeostatic_drives is not None:
+            if homeostatic_drives is not None and n_envs == 1:
                 try:
                     success = extrinsic_r > 0.5
                     danger = 0.0
@@ -1730,7 +1792,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     pass
 
             # --- Emotion system: update from experience ---
-            if emotion_system is not None:
+            if emotion_system is not None and n_envs == 1:
                 try:
                     emotion_system.update(
                         reward=float(extrinsic_r),
@@ -1741,15 +1803,15 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     )
                 except Exception:
                     pass
-            int_r = 0.0
             if curiosity_mode == "rssm_uncertainty" and wm is not None:
                 with torch.no_grad():
-                    obs_flat = obs_t.float().reshape(1, -1) / 255.0
-                    wm_state = wm.initial_state(1, device)
-                    dummy_action = F.one_hot(action, num_actions).float().unsqueeze(0)
+                    B = obs_t.shape[0]
+                    obs_flat = obs_t.float().reshape(B, -1) / 255.0
+                    wm_state = wm.initial_state(B, device)
+                    dummy_action = F.one_hot(action, num_actions).float()  # (B, A)
                     wm_state, _ = wm.imagine_step(wm_state, dummy_action)
                     pred_obs = wm.decode(wm_state)
-                    int_r = float(F.mse_loss(pred_obs, obs_flat).item())
+                    int_r = F.mse_loss(pred_obs, obs_flat, reduction="none").mean(dim=-1).detach().cpu().numpy()  # (B,)
                 intrinsic_coef = curiosity_coef
                 total_r = extrinsic_r + intrinsic_coef * int_r
 
@@ -1758,21 +1820,23 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     and intention_curiosity.is_active()):
                 try:
                     with torch.no_grad():
-                        obs_flat = obs_t.float().reshape(1, -1) / 255.0
-                        wm_state = wm.initial_state(1, device)
-                        action_onehot = F.one_hot(action, num_actions).float().unsqueeze(0)
+                        B = obs_t.shape[0]
+                        obs_flat = obs_t.float().reshape(B, -1) / 255.0
+                        wm_state = wm.initial_state(B, device)
+                        action_onehot = F.one_hot(action, num_actions).float()  # (B, A)
                         intent_r = intention_curiosity.intention_reward(
                             wm, wm_state, action_onehot, obs_flat,
                         )
-                        int_r = max(int_r, float(intent_r.item()))
+                        intent_r = np.asarray(intent_r).reshape(B)
+                        int_r = np.maximum(int_r, intent_r)
                         total_r = extrinsic_r + curiosity_coef * int_r
                     intention_curiosity.step()
                 except Exception:
                     pass
 
-            # --- Phase 1+: knowledge gap boost on curiosity ---
+            # --- Phase 1+: knowledge gap boost on curiosity (single-env only) ---
             if (knowledge_gap is not None and model.use_slots
-                    and int_r > 0):
+                    and n_envs == 1 and float(int_r) > 0):
                 try:
                     with torch.no_grad():
                         slot_out = model.encoder(obs_t).squeeze(0)
@@ -1781,8 +1845,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 except Exception:
                     pass
 
-            # --- Concept graph: bind cross-modal observations ---
-            if concept_graph is not None and model.use_slots and state.step % 100 == 0:
+            # --- Concept graph: bind cross-modal observations (single-env only) ---
+            if concept_graph is not None and model.use_slots and n_envs == 1 and state.step % 100 == 0:
                 try:
                     with torch.no_grad():
                         slot_out = model.encoder(obs_t).squeeze(0)
@@ -1797,7 +1861,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         concept_graph.bind_cross_modal(modality_data, step=state.step)
                 except Exception:
                     pass
-            if memory_manager is not None:
+            if memory_manager is not None and n_envs == 1:
                 try:
                     surprise_val = int_r if curiosity_mode != "none" else 0.0
                     current_ep = env.summary().get("episodes", 0)
@@ -1822,8 +1886,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 except Exception:
                     pass
 
-            # --- Phase 0: creativity reward ---
-            if creativity_orch is not None and creativity_orch.should_trigger(state.step):
+            # --- Phase 0: creativity reward (single-env only) ---
+            if creativity_orch is not None and creativity_orch.should_trigger(state.step) and n_envs == 1:
                 try:
                     slot_input = model.encoder(obs_t).squeeze(0) if model.use_slots else None
                     wm_state = wm.initial_state(1, device) if wm is not None else None
@@ -1841,15 +1905,15 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 except Exception:
                     pass
 
-            # --- Phase 9: LLM scene description + policy modulation ---
-            if llm_fusion is not None and llm_fusion.is_available and model.use_slots:
+            # --- Phase 9: LLM scene description + policy modulation (single-env only) ---
+            if llm_fusion is not None and llm_fusion.is_available and model.use_slots and n_envs == 1:
                 with torch.no_grad():
                     slot_out = model.encoder(obs_t)
                     # Get scene description (cached, not called every step)
                     _scene_desc = llm_fusion.describe_scene(slot_out)
                     # Modulate policy with LLM reasoning
                     logits = llm_fusion.modulate_policy(slot_out, logits)
-            elif rnd is not None:
+            elif rnd is not None and n_envs == 1:
                 with torch.no_grad():
                     int_r = float(rnd.intrinsic_reward(obs_t).item())
                 total_r = extrinsic_r + intrinsic_coef * int_r
@@ -1861,7 +1925,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             # so the value head cannot fit it away -> advantages keep a
             # residual signal.
             if expl_bonus is not None:
-                eb = float(expl_bonus.bonus(obs_t).reshape(-1)[0])
+                eb = expl_bonus.bonus(obs_t).reshape(-1).detach().cpu().numpy()  # (B,)
                 total_r = total_r + eb
                 expl_bonus.update(obs_t)
 
@@ -1869,11 +1933,11 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             t_buf = time.perf_counter()
             buffer.add(
                 obs=obs,
-                action=int(action.item()),
-                logprob=float(logprob.item()),
-                value=float(value.item()),
+                action=a_np,
+                logprob=logprob.cpu().numpy(),
+                value=value.cpu().numpy(),
                 reward=total_r,
-                done=step_out.terminated or step_out.truncated,
+                done=done_arr,
             )
             t_buf_end = time.perf_counter()
 
@@ -1883,21 +1947,36 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
 
             # --- Stage 1: push transition to bounded replay ---
             if replay is not None:
-                replay.add(Transition(
-                    obs=obs,
-                    action=int(action.item()),
-                    reward=total_r,
-                    next_obs=step_out.obs,
-                    done=step_out.terminated or step_out.truncated,
-                    priority=1.0 + abs(int_r) if (rnd is not None or curiosity_mode != "none") else 1.0,
-                ))
+                if obs.ndim == 4:  # vectorized env
+                    so = np.asarray(step_out.obs)
+                    tr = total_r if isinstance(total_r, np.ndarray) else np.full(n_envs, float(total_r), dtype=np.float32)
+                    for i in range(n_envs):
+                        replay.add(Transition(
+                            obs=obs[i],
+                            action=int(a_np[i]),
+                            reward=float(tr[i]),
+                            next_obs=so[i],
+                            done=bool(done_arr[i]),
+                            priority=1.0 + abs(int_r[i]) if (rnd is not None or curiosity_mode != "none") else 1.0,
+                        ))
+                else:
+                    total_r_s = float(np.asarray(total_r).reshape(-1)[0])
+                    int_r_s = float(np.asarray(int_r).reshape(-1)[0])
+                    replay.add(Transition(
+                        obs=obs,
+                        action=int(action.item()),
+                        reward=total_r_s,
+                        next_obs=step_out.obs,
+                        done=bool(done_arr),
+                        priority=1.0 + abs(int_r_s) if (rnd is not None or curiosity_mode != "none") else 1.0,
+                    ))
 
             # --- Stage 1: RND predictor SGD ---
-            if rnd is not None and rnd_update_every > 0 and state.step % rnd_update_every == 0:
+            if rnd is not None and rnd_update_every > 0 and state.step % rnd_update_every == 0 and n_envs == 1:
                 rnd.update(obs_t)
 
             obs = step_out.obs
-            state.step += 1
+            state.step += n_envs
 
             # --- lightweight per-step profiler (cloud bottleneck diagnosis) ---
             tb = time.perf_counter()
@@ -1930,7 +2009,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             watcher.tick(step=state.step)
 
             # --- Stage 4: extract skill on successful episode end ---
-            if skills is not None and (step_out.terminated or step_out.truncated):
+            if skills is not None and n_envs == 1 and (step_out.terminated or step_out.truncated):
                 ep_ret = env.summary().get("last_return", 0.0)
                 if ep_ret > 0.3:
                     skill = skills.new_skill(
@@ -2204,27 +2283,25 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 break
 
         batch = buffer.as_batch()
-        # Estimate last value for GAE
+        # Estimate last value per-env for GAE (vectorized over N envs)
         with torch.no_grad():
             _, last_value_t = model(_obs_to_tensor(obs, device))
-            # P1: the value head is trained on normalized returns (returns_norm
-            # below), so batch.values and last_value_t are in normalized scale.
-            # Denormalize back to raw reward scale before GAE, otherwise GAE
-            # mixes raw rewards with normalized values -> scale-mismatched,
-            # meaningless advantages. (This is the "Denormalizes predicted
-            # values before GAE" step promised by ReturnNormalizer's docstring.)
-            values_raw = reward_ema.denormalize(batch.values)
-            last_value_raw = float(reward_ema.denormalize(last_value_t).item())
-        advantages, returns = compute_gae(
-            batch.rewards.cpu(),
+            # P1: value head trained on normalized returns; denormalize
+            # back to raw reward scale before GAE (see ReturnNormalizer).
+            T = buffer._ptr
+            N = buffer.n_envs
+            values_raw = reward_ema.denormalize(batch.values).reshape(T, N)
+            last_value_raw = reward_ema.denormalize(last_value_t).reshape(N)
+        advantages2d, returns2d = compute_gae_vec(
+            buffer.rewards[:T].cpu(),
             values_raw.cpu(),
-            batch.dones.cpu(),
-            last_value_raw,
+            buffer.dones[:T].cpu(),
+            last_value_raw.cpu(),
             gamma,
             gae_lambda,
         )
-        advantages = advantages.to(device)
-        returns = returns.to(device)
+        advantages = advantages2d.reshape(-1).to(device)
+        returns = returns2d.reshape(-1).to(device)
         # P1: update EMA on RAW returns, then produce normalized value target.
         reward_ema.update(returns)
         returns_norm = reward_ema.normalize(returns)
@@ -2427,6 +2504,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
 
         # --- Phase 0: cross-modal bridge training ---
         if (xmodal_manager is not None and hasattr(env, '_agent')
+                and n_envs == 1
                 and state.step - xmodal_last_train >= xmodal_train_every):
             try:
                 prop = torch.tensor(env._agent.proprio if hasattr(env._agent, 'proprio')

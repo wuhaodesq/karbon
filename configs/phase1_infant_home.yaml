@@ -36,6 +36,7 @@ model:
 
 env:
   id: "ThreeDWorld"
+  num_envs: 8            # Stage-2 vectorization: N=8 homes, 1 batched forward
   num_objects: 30
   max_episode_steps: 500
   render_size: 64
