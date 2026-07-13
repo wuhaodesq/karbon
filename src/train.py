@@ -1525,6 +1525,11 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 optimizer.load_state_dict(payload["optim_state"])
             except (ValueError, RuntimeError) as exc:
                 logger.warning("Optimizer state mismatch on resume (%s); starting fresh.", exc)
+        # TODO(Phase5+): restore extra states (RND, EWC Fisher, coverage, skills,
+        # WM, imagination, symbolic, etc. — ~40 keys) for homogeneous resume.
+        # Currently ~40 extra keys are written (lines ~2680-2740) but never read
+        # back. This is safe for cross-stage resume (architecture changes → fresh
+        # modules) but needed for long-running homogeneous Phases (Phase 5+).
         resumed_stage = int(payload.get("stage", stage))
         resumed_step = int(payload.get("step", 0))
         if resumed_stage == stage:
