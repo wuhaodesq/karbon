@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -124,9 +125,10 @@ class ActorCritic(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(16, 32, 3, padding=1),
             nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((8, 8)),   # P1: down-sample -> fixed spatial dim
             nn.Flatten(),
         )
-        flat_dim = 32 * h * w
+        flat_dim = 32 * 8 * 8  # was 32*h*w (e.g. 2M @256px -> GB-scale Linear)
         self.trunk = nn.Sequential(
             nn.Linear(flat_dim, hidden),
             nn.ReLU(inplace=True),
@@ -219,8 +221,9 @@ class HybridActorCritic(nn.Module):
                     nn.ReLU(inplace=True),
                     nn.Conv2d(16, 32, 3, padding=1),
                     nn.ReLU(inplace=True),
+                    nn.AdaptiveAvgPool2d((8, 8)),   # P1: fixed spatial dim
                     nn.Flatten(),
-                    nn.Linear(32 * h * w, d_model),
+                    nn.Linear(32 * 8 * 8, d_model),
                     nn.ReLU(inplace=True),
                 )
                 self.use_vision = False
@@ -232,8 +235,9 @@ class HybridActorCritic(nn.Module):
                 nn.ReLU(inplace=True),
                 nn.Conv2d(16, 32, 3, padding=1),
                 nn.ReLU(inplace=True),
+                nn.AdaptiveAvgPool2d((8, 8)),   # P1: fixed spatial dim
                 nn.Flatten(),
-                nn.Linear(32 * h * w, d_model),
+                nn.Linear(32 * 8 * 8, d_model),
                 nn.ReLU(inplace=True),
             )
 
@@ -452,7 +456,6 @@ def compute_gae(
 # =====================================================================
 
 
-@dataclass
 class ReturnNormalizer:
     """EMA-based reward/return normalization (PopArt-lite).
 
@@ -478,6 +481,35 @@ class ReturnNormalizer:
         return values * (self.var ** 0.5 + 1e-8) + self.mean
 
 
+def _normalize_advantages(
+    advantages: torch.Tensor, zero_var_eps: float = 1e-7
+) -> torch.Tensor:
+    """Standardize advantages to ~N(0, 1) with a zero-variance guard.
+
+    When advantages have (near-)zero variance — e.g., the 3D-deadlock case
+    where every episode earns essentially the same tiny reward — dividing by
+    ``std + 1e-8`` can amplify float noise into a spurious huge gradient.
+    The guard falls back to raw centered advantages (~0) in that case, so the
+    policy update becomes a safe no-op instead of a noise-driven one.
+
+    Note: this does NOT create learning signal where none exists; if rewards
+    are truly constant across the batch, the policy cannot improve from this
+    batch. The upstream fix is reward variance (intrinsic curiosity that does
+    not decay to zero, or reward-scale normalization before GAE).
+    """
+    if advantages.numel() < 2:
+        # torch.std of a <2-element tensor is NaN and warns; skip standardization.
+        return advantages - advantages.mean()
+    std = advantages.std()
+    std_val = float(std.item())
+    # `std_val` is NaN when the batch has <2 elements (torch semantics); treat
+    # that as the zero-variance case (fall back to raw centered advantages).
+    if not math.isfinite(std_val) or std_val < zero_var_eps:
+        return advantages - advantages.mean()
+    return (advantages - advantages.mean()) / (std + 1e-8)
+
+
+@dataclass
 class TrainState:
     step: int
     episode: int
@@ -2095,23 +2127,29 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         # Estimate last value for GAE
         with torch.no_grad():
             _, last_value_t = model(_obs_to_tensor(obs, device))
+            # P1: the value head is trained on normalized returns (returns_norm
+            # below), so batch.values and last_value_t are in normalized scale.
+            # Denormalize back to raw reward scale before GAE, otherwise GAE
+            # mixes raw rewards with normalized values -> scale-mismatched,
+            # meaningless advantages. (This is the "Denormalizes predicted
+            # values before GAE" step promised by ReturnNormalizer's docstring.)
+            values_raw = reward_ema.denormalize(batch.values)
+            last_value_raw = float(reward_ema.denormalize(last_value_t).item())
         advantages, returns = compute_gae(
             batch.rewards.cpu(),
-            batch.values.cpu(),
+            values_raw.cpu(),
             batch.dones.cpu(),
-            float(last_value_t.item()),
+            last_value_raw,
             gamma,
             gae_lambda,
         )
         advantages = advantages.to(device)
         returns = returns.to(device)
-        # P1: reward/return EMA normalization
+        # P1: update EMA on RAW returns, then produce normalized value target.
         reward_ema.update(returns)
         returns_norm = reward_ema.normalize(returns)
-        adv_norm = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-        # P0: zero-variance guard
-        if advantages.std() < 1e-7:
-            adv_norm = advantages - advantages.mean()
+        # P0: standardize advantages with zero-variance guard (see helper).
+        adv_norm = _normalize_advantages(advantages)
 
         # P2: mini-batch PPO — split rollout into shuffled minibatches
         n = batch.obs.shape[0]
@@ -2157,10 +2195,16 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     replay_batch_size, alpha=per_alpha
                 )
                 _, offp_values = model(sample["obs"])
-                # TD target with intrinsic-augmented reward + bootstrapped next value
+                # TD target with intrinsic-augmented reward + bootstrapped next value.
+                # Value head is trained on normalized returns, so offp_values /
+                # next_v are in normalized scale. Build TD target in RAW scale
+                # (denormalize next_v first), then re-normalize before the loss
+                # so both sides of the MSE are in the same (normalized) space.
                 with torch.no_grad():
                     _, next_v = model(sample["next_obs"])
-                    td_target = sample["reward"] + gamma * next_v * (1.0 - sample["done"])
+                    next_v_raw = reward_ema.denormalize(next_v)
+                    td_target_raw = sample["reward"] + gamma * next_v_raw * (1.0 - sample["done"])
+                    td_target = reward_ema.normalize(td_target_raw)
                 w = torch.as_tensor(weights, dtype=torch.float32, device=device)
                 td_loss = (w * (offp_values - td_target).pow(2)).mean()
                 optimizer.zero_grad(set_to_none=True)

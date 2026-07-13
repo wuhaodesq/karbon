@@ -97,7 +97,7 @@ causal_discovery:
 model_growth:
   enabled: true
   max_layers: 20
-  min_steps_between_growths: 100000
+  min_steps_between_growths: 500000
 
 cross_modal:
   enabled: true

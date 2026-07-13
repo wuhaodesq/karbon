@@ -131,9 +131,9 @@ causal_discovery:
 model_growth:
   enabled: true
   max_layers: 20
-  min_steps_between_growths: 100000
+  min_steps_between_growths: 500000
   grow_trigger_lp_threshold: 0.05
-  grow_trigger_coverage: 0.3
+  grow_trigger_coverage: 0.5
   distill_steps: 100
   distill_lr: 1.0e-3
 

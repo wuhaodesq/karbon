@@ -2,10 +2,10 @@
 # Continued from Phase 1. Non-structural upgrades only (safe to resume).
 #
 # Changes from Phase 0/1:
-#   - batch_size: 2048 (2× → more stable gradients)
-#   - parallel envs: 4 (4× → more diverse experience)
-#   - replay GPU: 8192 (2× → more on-device rehearsal)
-#   - skill GPU: 512 (2× → more hot skills)
+#   - batch_size: 2048 (2× �?more stable gradients)
+#   - parallel envs: 4 (4× �?more diverse experience)
+#   - replay GPU: 8192 (2× �?more on-device rehearsal)
+#   - skill GPU: 512 (2× �?more hot skills)
 #   - num_objects: 5 (more to count with NumberSense)
 #
 # Model structure unchanged: SlotAttention(7) + TTT-Hybrid(2 layers, 128 dim)
@@ -103,7 +103,7 @@ causal_discovery:
 model_growth:
   enabled: true
   max_layers: 20
-  min_steps_between_growths: 100000
+  min_steps_between_growths: 500000
 
 cross_modal:
   enabled: true

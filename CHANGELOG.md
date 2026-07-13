@@ -38,6 +38,77 @@ All notable changes to this project are documented here.
 - `train.py` log line still prints `mean_ret`; it now reads the bounded window,
   giving a truthful trend of recent episodes.
 
+### Fixed (PPO scale-mismatch — 3D "flat loss" root cause)
+
+- The `ReturnNormalizer` docstring promised: *"Denormalizes predicted values
+  before GAE advantage computation"* — but the code did not do it. The value
+  head is trained on `returns_norm` (normalized scale), so `batch.values` and
+  `last_value_t` are also in normalized scale. Feeding those directly into
+  `compute_gae` together with **raw** `batch.rewards` produced
+  scale-mismatched advantages that could not carry a policy signal — the real
+  driver of the 3D "flat loss / near-zero policy gradient" symptom.
+- Fix: denormalize `batch.values` and `last_value_t` back to raw scale before
+  `compute_gae` (`train.py:2117-2131`). The off-policy replay TD update
+  (`train.py:2187-2201`) had the same bug — the TD target is now built in
+  raw scale (`next_v` denormalized, raw reward added), then renormalized so
+  both sides of the MSE match.
+- Extracted advantage normalization into `_normalize_advantages()`
+  (`train.py:481-501`): standardizes to ~N(0,1) with a zero-variance guard
+  that falls back to raw centered advantages (handles constant-advantage 3D
+  case) and also handles NaN std from single-element batches (torch semantics).
+- Added `tests/test_ppo_normalization.py` (11 tests, passing) covering
+  `ReturnNormalizer` round-trip + EMA behavior, the zero-variance guard, and
+  an end-to-end GAE scale-consistency test that demonstrates the fix
+  (denormalize-then-GAE recovers the raw-scale advantages).
+- Added `tests/test_ppo_integration.py` (3 tests, passing) — proves the fix
+  at the *whole-PPO-step* level: with values denormalized before GAE, one PPO
+  gradient step actually moves the policy (`approx_kl != 0`, finite grads), and
+  higher-reward steps get higher advantages; plus a regression guard asserting
+  the OLD bug (normalized value-head output fed straight into GAE) distorts
+   advantages so the denormalize step can never be silently removed.
+
+### Fixed (Actor-Critic encoder — GB-scale Linear / 3D memory swing)
+
+- `ActorCritic` (`train.py:123-135`) and both `HybridActorCritic` CNN
+  encoder branches (`train.py:218-239`) flattened the **full** H×W
+  feature map and fed it to `nn.Linear(32*h*w, …)` with no
+  downsampling. At the 3D obs size (256×256) that is
+  `Linear(2_097_152, …)` ≈ **0.5–1 GB of weights + an equally
+  large gradient** allocated on every update — the source of the
+  `~2.57 GB` per-step memory swing seen in the dead 3D run.
+- Fix: insert `nn.AdaptiveAvgPool2d((8, 8))` before `Flatten()`
+  and size the Linear at the fixed `32*8*8 = 2048` features
+  (mirrors the already-fixed `RNDNet`, `src/intrinsic/rnd.py:98-102`).
+  The 3D per-step allocation drops from ~1 GB to a few MB.
+- Added `tests/test_actor_critic_encoder.py` (5 tests, passing) asserting
+  the trunk's first Linear takes `32*8*8` (not `32*h*w`), the encoder
+  has a downsample layer, and 256×256 / 64×64 inputs forward with
+  correct `(B, n_actions)` / `(B,)` shapes.
+
+### Fixed (Model growth was non-learning / wiped optimizer state)
+
+- `ModelGrowerV2.grow()` claimed to preserve Adam momentum for
+  matching parameters, but the copy guard `new_idx < len(new_state["state"])`
+  is **always false for a fresh optimizer** (empty `state` dict),
+  so the carry was a silent **no-op** — every growth wiped the
+  policy optimizer's accumulated momentum, re-setting learning. Real fix
+  in `_carry_over_adam_momentum()` (`src/models/model_growth_v2.py`):
+  create the entry on the fresh optimizer and copy `exp_avg` / `exp_avg_sq`
+  / `step` from the old one. (Caught by a unit test.)
+- Distillation now also preserves the teacher's **policy distribution**
+  via a KL term on the softmax logits (`model_growth_v2.py:_distill`),
+  so a grown model keeps the agent's learned action preferences
+  instead of resetting them; `distill_steps` raised 100 → 256.
+- Growth frequency made rarer so it stops disrupting the policy:
+  `min_steps_between_growths` 100_000 → 500_000 in
+  `phase0_protozoan.yaml`, `phase1_infant_home.yaml`,
+  `phase2_infant_exploration.yaml`, `phase9_llm_fusion.yaml`;
+  `grow_trigger_coverage` 0.3 → 0.5 in phase0/phase1 (growth
+  now requires broad exploration first).
+- Added `tests/test_model_growth_v2.py` (6 tests, passing): KL distill
+  moves the student's policy toward the teacher's, and the momentum
+  carry-over helper actually transfers Adam state to a fresh optimizer.
+
 ### Added (Phase 0+: 工程补缺口 A-G)
 
 - **Imagination Trainer** (`src/training/imagination_trainer.py`) — Dreamer-style

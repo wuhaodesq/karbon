@@ -43,10 +43,61 @@ class GrowthConfigV2:
     initial_layers: int = 2
     max_layers: int = 20
     min_steps_between_growths: int = 100_000
-    distill_steps: int = 100
+    distill_steps: int = 256
     distill_lr: float = 1e-3
     grow_trigger_lp_threshold: float = 0.05
     grow_trigger_coverage: float = 0.3
+
+
+def _carry_over_adam_momentum(
+    old_optimizer: "torch.optim.Optimizer",
+    new_optimizer: "torch.optim.Optimizer",
+    old_model: "nn.Module",
+    new_model: "nn.Module",
+) -> None:
+    """Preserve Adam momentum (exp_avg / exp_avg_sq / step) for every
+    parameter whose name matches between the old and new models.
+
+    Newly-added (non-matching) parameters — the randomly-initialized
+    growth layers — keep fresh optimizer slots and re-learn from scratch.
+    This is what stops growth from wiping the policy optimizer's accumulated
+    state (which would otherwise re-set learning after every expansion).
+    """
+    old_state = old_optimizer.state_dict()
+    new_state = new_optimizer.state_dict()
+    old_names = {
+        n: i
+        for i, (n, p) in enumerate(
+            (nm, p) for nm, p in old_model.named_parameters() if p.requires_grad
+        )
+    }
+    new_names = {
+        n: i
+        for i, (n, p) in enumerate(
+            (nm, p) for nm, p in new_model.named_parameters() if p.requires_grad
+        )
+    }
+    for name, old_idx in old_names.items():
+        if name not in new_names:
+            continue
+        new_idx = new_names[name]
+        for state_key in ("exp_avg", "exp_avg_sq", "step"):
+            # NOTE: do NOT gate on ``new_idx < len(new_state["state"])``.
+            # The new optimizer is fresh, so its ``state`` is empty; gating
+            # on its length (``new_idx < 0``) makes the copy a silent no-op
+            # — which is exactly why growth used to wipe the policy optimizer's
+            # accumulated momentum. We instead create the entry on the
+            # fresh optimizer and copy the old Adam slots into it.
+            if (
+                old_idx < len(old_state["state"])
+                and state_key in old_state["state"].get(old_idx, {})
+            ):
+                if new_idx not in new_state["state"]:
+                    new_state["state"][new_idx] = {}
+                new_state["state"][new_idx][state_key] = (
+                    old_state["state"][old_idx][state_key].clone()
+                )
+    new_optimizer.load_state_dict(new_state)
 
 
 class ModelGrowerV2(nn.Module):
@@ -161,29 +212,9 @@ class ModelGrowerV2(nn.Module):
             [p for p in new_model.parameters() if p.requires_grad],
             lr=optimizer.param_groups[0]['lr'],
         )
-        # P2: preserve old Adam momentum for matching parameters
-        # Build name→param map for old optimizer state
-        old_state = optimizer.state_dict()
-        new_state = new_optimizer.state_dict()
-        old_param_names = {k: i for i, (k, _) in enumerate(
-            zip([n for n, _ in model.named_parameters() if _[1].requires_grad],
-                [(n, p) for n, p in model.named_parameters() if p.requires_grad]))}
-        new_param_names = {k: i for i, (k, _) in enumerate(
-            zip([n for n, _ in new_model.named_parameters() if _[1].requires_grad],
-                [(n, p) for n, p in new_model.named_parameters() if p.requires_grad]))}
-        for name, old_idx in old_param_names.items():
-            if name in new_param_names:
-                new_idx = new_param_names[name]
-                for state_key in ['exp_avg', 'exp_avg_sq', 'step']:
-                    if (old_idx < len(old_state['state']) and
-                            new_idx < len(new_state['state']) and
-                            state_key in old_state['state'].get(old_idx, {})):
-                        if new_idx not in new_state['state']:
-                            new_state['state'][new_idx] = {}
-                        new_state['state'][new_idx][state_key] = (
-                            old_state['state'][old_idx][state_key].clone()
-                        )
-        new_optimizer.load_state_dict(new_state)
+        # P2: preserve old Adam momentum for matching parameters (so growth
+        # does not wipe the policy optimizer's accumulated state).
+        _carry_over_adam_momentum(optimizer, new_optimizer, model, new_model)
 
         self._current_layers = new_layers
         self._last_growth_step = step
@@ -268,7 +299,21 @@ class ModelGrowerV2(nn.Module):
                 t_logits, t_values = teacher(x)
             s_logits, s_values = student(x)
 
-            loss = F.mse_loss(s_logits, t_logits) + F.mse_loss(s_values, t_values)
+            # P2: preserve the teacher's POLICY distribution (KL on softmax),
+            # not just raw logit magnitude, so the grown model keeps the
+            # agent's learned action preferences instead of resetting them.
+            # This is what makes growth non-disruptive to an otherwise-stuck
+            # policy.
+            kl = F.kl_div(
+                F.log_softmax(s_logits, dim=-1),
+                F.softmax(t_logits, dim=-1),
+                reduction="batchmean",
+            )
+            loss = (
+                0.5 * F.mse_loss(s_logits, t_logits)
+                + 0.5 * F.mse_loss(s_values, t_values)
+                + 1.0 * kl
+            )
             opt.zero_grad()
             loss.backward()
             opt.step()
