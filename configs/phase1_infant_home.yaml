@@ -38,7 +38,7 @@ env:
   id: "ThreeDWorld"
   num_objects: 30
   max_episode_steps: 500
-  render_size: 128
+  render_size: 64
   action_force: 2.0
   developmental_age: 0.0
 

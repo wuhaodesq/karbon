@@ -1655,11 +1655,15 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     last_coverage_log_step = 0
 
     # ---- Main loop
+    _prof_env = 0.0
+    _prof_total = 0.0
+    _prof_n = 0
     while state.step < total_steps:
         buffer.clear()
 
         # Collect a rollout of exactly `rollout_capacity` steps
         while not buffer.full():
+            t0 = time.perf_counter()
             obs_t = _obs_to_tensor(obs, device)
             with torch.no_grad():
                 if _collect_cognitive:
@@ -1679,7 +1683,9 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     preds = rule_engine.extract_predicates(slot_states_for_step.unsqueeze(0))
                     episode_predicates.append(preds)
 
+            te = time.perf_counter()
             step_out = env.step(int(action.item()))
+            ta = time.perf_counter()
             extrinsic_r = step_out.reward
             total_r = extrinsic_r
 
@@ -1885,6 +1891,22 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
 
             obs = step_out.obs
             state.step += 1
+
+            # --- lightweight per-step profiler (cloud bottleneck diagnosis) ---
+            tb = time.perf_counter()
+            _prof_env += (ta - te)
+            _prof_total += (tb - t0)
+            _prof_n += 1
+            if _prof_n >= 1000:
+                _pe = 1000.0 * _prof_env / _prof_n
+                _pt = 1000.0 * _prof_total / _prof_n
+                logger.info(
+                    "PROF per_step=%.1fms env=%.1fms(%.0f%%) non_env=%.1fms",
+                    _pt, _pe, 100.0 * _pe / max(_pt, 1e-9), _pt - _pe,
+                )
+                _prof_env = _prof_total = 0.0
+                _prof_n = 0
+
             watcher.tick(step=state.step)
 
             # --- Stage 4: extract skill on successful episode end ---
