@@ -13,6 +13,14 @@ intrinsic:
   reward_clip: 5.0        # clamp normalized reward to ±clip
   reward_coef: 0.1        # weight when adding to extrinsic reward
   update_every_steps: 1   # RND predictor SGD every N env steps
+  # Count-based exploration bonus: a *state-dependent* floor on the
+  # intrinsic signal so 3D cannot deadlock when env reward is sparse
+  # (value head fits a constant but cannot predict visit-count novelty).
+  exploration_bonus:
+    enabled: true
+    coef: 0.1             # bonus = coef / sqrt(visit_count + 1)
+    grid: 8               # obs downsampled to grid x grid before hashing
+    capacity: 65536        # fixed hash-bucket count (Axiom 1)
 
 # --- Stage 1 sub-block: replay buffer (bounded, 3-tier) ---
 replay:

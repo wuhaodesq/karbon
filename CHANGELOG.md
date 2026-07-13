@@ -180,6 +180,37 @@ All notable changes to this project are documented here.
   minibatch and the log reports its mean.
 - Added `tests/test_model_growth_v2.py::TestGrowerV2ObsShapeCarryover` (1 test).
 
+### Fixed (3D deadlock guard — state-dependent exploration bonus)
+
+- **New `src/intrinsic/exploration_bonus.py` (`ExplorationBonus`)** — a
+  bounded count-based exploration bonus that prevents the 3D training
+  deadlock. When the env reward is sparse / near-constant, the value
+  head eventually fits it → advantages collapse to ~0 → the policy
+  gradient vanishes and the agent stops learning. RND-style intrinsic
+  curiosity only patches this while its predictor error stays >0; once it
+  converges on visited states the bonus decays to 0 and the deadlock
+  returns.
+- bonus(s) = `coef / sqrt(visit_count(s) + 1)`: highest for novel /
+  rarely-visited states, decays toward 0 as a state is revisited but
+  **never reaches 0**. Crucially it VARIES across states AND with
+  visitation history, which the value head (sees only the current obs)
+  cannot predict → it leaves a persistent residual in the advantages, so
+  the policy always has an exploration signal. (A flat *constant* floor
+  would be a no-op: advantages are invariant to adding a constant to
+  every reward, because the value head fits the constant too.)
+- Bounded (Axiom 1): visit counts live in a **fixed-capacity** tensor
+  (`capacity` buckets, hashed from a downsampled obs); no unbounded
+  growth. Exposes `capacity` + `__len__` for `HealthChecker`.
+- Wired into `src/train.py`: `int_r = max(int_r, bonus)` (intrinsic
+  never below the exploration floor) + `total_r += intrinsic_coef * bonus`,
+  and `expl_bonus.update(obs_t)` each step. Enabled via
+  `intrinsic.exploration_bonus` in `configs/stage1_curiosity.yaml`
+  (the 3D/RND stage-1 run): `coef=0.1`, `grid=8`, `capacity=65536`.
+- Verified offline (CPU, tiny): constant env reward → advantage std
+  = 0 (deadlock); constant reward + exploration bonus → advantage std
+  > 0 (signal persists). Added `tests/test_exploration_bonus.py`
+  (6 tests, passing), including the deadlock-vs-signal proof.
+
 ## [v1.1.0-stage7-cloud] - 2026-07-09
 
 ### Stage 7 COMPLETED - ALL 7 STAGES DONE

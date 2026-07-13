@@ -45,6 +45,7 @@ from src.continual import (
 from src.curriculum import AutoCurriculum, AutoCurriculumConfig, TaskTemplate
 from src.envs import MiniGridWrapper
 from src.intrinsic import (
+    ExplorationBonus,
     IntentionConfig,
     IntentionCuriosity,
     KnowledgeGapConfig,
@@ -684,6 +685,24 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         logger.info("Curiosity: RSSM uncertainty (coef=%.2f)", curiosity_coef)
     elif curiosity_mode == "rnd" and rnd is not None:
         logger.info("Curiosity: RND (coef=%.2f)", curiosity_coef)
+
+    # Count-based exploration bonus: a *state-dependent* floor on the
+    # intrinsic signal so 3D cannot deadlock when env reward is sparse
+    # (the value head fits a constant but cannot predict visit-count-based
+    # novelty -> advantages keep a residual -> policy keeps exploring).
+    expl_bonus: ExplorationBonus | None = None
+    if intrinsic_cfg and intrinsic_cfg.get("exploration_bonus", {}).get("enabled", False):
+        eb_cfg = intrinsic_cfg["exploration_bonus"]
+        expl_bonus = ExplorationBonus(
+            obs_shape,
+            capacity=int(eb_cfg.get("capacity", 1 << 16)),
+            coef=float(eb_cfg.get("coef", 0.1)),
+            grid=int(eb_cfg.get("grid", 8)),
+        ).to(device)
+        logger.info(
+            "ExplorationBonus enabled (coef=%.3f, buckets=%d)",
+            expl_bonus.coef, expl_bonus.capacity,
+        )
 
     if stage >= 1 and replay_cfg:
         replay = BoundedReplayBuffer(
@@ -1817,6 +1836,17 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 with torch.no_grad():
                     int_r = float(rnd.intrinsic_reward(obs_t).item())
                 total_r = extrinsic_r + intrinsic_coef * int_r
+
+            # --- Count-based exploration bonus: state-dependent floor on the
+            # intrinsic signal (prevents the 3D deadlock when env reward is
+            # sparse). Adds coef/sqrt(visit_count+1) to the reward; this term
+            # varies per state and with visitation history, so the value head
+            # cannot fit it away -> advantages keep a residual signal.
+            if expl_bonus is not None:
+                eb = float(expl_bonus.bonus(obs_t).reshape(-1)[0])
+                int_r = max(int_r, eb)  # intrinsic never below exploration floor
+                total_r = total_r + intrinsic_coef * eb
+                expl_bonus.update(obs_t)
 
             buffer.add(
                 obs=obs,
