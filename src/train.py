@@ -2076,6 +2076,10 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         advantages = advantages.to(device)
         returns = returns.to(device)
         adv_norm = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        # P0: zero-variance guard — if all advantages are identical (e.g. dead policy),
+        # fall back to centered raw advantages to prevent zero-gradient lock.
+        if advantages.std() < 1e-7:
+            adv_norm = advantages - advantages.mean()
 
         # PPO update
         for _ in range(ppo_epochs):
@@ -2088,6 +2092,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             policy_loss = -torch.min(unclipped, clipped).mean()
             value_loss = F.mse_loss(values, returns)
             entropy = dist.entropy().mean()
+            approx_kl = ((batch.logprobs - new_logprobs).mean()).detach()
+            clipfrac = ((ratio - 1.0).abs() > ppo_clip).float().mean().detach()
             loss = policy_loss + value_coef * value_loss - entropy_coef * entropy
             # Stage 6: add EWC penalty (protects consolidated weights)
             if ewc is not None and ewc.has_consolidated():
@@ -2455,11 +2461,16 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             if language_gen is not None:
                 extras.append("speak=on")
             logger.info(
-                "step=%d ep=%d mean_ret=%.3f loss=%.4f mem_used=%.2fGB slope=%s %s",
+                "step=%d ep=%d mean_ret=%.3f loss=%.4f(p=%.2f v=%.2f ent=%.3f kl=%.4f cf=%.2f) mem_used=%.2fGB slope=%s %s",
                 state.step,
                 summary["episodes"],
                 summary["mean_return"],
                 float(loss.item()),
+                float(policy_loss.item()),
+                float(value_loss.item()),
+                float(entropy.item()),
+                float(approx_kl.item()),
+                float(clipfrac.item()),
                 (mem.get("used_bytes", 0) or 0) / 1024**3,
                 mem.get("slope_gb_per_hour"),
                 " ".join(extras),

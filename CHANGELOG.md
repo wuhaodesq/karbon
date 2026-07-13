@@ -22,6 +22,22 @@ All notable changes to this project are documented here.
   already correctly wired in `src/train.py`.
 - Added `tests/test_marginal_gains.py` (7 tests, passing).
 
+### Fixed (Env episode-return metric was an all-history mean)
+
+- `mean_ret` / `summary()["mean_return"]` in `physics_sandbox`,
+  `three_d_world`, `social_teacher`, and `minigrid_wrapper` were computed over an
+  **unbounded** `_episode_returns` list — i.e. the mean over *every* episode
+  since process start. Over multi-million-step runs the value becomes frozen and
+  cannot reflect recent agent performance (the 2D `mean_ret=121→114` "drop" and
+  the 3D `mean_ret=0.218` were both artifacts of this).
+- Added the 1024-episode rolling-window cap (already present in
+  `crafter_wrapper.py`) to all four envs. The list now keeps at most the last
+  1024 returns/lengths, so `mean_ret` reflects **recent** performance. This also
+  resolves an Axiom-1 unbounded-allocation finding in `scripts/ci/check_bounded.py`
+  (lines annotated `BOUNDS-OK`).
+- `train.py` log line still prints `mean_ret`; it now reads the bounded window,
+  giving a truthful trend of recent episodes.
+
 ### Added (Phase 0+: 工程补缺口 A-G)
 
 - **Imagination Trainer** (`src/training/imagination_trainer.py`) — Dreamer-style

@@ -239,6 +239,8 @@ class SocialTeacherWrapper:
             self._episode_returns.append(
                 self._sandbox._current_return + social_reward
             )
+            if len(self._episode_returns) > 1024:  # BOUNDS-OK: rolling window cap
+                self._episode_returns = self._episode_returns[-1024:]
 
         # Step info enriched with teacher data
         step_info = dict(step_out.info)

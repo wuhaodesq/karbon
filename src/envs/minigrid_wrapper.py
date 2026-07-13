@@ -79,6 +79,9 @@ class MiniGridWrapper:
         if done:
             self._episode_returns.append(self._current_return)
             self._episode_lengths.append(self._current_length)
+            if len(self._episode_returns) > 1024:  # BOUNDS-OK: rolling window cap
+                self._episode_returns = self._episode_returns[-1024:]
+                self._episode_lengths = self._episode_lengths[-1024:]
             if self._auto_reset:
                 obs, _info = self._env.reset()
             self._current_return = 0.0

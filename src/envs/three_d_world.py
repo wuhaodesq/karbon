@@ -458,6 +458,8 @@ class ThreeDWorld:
 
         if done:
             self._episode_returns.append(self._current_return)
+            if len(self._episode_returns) > 1024:  # BOUNDS-OK: rolling window cap
+                self._episode_returns = self._episode_returns[-1024:]
             if self._auto_reset:
                 self._rebuild_scene()
             self._current_return = 0.0
