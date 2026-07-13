@@ -493,7 +493,7 @@ def compute_gae_vec(
     gae = torch.zeros(N, dtype=rewards.dtype, device=rewards.device)
     for t in reversed(range(T)):
         next_values = last_values if t == T - 1 else values[t + 1]          # (N,)
-        next_non_terminal = (~dones[t]).float()                               # (N,)
+        next_non_terminal = 1.0 - dones[t].float()                          # (N,)
         delta = rewards[t] + gamma * next_values * next_non_terminal - values[t]  # (N,)
         gae = delta + gamma * lam * next_non_terminal * gae                    # (N,)
         advantages[t] = gae
