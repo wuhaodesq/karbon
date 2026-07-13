@@ -95,10 +95,11 @@ class RNDNet(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(c1, c2, 3, padding=1),
             nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((4, 4)),   # P1: down-sample → fixed spatial dim
             nn.Flatten(),
         )
         self.mlp = nn.Sequential(
-            nn.Linear(c2 * h * w, hidden),
+            nn.Linear(c2 * 4 * 4, hidden),  # fixed: 32*16 = 512, not ~2M
             nn.ReLU(inplace=True),
             nn.Linear(hidden, embed_dim),
         )

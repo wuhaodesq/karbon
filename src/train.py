@@ -453,6 +453,31 @@ def compute_gae(
 
 
 @dataclass
+class ReturnNormalizer:
+    """EMA-based reward/return normalization (PopArt-lite).
+
+    Prevents dead-policy lock when rewards are small and uniform:
+    - EMA tracks mean/std of returns
+    - Normalizes returns before computing value loss
+    - Denormalizes predicted values before GAE advantage computation
+    """
+
+    def __init__(self, alpha: float = 0.01):
+        self.alpha = alpha
+        self.mean: float = 0.0
+        self.var: float = 1.0
+
+    def update(self, returns: torch.Tensor) -> None:
+        self.mean = (1 - self.alpha) * self.mean + self.alpha * float(returns.mean().item())
+        self.var = (1 - self.alpha) * self.var + self.alpha * float(returns.var().item())
+
+    def normalize(self, returns: torch.Tensor) -> torch.Tensor:
+        return (returns - self.mean) / (self.var ** 0.5 + 1e-8)
+
+    def denormalize(self, values: torch.Tensor) -> torch.Tensor:
+        return values * (self.var ** 0.5 + 1e-8) + self.mean
+
+
 class TrainState:
     step: int
     episode: int
@@ -1475,6 +1500,11 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     log_every = int(train_cfg.get("log_every_steps", 50))
     ckpt_every = int(train_cfg.get("ckpt_every_steps", 200))
 
+    # P1: reward/return EMA normalization (PopArt-lite)
+    # Prevents dead-policy lock when extrinsic rewards are small and uniform.
+    reward_ema = ReturnNormalizer(alpha=0.01)
+    ppo_minibatches = int(train_cfg.get("ppo_minibatches", 8))  # P2: mini-batch count
+
     # Stage 1 knobs
     intrinsic_coef = float(intrinsic_cfg.get("reward_coef", 0.1)) if intrinsic_cfg else curiosity_coef if curiosity_mode != "none" else 0.0
     rnd_update_every = int(intrinsic_cfg.get("update_every_steps", 1)) if intrinsic_cfg else 0
@@ -2075,33 +2105,46 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         )
         advantages = advantages.to(device)
         returns = returns.to(device)
+        # P1: reward/return EMA normalization
+        reward_ema.update(returns)
+        returns_norm = reward_ema.normalize(returns)
         adv_norm = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-        # P0: zero-variance guard — if all advantages are identical (e.g. dead policy),
-        # fall back to centered raw advantages to prevent zero-gradient lock.
+        # P0: zero-variance guard
         if advantages.std() < 1e-7:
             adv_norm = advantages - advantages.mean()
 
-        # PPO update
+        # P2: mini-batch PPO — split rollout into shuffled minibatches
+        n = batch.obs.shape[0]
+        indices = torch.randperm(n, device=device)
+        mb_size = max(1, n // ppo_minibatches)
+        ppo_losses: dict[str, list[float]] = {"policy": [], "value": [], "entropy": [],
+                                               "kl": [], "clipfrac": []}
         for _ in range(ppo_epochs):
-            logits, values = model(batch.obs)
-            dist = torch.distributions.Categorical(logits=logits)
-            new_logprobs = dist.log_prob(batch.actions)
-            ratio = (new_logprobs - batch.logprobs).exp()
-            unclipped = ratio * adv_norm
-            clipped = torch.clamp(ratio, 1.0 - ppo_clip, 1.0 + ppo_clip) * adv_norm
-            policy_loss = -torch.min(unclipped, clipped).mean()
-            value_loss = F.mse_loss(values, returns)
-            entropy = dist.entropy().mean()
-            approx_kl = ((batch.logprobs - new_logprobs).mean()).detach()
-            clipfrac = ((ratio - 1.0).abs() > ppo_clip).float().mean().detach()
-            loss = policy_loss + value_coef * value_loss - entropy_coef * entropy
-            # Stage 6: add EWC penalty (protects consolidated weights)
-            if ewc is not None and ewc.has_consolidated():
-                loss = loss + ewc.penalty(model).to(loss.device)
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
-            optimizer.step()
+            for start in range(0, n, mb_size):
+                mb_idx = indices[start:start + mb_size]
+                logits, values = model(batch.obs[mb_idx])
+                dist = torch.distributions.Categorical(logits=logits)
+                new_logprobs = dist.log_prob(batch.actions[mb_idx])
+                ratio = (new_logprobs - batch.logprobs[mb_idx]).exp()
+                unclipped = ratio * adv_norm[mb_idx]
+                clipped = torch.clamp(ratio, 1.0 - ppo_clip, 1.0 + ppo_clip) * adv_norm[mb_idx]
+                policy_loss = -torch.min(unclipped, clipped).mean()
+                value_loss = F.mse_loss(values, returns_norm[mb_idx])
+                entropy = dist.entropy().mean()
+                approx_kl = ((batch.logprobs[mb_idx] - new_logprobs).mean()).detach()
+                clipfrac = ((ratio - 1.0).abs() > ppo_clip).float().mean().detach()
+                loss = policy_loss + value_coef * value_loss - entropy_coef * entropy
+                if ewc is not None and ewc.has_consolidated():
+                    loss = loss + ewc.penalty(model).to(loss.device)
+                optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+                optimizer.step()
+                ppo_losses["policy"].append(float(policy_loss.item()))
+                ppo_losses["value"].append(float(value_loss.item()))
+                ppo_losses["entropy"].append(float(entropy.item()))
+                ppo_losses["kl"].append(float(approx_kl.item()))
+                ppo_losses["clipfrac"].append(float(clipfrac.item()))
 
         # --- Stage 1: off-policy value refresh from replay (small, extra grad) ---
         if (
@@ -2466,11 +2509,11 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 summary["episodes"],
                 summary["mean_return"],
                 float(loss.item()),
-                float(policy_loss.item()),
-                float(value_loss.item()),
-                float(entropy.item()),
-                float(approx_kl.item()),
-                float(clipfrac.item()),
+                float(np.mean(ppo_losses["policy"])),
+                float(np.mean(ppo_losses["value"])),
+                float(np.mean(ppo_losses["entropy"])),
+                float(np.mean(ppo_losses["kl"])),
+                float(np.mean(ppo_losses["clipfrac"])),
                 (mem.get("used_bytes", 0) or 0) / 1024**3,
                 mem.get("slope_gb_per_hour"),
                 " ".join(extras),

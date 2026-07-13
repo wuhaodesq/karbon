@@ -161,6 +161,29 @@ class ModelGrowerV2(nn.Module):
             [p for p in new_model.parameters() if p.requires_grad],
             lr=optimizer.param_groups[0]['lr'],
         )
+        # P2: preserve old Adam momentum for matching parameters
+        # Build name→param map for old optimizer state
+        old_state = optimizer.state_dict()
+        new_state = new_optimizer.state_dict()
+        old_param_names = {k: i for i, (k, _) in enumerate(
+            zip([n for n, _ in model.named_parameters() if _[1].requires_grad],
+                [(n, p) for n, p in model.named_parameters() if p.requires_grad]))}
+        new_param_names = {k: i for i, (k, _) in enumerate(
+            zip([n for n, _ in new_model.named_parameters() if _[1].requires_grad],
+                [(n, p) for n, p in new_model.named_parameters() if p.requires_grad]))}
+        for name, old_idx in old_param_names.items():
+            if name in new_param_names:
+                new_idx = new_param_names[name]
+                for state_key in ['exp_avg', 'exp_avg_sq', 'step']:
+                    if (old_idx < len(old_state['state']) and
+                            new_idx < len(new_state['state']) and
+                            state_key in old_state['state'].get(old_idx, {})):
+                        if new_idx not in new_state['state']:
+                            new_state['state'][new_idx] = {}
+                        new_state['state'][new_idx][state_key] = (
+                            old_state['state'][old_idx][state_key].clone()
+                        )
+        new_optimizer.load_state_dict(new_state)
 
         self._current_layers = new_layers
         self._last_growth_step = step
