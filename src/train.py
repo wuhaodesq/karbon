@@ -260,6 +260,7 @@ class HybridActorCritic(nn.Module):
         self.policy_head = nn.Linear(d_model, num_actions)
         self.value_head = nn.Linear(d_model, 1)
         self.obs_shape = tuple(obs_shape)
+        self._last_slots = None  # set per forward; avoids a 2nd encoder call in the rollout loop
 
     def forward(
         self, obs_u8: torch.Tensor, return_hidden: bool = False,
@@ -274,6 +275,7 @@ class HybridActorCritic(nn.Module):
             feats = self.encoder(x)
             seq = feats.unsqueeze(1)
         seq_out = self.backbone(seq)
+        self._last_slots = seq
         z = seq_out.mean(dim=1) if self.use_slots else seq_out.squeeze(1)
         if return_hidden:
             return self.policy_head(z), self.value_head(z).squeeze(-1), z
@@ -1679,7 +1681,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             slot_states_for_step: torch.Tensor | None = None
             if (number_sense is not None or rule_engine is not None) and model.use_slots:
                 with torch.no_grad():
-                    slot_states_for_step = model.encoder(obs_t).squeeze(0)  # (num_slots, d_model)
+                    slot_states_for_step = model._last_slots.squeeze(0)  # (num_slots, d_model)
                 if rule_engine is not None:
                     preds = rule_engine.extract_predicates(slot_states_for_step.unsqueeze(0))
                     episode_predicates.append(preds)
