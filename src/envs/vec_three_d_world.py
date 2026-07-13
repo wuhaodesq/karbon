@@ -122,10 +122,10 @@ class VecEnv:
             info=info,
         )
 
-    def summary(self, i: int) -> dict:
+    def summary(self, i: int = 0) -> dict:
         return self._envs[i].summary()
 
-    def episodes(self, i: int) -> int:
+    def episodes(self, i: int = 0) -> int:
         return int(self._envs[i].summary().get("episodes", 0))
 
 
