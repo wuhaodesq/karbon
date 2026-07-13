@@ -84,7 +84,7 @@ class ExplorationBonus(nn.Module):
     @torch.no_grad()
     def update(self, obs_u8: torch.Tensor) -> None:
         h = self._hash(obs_u8)
-        self.counts.index_add_(0, h, torch.ones(h.shape[0], dtype=torch.long))
+        self.counts.index_add_(0, h, torch.ones(h.shape[0], dtype=torch.long, device=h.device))
 
     def state_dict(self) -> dict[str, Any]:
         return {"counts": self.counts.clone()}
