@@ -201,11 +201,15 @@ All notable changes to this project are documented here.
 - Bounded (Axiom 1): visit counts live in a **fixed-capacity** tensor
   (`capacity` buckets, hashed from a downsampled obs); no unbounded
   growth. Exposes `capacity` + `__len__` for `HealthChecker`.
-- Wired into `src/train.py`: `int_r = max(int_r, bonus)` (intrinsic
-  never below the exploration floor) + `total_r += intrinsic_coef * bonus`,
-  and `expl_bonus.update(obs_t)` each step. Enabled via
-  `intrinsic.exploration_bonus` in `configs/stage1_curiosity.yaml`
-  (the 3D/RND stage-1 run): `coef=0.1`, `grid=8`, `capacity=65536`.
+- Wired into `src/train.py`: `total_r += eb` each step (the bonus
+  already carries its own `coef`, so it is added directly — **not**
+  multiplied by `intrinsic_coef` again), plus `expl_bonus.update(obs_t)`.
+  Decoupled as a **top-level** `exploration_bonus` config key (NOT under
+  `intrinsic:`), so enabling it does **not** also switch on RND or
+  change the `curiosity.mode` already in use. Enabled in
+  `configs/stage1_curiosity.yaml` (the 3D/RND stage-1 run) and
+  `configs/phase2_infant_exploration.yaml` (the 2D run):
+  `coef=0.1`, `grid=8`, `capacity=65536`.
 - Verified offline (CPU, tiny): constant env reward → advantage std
   = 0 (deadlock); constant reward + exploration bonus → advantage std
   > 0 (signal persists). Added `tests/test_exploration_bonus.py`

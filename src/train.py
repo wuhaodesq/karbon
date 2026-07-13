@@ -687,12 +687,14 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         logger.info("Curiosity: RND (coef=%.2f)", curiosity_coef)
 
     # Count-based exploration bonus: a *state-dependent* floor on the
-    # intrinsic signal so 3D cannot deadlock when env reward is sparse
+    # reward signal so 3D cannot deadlock when env reward is sparse
     # (the value head fits a constant but cannot predict visit-count-based
     # novelty -> advantages keep a residual -> policy keeps exploring).
+    # Top-level key (NOT under `intrinsic:`) so enabling it does not
+    # also switch on RND / change the curiosity mode.
     expl_bonus: ExplorationBonus | None = None
-    if intrinsic_cfg and intrinsic_cfg.get("exploration_bonus", {}).get("enabled", False):
-        eb_cfg = intrinsic_cfg["exploration_bonus"]
+    eb_cfg = config.get("exploration_bonus")
+    if eb_cfg and eb_cfg.get("enabled", False):
         expl_bonus = ExplorationBonus(
             obs_shape,
             capacity=int(eb_cfg.get("capacity", 1 << 16)),
@@ -1838,14 +1840,14 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 total_r = extrinsic_r + intrinsic_coef * int_r
 
             # --- Count-based exploration bonus: state-dependent floor on the
-            # intrinsic signal (prevents the 3D deadlock when env reward is
-            # sparse). Adds coef/sqrt(visit_count+1) to the reward; this term
-            # varies per state and with visitation history, so the value head
-            # cannot fit it away -> advantages keep a residual signal.
+            # reward signal (prevents the 3D deadlock when env reward is
+            # sparse). Its magnitude already carries `coef`, so it is added
+            # directly. The term varies per state and with visitation history,
+            # so the value head cannot fit it away -> advantages keep a
+            # residual signal.
             if expl_bonus is not None:
                 eb = float(expl_bonus.bonus(obs_t).reshape(-1)[0])
-                int_r = max(int_r, eb)  # intrinsic never below exploration floor
-                total_r = total_r + intrinsic_coef * eb
+                total_r = total_r + eb
                 expl_bonus.update(obs_t)
 
             buffer.add(
