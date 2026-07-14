@@ -2912,6 +2912,17 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         logger.info("Knowledge gap final: %s", knowledge_gap.summary())
 
     env.close()
+
+    # Auto-backup checkpoint to prevent data loss
+    try:
+        import shutil
+        ckpt_path = stage_ckpt_path(stage, state.step)
+        backup_path = Path(f"/root/backup_stage{stage}_{state.step}.pt")
+        shutil.copy2(ckpt_path, backup_path)
+        logger.info("Checkpoint backed up: %s", backup_path)
+    except Exception as exc:
+        logger.warning("Checkpoint backup failed (non-fatal): %s", exc)
+
     return 0
 
 
