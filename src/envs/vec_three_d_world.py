@@ -125,6 +125,11 @@ class VecEnv:
     def summary(self, i: int = 0) -> dict:
         return self._envs[i].summary()
 
+    def close(self) -> None:
+        for env in self._envs:
+            if hasattr(env, 'close'):
+                env.close()
+
     def episodes(self, i: int = 0) -> int:
         return int(self._envs[i].summary().get("episodes", 0))
 
