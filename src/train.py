@@ -91,6 +91,7 @@ from src.models.neuro_symbolic_bridge import Causal2Prolog, Number2Math, SchemaD
 from src.models.program_synthesis import ProgramSynthesizer, ActiveExperimenter, TemporalAbstractor
 from src.models.counterfactual_planner import CounterfactualPlanner
 from src.models.marginal_gains import CompositionalTester, LearningProgressTracker
+from src.models.visual_analyzer import VisualAnalyzer
 from src.monitoring import HealthChecker, MemoryWatcher, WatcherConfig
 from src.platform import data_dir, get_device, get_device_info, stage_ckpt_path
 from src.utils import (
@@ -1478,6 +1479,15 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         lp_tracker = LearningProgressTracker().to(device)
         logger.info("MarginalGains: CompositionalTester + LP Tracker")
 
+    # --- Visual Analyzer ---
+    visual_analyzer: VisualAnalyzer | None = None
+    if config.get("visual_analyzer", {}).get("enabled", False):
+        visual_analyzer = VisualAnalyzer(
+            slot_dim=int(model_cfg.get("slot_dim", int(model_cfg.get("hidden_size", 128)))),
+            num_slots=int(model_cfg.get("slot_num_slots", 7)),
+        ).to(device)
+        logger.info("VisualAnalyzer enabled (color/shape/size/texture/motion)")
+
     # --- Phase 1+: Imagination Trainer (Dreamer-style) ---
     imagination_cfg = config.get("imagination")
     imagination_trainer: ImaginationTrainer | None = None
@@ -2548,6 +2558,18 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 new_cats = concept_clusterer.cluster(concept_graph, state.step)
                 if new_cats:
                     logger.info("[concept] discovered %d new categories", len(new_cats))
+            except Exception:
+                pass
+
+        # --- Visual Analyzer: feed attributes to concept graph ---
+        if (visual_analyzer is not None and concept_graph is not None
+                and model.use_slots and state.step % 500 < rollout_capacity):
+            try:
+                obs_t = _obs_to_tensor(obs, device)
+                slot_out = model.encoder(obs_t)
+                added = visual_analyzer.feed_to_graph(slot_out, concept_graph, state.step)
+                if added > 0:
+                    logger.debug("[visual] %d objects analyzed", added)
             except Exception:
                 pass
 
