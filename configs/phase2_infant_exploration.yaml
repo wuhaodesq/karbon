@@ -20,7 +20,7 @@ name: "phase2_infant_exploration"
 # key so enabling it does NOT switch on RND / change curiosity mode.
 exploration_bonus:
   enabled: true
-  coef: 0.5             # 9M-resume tuning: raised 0.1->0.5 to escape 102.5 plateau
+  coef: 0.2             # 9.5M tuning: dropped 0.5->0.2; 0.5 pinned entropy~2.0 and capped return under 101.4
   grid: 8               # obs downsampled to grid x grid before hashing
   capacity: 65536        # fixed hash-bucket count (Axiom 1)
 
@@ -50,7 +50,7 @@ env:
 train:
   ppo_clip: 0.2
   ppo_epochs: 6
-  entropy_coef: 0.015   # 9M-resume tuning: lowered 0.03->0.015 to sharpen policy
+  entropy_coef: 0.008   # 9.5M tuning: lowered 0.015->0.008 to let policy converge (entropy cleanly <1.5)
   value_coef: 0.5
   gamma: 0.99
   gae_lambda: 0.95

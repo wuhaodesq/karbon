@@ -33,6 +33,13 @@ All notable changes to this project are documented here.
   `train.total_steps 9000000→11000000`（抬高上限使 9M resume 实际续跑而非立刻退出）。
   9M 终值 `mean_ret=101.4`、`entropy≈2.0` 印证 Plateau + 策略仍未收敛，需此干预再突破。
 
+- **9.5M 第二轮调参（回退过强探索，促收敛）**：
+  9M→11M 续跑在 100.8~101.1 震荡、封顶恰在 9M 旧峰值 101.4 之下；诊断确认
+  `exploration_bonus.coef=0.5` 把 `entropy` 钉死在 ~2.0、阻止策略结晶。
+  故回调：`exploration_bonus.coef 0.5→0.2`（退掉过度探索、留防死区）、
+  `train.entropy_coef 0.015→0.008`（更强收敛压力，让熵干净跌破 1.5）。
+  从 `ckpt_stage2_009520192.pt` resume，`total_steps` 维持 11M。
+
 ### Known limitation (first cut)
 
 - Single-env-only cognitive blocks (homeostatic drives, emotion, number-sense /
