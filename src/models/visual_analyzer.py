@@ -84,12 +84,13 @@ class VisualAnalyzer(nn.Module):
 
         result = {
             "color":   self.color_head(h).reshape(B, N, 8),    # (B, N, 8)
-            "shape":   self.shape_head(h).reshape(B, N, 4),    # (B, N, 4)
-            "size":    self.size_head(h).reshape(B, N, 3),     # (B, N, 3)
-            "texture": self.texture_head(h).reshape(B, N, 3),  # (B, N, 3)
+            "shape":   self.shape_head(h).reshape(B, N, 4),     # (B, N, 4)
+            "size":    self.size_head(h).reshape(B, N, 3),      # (B, N, 3)
+            "texture": self.texture_head(h).reshape(B, N, 3),   # (B, N, 3)
             "motion":  self._motion_logits(slots).reshape(B, N, 3),  # (B, N, 3)
         }
         self._prev_slots = slots.detach()
+        self._last_out = result
         return result
 
     def _motion_logits(self, slots: torch.Tensor) -> torch.Tensor:
@@ -105,52 +106,70 @@ class VisualAnalyzer(nn.Module):
         logits[:, 2] = diff * 10.0 - 3.0     # fast — high when diff is large
         return logits
 
-    def describe_slot(self, slots: torch.Tensor, slot_idx: int) -> str:
-        """Generate a natural-language description of one slot."""
-        out = self.forward(slots)
-        color = self.COLOR_NAMES[int(out["color"][0, slot_idx].argmax().item())]
-        shape = self.SHAPE_NAMES[int(out["shape"][0, slot_idx].argmax().item())]
-        size  = self.SIZE_NAMES[int(out["size"][0, slot_idx].argmax().item())]
-        text  = self.TEXTURE_NAMES[int(out["texture"][0, slot_idx].argmax().item())]
-        motion = self.MOTION_NAMES[int(out["motion"][0, slot_idx].argmax().item())]
+    def _slot_desc(self, out: dict[str, torch.Tensor], slot_idx: int, batch: int = 0) -> str:
+        """Build a natural-language description from a cached forward result."""
+        color = self.COLOR_NAMES[int(out["color"][batch, slot_idx].argmax().item())]
+        shape = self.SHAPE_NAMES[int(out["shape"][batch, slot_idx].argmax().item())]
+        size = self.SIZE_NAMES[int(out["size"][batch, slot_idx].argmax().item())]
+        texture = self.TEXTURE_NAMES[int(out["texture"][batch, slot_idx].argmax().item())]
+        motion = self.MOTION_NAMES[int(out["motion"][batch, slot_idx].argmax().item())]
         return f"a {size} {color} {texture} {shape} object, {motion}"
 
-    def describe_scene(self, slots: torch.Tensor) -> str:
+    def _ensure_out(self, slots: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Return cached forward result if shape matches, else run forward."""
+        cached = getattr(self, "_last_out", None)
+        if cached is not None and tuple(cached["color"].shape[:2]) == tuple(slots.shape[:2]):
+            return cached
+        return self.forward(slots)
+
+    def describe_slot(self, slots: torch.Tensor, slot_idx: int, batch: int = 0) -> str:
+        """Generate a natural-language description of one slot."""
+        return self._slot_desc(self._ensure_out(slots), slot_idx, batch)
+
+    def describe_scene(self, slots: torch.Tensor, batch: int = 0) -> str:
         """Generate a scene description from all active slots."""
-        out = self.forward(slots)
-        slot_norms = slots.norm(dim=-1)[0]  # (N,)
+        out = self._ensure_out(slots)
+        slot_norms = slots.norm(dim=-1)[batch]  # (N,)
         descriptions = []
         for i in range(min(self._num_slots, slots.shape[1])):
             if slot_norms[i] < 0.1:  # empty slot
                 continue
-            descriptions.append(self.describe_slot(slots, i))
+            descriptions.append(self._slot_desc(out, i, batch))
         if not descriptions:
             return "I don't see any objects."
         return "I see " + ", ".join(descriptions) + "."
 
     def feed_to_graph(
-        self, slots: torch.Tensor, concept_graph: Any, step: int,
+        self, out: dict[str, torch.Tensor], slots: torch.Tensor,
+        concept_graph: Any, step: int,
     ) -> int:
         """Feed classified attributes into ConceptGraph as concept nodes.
+
+        Args:
+            out: forward() result for ``slots``. The caller must run forward
+                once per training step (``visual_analyzer(slots)``) so that
+                motion is estimated against the previous frame.
+            slots: (B, num_slots, slot_dim) SlotAttention output.
+            concept_graph: target graph, or None.
+            step: current training step.
 
         Returns number of concepts added.
         """
         if concept_graph is None:
             return 0
-        out = self.forward(slots)
         added = 0
         for i in range(min(self._num_slots, slots.shape[1])):
             slot_vec = slots[0, i]
             if slot_vec.norm().item() < 0.1:
                 continue
-            desc = self.describe_slot(slots, i)
+            desc = self._slot_desc(out, i)
             node_id = concept_graph.add_concept(
                 embedding=slot_vec, name=desc, source="visual_analyzer", step=step,
             )
             # Add attribute edges
             color = self.COLOR_NAMES[int(out["color"][0, i].argmax().item())]
             shape = self.SHAPE_NAMES[int(out["shape"][0, i].argmax().item())]
-            size  = self.SIZE_NAMES[int(out["size"][0, i].argmax().item())]
+            size = self.SIZE_NAMES[int(out["size"][0, i].argmax().item())]
             attr_id = concept_graph.add_concept(
                 embedding=slot_vec * 0.5, name=f"{color}_{shape}_{size}",
                 source="visual_analyzer_attr", step=step,

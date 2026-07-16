@@ -2561,17 +2561,20 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             except Exception:
                 pass
 
-        # --- Visual Analyzer: feed attributes to concept graph ---
+        # --- Visual Analyzer: classify slots each step (keeps motion
+        #     continuous across frames), persist to concept graph every 500 ---
         if (visual_analyzer is not None and concept_graph is not None
-                and model.use_slots and state.step % 500 < rollout_capacity):
+                and model.use_slots):
             try:
                 obs_t = _obs_to_tensor(obs, device)
                 slot_out = model.encoder(obs_t)
-                added = visual_analyzer.feed_to_graph(slot_out, concept_graph, state.step)
-                if added > 0:
-                    logger.debug("[visual] %d objects analyzed", added)
+                va_out = visual_analyzer(slot_out)  # updates motion vs prev frame
+                if state.step % 500 == 0:
+                    added = visual_analyzer.feed_to_graph(va_out, slot_out, concept_graph, state.step)
+                    if added > 0:
+                        logger.debug("[visual] %d objects analyzed", added)
             except Exception:
-                pass
+                logger.debug("[visual] analyze skipped", exc_info=True)
 
         # --- Neuro-Symbolic Bridge: periodic connection ---
         if state.step > 0 and state.step % 5000 < rollout_capacity:

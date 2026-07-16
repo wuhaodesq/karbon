@@ -52,6 +52,31 @@ All notable changes to this project are documented here.
   already correctly wired in `src/train.py`.
 - Added `tests/test_marginal_gains.py` (7 tests, passing).
 
+### Fixed (VisualAnalyzer — silent no-op & wrong trigger)
+
+- **`describe_slot` NameError (`src/models/visual_analyzer.py`).** The f-string
+  referenced `{texture}` but the variable was bound as `text`, so every call
+  raised `NameError`. Because `train.py` wrapped `feed_to_graph` in
+  `try/except Exception: pass`, the whole VisualAnalyzer → ConceptGraph path
+  **silently did nothing** (zero nodes written). Renamed to `{texture}` and
+  added `tests/test_visual_analyzer.py` (regression for the crash + motion).
+- **Motion was always "still".** `feed_to_graph` / `describe_*` re-ran `forward`
+  on the same frame, overwriting `_prev_slots` before motion was read, so the
+  frame-to-frame diff was always 0. `forward` now caches `_last_out`; the
+  describe/feed helpers read the cached result and never re-forward, so motion
+  is estimated against the previous step. `train.py` now calls
+  `visual_analyzer(slots)` **every step** (updating motion) and only persists to
+  the graph every 500 steps.
+- **Wrong trigger condition.** `state.step % 500 < rollout_capacity` is true for
+  every step (since `step % 500 ∈ [0,499] < 512`), so it never meant "every 500
+  steps". Changed to `state.step % 500 == 0`, matching the existing periodic
+  hooks in `train.py`.
+- `VisualAnalyzer` exported from `src/models/__init__.py`.
+- **Not yet trained (known gap):** the classifier heads are randomly initialized
+  and not part of the optimizer / checkpoint, so attribute predictions are
+  unsupervised heuristics, not learned from SlotAttention. Wiring a supervised
+  loss is a follow-up.
+
 ### Fixed (Env episode-return metric was an all-history mean)
 
 - `mean_ret` / `summary()["mean_return"]` in `physics_sandbox`,
