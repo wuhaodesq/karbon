@@ -84,6 +84,10 @@ replay:
   per_alpha: 0.8
   sample_every_steps: 4
 
+coverage:
+  num_buckets: 4096
+  log_every_steps: 5000
+
 skills:
   enabled: true
   gpu_capacity: 512
@@ -112,7 +116,8 @@ causal_discovery:
 model_growth:
   enabled: true
   max_layers: 20
-  min_steps_between_growths: 500000
+  min_steps_between_growths: 1000000   # space growths 1M apart so each benefit materializes before the next
+  grow_trigger_coverage: 0.15          # lowered from 0.3: raw-obs hash undercounts exploration after 9M steps
 
 cross_modal:
   enabled: true

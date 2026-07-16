@@ -134,6 +134,7 @@ class ModelGrowerV2(nn.Module):
         self._last_growth_step = -self._cfg.min_steps_between_growths
         self._growth_count = 0
         self._growth_history: list[dict] = []
+        self._rmax = 0.0  # running max of mean_return, for the plateau LP signal
 
     @property
     def capacity(self) -> int:
@@ -159,6 +160,29 @@ class ModelGrowerV2(nn.Module):
         if learning_progress > self._cfg.grow_trigger_lp_threshold:
             return False
         return True
+
+    def plateau_lp(self, mean_return: float) -> float:
+        """Learning-progress signal feeding :meth:`should_grow`.
+
+        Returns remaining headroom ``max(0, 1 - mean_return / running_max)``.
+        ≈0 when the agent is plateaued at (or near) its historical peak → the
+        grower should fire. >0 while the return is still climbing → hold.
+
+        Replaces the previous ``lp = 1.0 - mean_return`` used at the call
+        site, which with ``mean_return≈100`` evaluated to ≈-99. That negative
+        value was *over-eager* (``-99 > grow_trigger_lp_threshold`` is False,
+        so ``should_grow`` would return True every eligible step) and, more
+        importantly, the whole growth-check block was skipped historically
+        because ``coverage is None`` (this config lacked a top-level
+        ``coverage:`` section). plateau_lp supplies a sane plateau signal now
+        that the ``coverage:`` block is present.
+        """
+        mr = float(mean_return)
+        if mr > self._rmax:
+            self._rmax = mr
+        if self._rmax <= 0:
+            return 1.0
+        return max(0.0, 1.0 - mr / self._rmax)
 
     def grow(
         self,
@@ -333,6 +357,7 @@ class ModelGrowerV2(nn.Module):
             "last_growth_step": self._last_growth_step,
             "growth_count": self._growth_count,
             "growth_history": self._growth_history,
+            "rmax": self._rmax,
             "config": {
                 "initial_layers": self._cfg.initial_layers,
                 "max_layers": self._cfg.max_layers,
@@ -345,3 +370,4 @@ class ModelGrowerV2(nn.Module):
         self._last_growth_step = int(state["last_growth_step"])
         self._growth_count = int(state["growth_count"])
         self._growth_history = state["growth_history"]
+        self._rmax = float(state.get("rmax", 0.0))

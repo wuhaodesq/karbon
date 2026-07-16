@@ -107,6 +107,61 @@ class TestGrowerV2MomentumCarryover:
         assert torch.isfinite(carried).all()
 
 
+class TestGrowerV2PlateauLP:
+    def test_lp_zero_on_plateau_at_peak(self) -> None:
+        """On a plateau at the historical peak, headroom ≈ 0 → grower should fire."""
+        grower = ModelGrowerV2(config=GrowthConfigV2(grow_trigger_coverage=0.0))
+        assert grower.plateau_lp(50.0) == 0.0   # first sample seeds rmax
+        assert grower.plateau_lp(100.0) == 0.0  # new peak
+        assert grower.plateau_lp(100.0) == 0.0  # plateau at peak -> no headroom
+        assert abs(grower.plateau_lp(98.0) - 0.02) < 1e-6  # slight dip -> small headroom
+
+    def test_lp_positive_when_below_running_max(self) -> None:
+        """Any return below the running max leaves positive headroom → hold."""
+        grower = ModelGrowerV2(config=GrowthConfigV2())
+        grower.plateau_lp(10.0)  # rmax = 10
+        assert grower.plateau_lp(5.0) > 0.0
+
+    def test_grower_fires_on_plateau_with_coverage(self) -> None:
+        """Real-breakthrough fix: corrected LP lets the grower trigger on a
+        plateau when coverage is sufficient (was previously always blocked)."""
+        cfg = GrowthConfigV2(
+            min_steps_between_growths=0,
+            grow_trigger_lp_threshold=0.05,
+            grow_trigger_coverage=0.15,
+        )
+        grower = ModelGrowerV2(config=cfg)
+        grower.plateau_lp(100.0)
+        lp = grower.plateau_lp(100.0)  # plateau at peak
+        assert lp <= 0.05
+        assert grower.should_grow(step=1_000_000, learning_progress=lp, coverage_ratio=0.5)
+
+    def test_grower_blocked_when_coverage_low(self) -> None:
+        cfg = GrowthConfigV2(min_steps_between_growths=0, grow_trigger_coverage=0.15)
+        grower = ModelGrowerV2(config=cfg)
+        grower.plateau_lp(100.0)
+        lp = grower.plateau_lp(100.0)
+        assert not grower.should_grow(
+            step=1_000_000, learning_progress=lp, coverage_ratio=0.05,
+        )
+
+    def test_old_formula_was_over_eager(self) -> None:
+        """Regression guard: the old ``lp = 1.0 - mean_return`` (≈-99 at
+        mean_return≈100) is <= threshold, so ``should_grow`` would return
+        True on EVERY eligible step (constant, un-plateaued growth) — not
+        "blocked". The actual reason growth never fired was ``coverage is
+        None`` (this config lacked a top-level ``coverage:`` section, so the
+        whole growth-check block was skipped). plateau_lp fixes the
+        over-eager behavior so growth only triggers on a genuine plateau."""
+        old_lp = 1.0 - 100.0
+        cfg = GrowthConfigV2(min_steps_between_growths=0, grow_trigger_coverage=0.0)
+        grower = ModelGrowerV2(config=cfg)
+        assert old_lp <= cfg.grow_trigger_lp_threshold  # would NOT block -> over-eager
+        assert grower.should_grow(
+            step=1_000_000, learning_progress=old_lp, coverage_ratio=1.0,
+        )
+
+
 class TestGrowerV2ObsShapeCarryover:
     def test_created_model_keeps_real_obs_shape(self) -> None:
         """_create_larger_model must use the *real* observation shape from the

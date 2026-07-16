@@ -518,6 +518,24 @@ See `docs/stage1_report.md` for the full run card.
 - **276 tests passing** (was 273, +3 resume tests), 10 skipped.
 - `check_bounded`: OK.
 
+### Fixed — ModelGrowerV2 growth was dormant (real breakthrough path)
+
+- Root cause: the autonomous layer-growth block in `src/train.py` was gated by
+  `if model_grower_v2 is not None and coverage is not None`. The
+  `phase2_infant_exploration.yaml` config had **no top-level `coverage:`**
+  section, so `coverage` was always `None` and growth never ran — the agent
+  stayed pinned at the ~101.4 hyperparam ceiling after 9M steps.
+- Added `coverage:` block (`num_buckets: 4096`, `log_every_steps: 5000`) to the
+  config; lowered `grow_trigger_coverage` 0.3 → 0.15 (raw-obs hash undercounts
+  exploration after 9M steps) and spaced `min_steps_between_growths` → 1M.
+- Added `ModelGrowerV2.plateau_lp(mean_return)`: returns headroom
+  `max(0, 1 - mean_return / running_max)`, ≈0 on a genuine plateau so growth
+  fires, >0 while returns still climb. Replaces the old
+  `lp = 1.0 - mean_return` (≈-99, over-eager / nonsensical). Call site in
+  `src/train.py` now uses it and logs `[growth-debug]` every 50k steps.
+- `tests/test_model_growth_v2.py::TestGrowerV2PlateauLP`: 5 new tests plus a
+   regression guard that the old formula was over-eager (not blocking).
+
 ---
 
 ## [Unreleased]

@@ -2518,8 +2518,12 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
 
         # --- Phase 0: model growth check ---
         if model_grower_v2 is not None and coverage is not None:
-            lp = float(1.0 - env.summary().get("mean_return", 0.0))
+            mean_ret = float(env.summary().get("mean_return", 0.0))
+            lp = model_grower_v2.plateau_lp(mean_ret)
             cov = coverage.coverage_ratio()
+            if state.step % 50000 == 0:
+                logger.info("[growth-debug] step=%d lp=%.4f cov=%.3f layers=%d",
+                            state.step, lp, cov, len(model_grower_v2))
             if model_grower_v2.should_grow(state.step, lp, cov):
                 try:
                     model, optimizer, grow_rec = model_grower_v2.grow(
