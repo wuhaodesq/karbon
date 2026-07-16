@@ -2318,6 +2318,24 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         # P0: standardize advantages with zero-variance guard (see helper).
         adv_norm = _normalize_advantages(advantages)
 
+        # --- DIAG (plateau investigation): log advantage/reward variance ---
+        if state.step % 5000 < rollout_capacity:
+            with torch.no_grad():
+                _rew = buffer.rewards[:T].float()
+                _adv_std = float(advantages.std().item())
+                _zero_var = bool(
+                    advantages.numel() < 2
+                    or (not math.isfinite(_adv_std))
+                    or _adv_std < 1e-7
+                )
+                logger.info(
+                    "[diag-adv] step=%d raw_adv_std=%.4g raw_adv_mean=%.4g "
+                    "rew_std=%.4g rew_mean=%.4g returns_std=%.4g zero_var_guard=%s",
+                    state.step, _adv_std, float(advantages.mean().item()),
+                    float(_rew.std().item()), float(_rew.mean().item()),
+                    float(returns.std().item()), _zero_var,
+                )
+
         # P2: mini-batch PPO — split rollout into shuffled minibatches
         n = batch.obs.shape[0]
         indices = torch.randperm(n, device=device)
