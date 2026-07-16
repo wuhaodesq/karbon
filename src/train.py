@@ -1806,7 +1806,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 try:
                     emotion_system.update(
                         reward=float(extrinsic_r),
-                        surprise=float(int_r) if curiosity_mode != "none" else 0.0,
+                        surprise=float(np.asarray(int_r).mean()) if curiosity_mode != "none" else 0.0,
                         danger_level=0.0,
                         success=extrinsic_r > 0.5,
                         episode_done=bool(step_out.terminated or step_out.truncated),
@@ -1888,7 +1888,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         hidden_state=hidden_for_mem,
                         action=int(action.item()),
                         reward=float(total_r),
-                        surprise=float(surprise_val),
+                        surprise=float(np.asarray(surprise_val).mean()),
                         global_step=state.step,
                         episode_id=int(current_ep),
                         tags=tags,
@@ -2625,7 +2625,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 try:
                     exp = active_experimenter.propose_experiment(
                         causal_disc, curiosity_director,
-                        rssm_uncertainty=float(int_r) if curiosity_mode != "none" else 0.0,
+                        rssm_uncertainty=float(np.asarray(int_r).mean()) if curiosity_mode != "none" else 0.0,
                     )
                     if exp:
                         logger.info("[experiment] %s", exp["hypothesis"][:80])
