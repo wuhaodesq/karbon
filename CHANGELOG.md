@@ -40,6 +40,13 @@ All notable changes to this project are documented here.
   `train.entropy_coef 0.015→0.008`（更强收敛压力，让熵干净跌破 1.5）。
   从 `ckpt_stage2_009520192.pt` resume，`total_steps` 维持 11M。
 
+- **9.66M 回退第二轮调参（回归，撤销 358b432）**：新配置（bonus 0.2 / ent 0.008）
+  实测 `mean_ret` 仅到 99.8 即回落至 99.5，严格差于旧配置（bonus 0.5 / ent 0.015）的
+  100.8~101.1——探索奖励是**有用的奖励信号**而非单纯的"熵压制"。三种配置对比：
+  原始(0.1/0.03)→101.4、9M-resume(0.5/0.015)→100.8~101.1、本轮(0.2/0.008)→99.5。
+  **~101.4 是当前架构/预设的能力天花板**，超参仅在 99.5~101.4 内挪动、无法突破。
+  故回退 bonus 0.5 / ent 0.015，`total_steps` 提到 13M 防自动停。
+
 ### Known limitation (first cut)
 
 - Single-env-only cognitive blocks (homeostatic drives, emotion, number-sense /
