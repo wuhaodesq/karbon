@@ -20,7 +20,7 @@ name: "phase2_infant_exploration"
 # key so enabling it does NOT switch on RND / change curiosity mode.
 exploration_bonus:
   enabled: true
-  coef: 0.1             # bonus = coef / sqrt(visit_count + 1)
+  coef: 0.5             # 9M-resume tuning: raised 0.1->0.5 to escape 102.5 plateau
   grid: 8               # obs downsampled to grid x grid before hashing
   capacity: 65536        # fixed hash-bucket count (Axiom 1)
 
@@ -50,12 +50,12 @@ env:
 train:
   ppo_clip: 0.2
   ppo_epochs: 6
-  entropy_coef: 0.03
+  entropy_coef: 0.015   # 9M-resume tuning: lowered 0.03->0.015 to sharpen policy
   value_coef: 0.5
   gamma: 0.99
   gae_lambda: 0.95
   learning_rate: 3.0e-4
-  total_steps: 9000000
+  total_steps: 11000000   # 9M-resume: extended so resume from 9M ckpt actually runs
 
 curiosity:
   enabled: true

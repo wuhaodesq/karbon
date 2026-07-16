@@ -25,6 +25,14 @@ All notable changes to this project are documented here.
   `(T,N)` buffer layout + flatten, and per-column parity of `compute_gae_vec`
   vs the scalar `compute_gae`.
 
+### Changed (Stage-2 9M resume tuning / 续跑调参)
+
+- **9M 续跑超参（config-only，本地已改、push 后远程 resume 生效）**：
+  `exploration_bonus.coef 0.1→0.5`（加强探索奖励以突破 ~102 平台）、
+  `train.entropy_coef 0.03→0.015`（收紧熵约束促使策略收敛）、
+  `train.total_steps 9000000→11000000`（抬高上限使 9M resume 实际续跑而非立刻退出）。
+  9M 终值 `mean_ret=101.4`、`entropy≈2.0` 印证 Plateau + 策略仍未收敛，需此干预再突破。
+
 ### Known limitation (first cut)
 
 - Single-env-only cognitive blocks (homeostatic drives, emotion, number-sense /
