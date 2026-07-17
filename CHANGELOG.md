@@ -536,6 +536,16 @@ See `docs/stage1_report.md` for the full run card.
 - `tests/test_model_growth_v2.py::TestGrowerV2PlateauLP`: 5 new tests plus a
    regression guard that the old formula was over-eager (not blocking).
 
+- **`rmax` now decays (`GrowthConfigV2.rmax_decay = 0.98`)** so the growth
+  trigger line (`0.95 × rmax`) can't be pinned forever by a one-off spike.
+  Root cause: on checkpoint resume the first `mean_return` is inflated (e.g.
+  105.7 → 113), and the raw running max latched it — a 3-layer model plateaued
+  at ~101 could never reach `0.95 × 113 ≈ 107.5`, so the next 3→4 growth would
+  never fire. `plateau_lp` now uses a decaying running max
+  (`rmax = max(mr, rmax × rmax_decay)`) that forgets spikes within a few
+  growth-check calls while still tracking genuinely sustained peaks. Added
+  `tests/test_model_growth_v2.py::TestGrowerV2PlateauLP::test_spike_is_forgotten_so_growth_can_refire`.
+
 ---
 
 ## [Unreleased]

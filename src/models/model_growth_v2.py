@@ -47,6 +47,7 @@ class GrowthConfigV2:
     distill_lr: float = 1e-3
     grow_trigger_lp_threshold: float = 0.05
     grow_trigger_coverage: float = 0.3
+    rmax_decay: float = 0.98
 
 
 def _carry_over_adam_momentum(
@@ -168,6 +169,17 @@ class ModelGrowerV2(nn.Module):
         ≈0 when the agent is plateaued at (or near) its historical peak → the
         grower should fire. >0 while the return is still climbing → hold.
 
+        ``running_max`` (``self._rmax``) is a *decaying* running max, not a raw
+        one. Without the decay, a single transient spike — e.g. the inflated
+        ``mean_return`` on the first step after a checkpoint resume — would
+        permanently lift the growth trigger line (``0.95 × rmax``) and block
+        every future growth (a 3-layer→4-layer transition could never fire if
+        the model plateaued at 101 but a one-off 113 spike pinned rmax at 113).
+        The decay makes ``rmax`` forget spikes within a handful of growth-check
+        intervals while still tracking genuinely sustained peaks: each call
+        ``rmax = max(mr, rmax × rmax_decay)``, so a value not recently observed
+        fades, but a sustained level is re-confirmed every call and holds.
+
         Replaces the previous ``lp = 1.0 - mean_return`` used at the call
         site, which with ``mean_return≈100`` evaluated to ≈-99. That negative
         value was *over-eager* (``-99 > grow_trigger_lp_threshold`` is False,
@@ -178,8 +190,7 @@ class ModelGrowerV2(nn.Module):
         that the ``coverage:`` block is present.
         """
         mr = float(mean_return)
-        if mr > self._rmax:
-            self._rmax = mr
+        self._rmax = max(mr, self._rmax * self._cfg.rmax_decay)
         if self._rmax <= 0:
             return 1.0
         return max(0.0, 1.0 - mr / self._rmax)
@@ -362,6 +373,7 @@ class ModelGrowerV2(nn.Module):
                 "initial_layers": self._cfg.initial_layers,
                 "max_layers": self._cfg.max_layers,
                 "min_steps_between_growths": self._cfg.min_steps_between_growths,
+                "rmax_decay": self._cfg.rmax_decay,
             },
         }
 

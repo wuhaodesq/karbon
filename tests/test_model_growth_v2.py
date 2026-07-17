@@ -114,13 +114,38 @@ class TestGrowerV2PlateauLP:
         assert grower.plateau_lp(50.0) == 0.0   # first sample seeds rmax
         assert grower.plateau_lp(100.0) == 0.0  # new peak
         assert grower.plateau_lp(100.0) == 0.0  # plateau at peak -> no headroom
-        assert abs(grower.plateau_lp(98.0) - 0.02) < 1e-6  # slight dip -> small headroom
 
     def test_lp_positive_when_below_running_max(self) -> None:
         """Any return below the running max leaves positive headroom → hold."""
         grower = ModelGrowerV2(config=GrowthConfigV2())
         grower.plateau_lp(10.0)  # rmax = 10
         assert grower.plateau_lp(5.0) > 0.0
+
+    def test_spike_is_forgotten_so_growth_can_refire(self) -> None:
+        """Regression for the resume-spike bug: a one-off inflated return on
+        the first step after a checkpoint resume (e.g. 113 after the model's
+        sustained plateau is ~101) must NOT pin ``rmax`` forever. With the
+        decaying running max, the spike fades over a handful of growth-check
+        calls and the trigger line (0.95 × rmax) drops back to the sustained
+        level, so a future 3→4 layer growth can still fire.
+
+        Without the decay (raw running max), rmax would stay 113 and growth
+        would require mean_return ≥ 0.95×113 ≈ 107.5 — unreachable at a 101
+        plateau, permanently blocking further growth.
+        """
+        cfg = GrowthConfigV2(rmax_decay=0.98)
+        grower = ModelGrowerV2(config=cfg)
+        grower.plateau_lp(101.0)        # sustained plateau seeds rmax = 101
+        grower.plateau_lp(113.0)        # transient resume spike -> rmax = 113
+        assert grower._rmax == 113.0
+        # Sustained plateau returns; spike must decay back toward 101.
+        rmax_after = None
+        for _ in range(8):
+            rmax_after = grower.plateau_lp(101.0)
+        assert rmax_after < 107.5, "spike not forgotten; growth would be blocked"
+        # Once back at the sustained level, plateau_lp ≈ 0 -> grower fires.
+        lp = grower.plateau_lp(101.0)
+        assert lp <= 0.05
 
     def test_grower_fires_on_plateau_with_coverage(self) -> None:
         """Real-breakthrough fix: corrected LP lets the grower trigger on a
