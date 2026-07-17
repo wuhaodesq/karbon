@@ -1595,6 +1595,33 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 optimizer.load_state_dict(payload["optim_state"])
             except (ValueError, RuntimeError) as exc:
                 logger.warning("Optimizer state mismatch on resume (%s); starting fresh.", exc)
+        # Restore the autonomous grower's state so its layer count and growth
+        # bookkeeping stay in sync with the (resumed) model. Without this the
+        # grower is recreated as `initial_layers` (2) while the model may already
+        # be 3/4/… layers, causing a spurious no-op growth on the first check —
+        # or, worse, calling `_create_larger_model(model, 3)` on a 4-layer model
+        # and silently DROPPING a layer on the next resume.
+        if model_grower_v2 is not None and payload.get("model_grower_v2_state"):
+            try:
+                model_grower_v2.load_state_dict(payload["model_grower_v2_state"])
+                logger.info(
+                    "Resumed ModelGrowerV2 state (layers=%d, growth_count=%d)",
+                    len(model_grower_v2), model_grower_v2._growth_count,
+                )
+            except (ValueError, RuntimeError, KeyError) as exc:
+                logger.warning(
+                    "ModelGrowerV2 state mismatch on resume (%s); starting fresh.", exc)
+            # Safety sync: grower's layer count MUST match the actual model.
+            try:
+                actual = int(model.backbone.n_layers)
+                if actual != model_grower_v2._current_layers:
+                    logger.warning(
+                        "ModelGrowerV2 layer desync (grower=%d, model=%d); "
+                        "syncing grower to model.",
+                        model_grower_v2._current_layers, actual)
+                    model_grower_v2._current_layers = actual
+            except AttributeError:
+                pass
         # TODO(Phase5+): restore extra states (RND, EWC Fisher, coverage, skills,
         # WM, imagination, symbolic, etc. — ~40 keys) for homogeneous resume.
         # Currently ~40 extra keys are written (lines ~2680-2740) but never read

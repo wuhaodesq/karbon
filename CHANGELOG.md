@@ -546,6 +546,22 @@ See `docs/stage1_report.md` for the full run card.
   growth-check calls while still tracking genuinely sustained peaks. Added
   `tests/test_model_growth_v2.py::TestGrowerV2PlateauLP::test_spike_is_forgotten_so_growth_can_refire`.
 
+- **Critical fix: ModelGrowerV2 state is now restored on resume** (`src/train.py`
+  resume block loads `model_grower_v2_state`, previously only `model` +
+  `optimizer` were loaded — the grower state was saved but never read back, per
+  the TODO at the old line 1598). Without this, every resume recreated the
+  grower as `initial_layers=2` while the model was already 3/4/… layers,
+  causing (a) a spurious no-op "2→3" growth that wasted the 1M-step
+  `min_steps_between_growths` budget, and (b) a catastrophic latent bug: a
+  future resume onto a 4-layer checkpoint with a fresh 2-layer grower would
+  call `_create_larger_model(model, 3)` on the 4-layer model and **silently
+  DROP the 4th layer**. Added a post-resume layer-count safety sync
+  (`grower._current_layers = model.backbone.n_layers`) and a
+  `resume_warmup_calls` (default 5) plateau-check warmup so the inflated
+  first-step `mean_return` on resume can't immediately force a growth while
+  `rmax` decays back to the true plateau. Added
+  `tests/test_model_growth_v2.py::TestGrowerV2ResumeLoad`.
+
 ---
 
 ## [Unreleased]

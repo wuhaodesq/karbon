@@ -187,6 +187,41 @@ class TestGrowerV2PlateauLP:
         )
 
 
+class TestGrowerV2ResumeLoad:
+    def test_load_state_restores_layers_and_arms_warmup(self) -> None:
+        """On resume, load_state_dict must restore the grower's layer count and
+        growth bookkeeping, AND arm a post-resume warmup so the inflated
+        first-step mean_return cannot immediately force a growth. This is the
+        fix for the desync bug where a fresh grower (2 layers) on a 3/4-layer
+        model would do a no-op growth or silently drop a layer."""
+        cfg = GrowthConfigV2(resume_warmup_calls=3)
+        grower = ModelGrowerV2(config=cfg)
+        state = grower.state_dict()
+        state["current_layers"] = 4
+        state["growth_count"] = 2
+        state["last_growth_step"] = 9_000_000
+        state["rmax"] = 113.0
+        grower.load_state_dict(state)
+        assert grower._current_layers == 4
+        assert grower._growth_count == 2
+        assert grower._warmup_remaining == 3  # fresh warmup armed on load
+        # During warmup, should_grow must NOT fire even on a perfect plateau.
+        for _ in range(3):
+            assert grower.should_grow(
+                step=12_000_000, learning_progress=0.0, coverage_ratio=1.0) is False
+        # After warmup it can fire.
+        assert grower.should_grow(
+            step=12_000_000, learning_progress=0.0, coverage_ratio=1.0) is True
+
+    def test_warmup_default_zero_for_fresh_grower(self) -> None:
+        """A freshly constructed grower (no resume) has no warmup, so growth
+        can trigger on the very first eligible plateau as before."""
+        grower = ModelGrowerV2(config=GrowthConfigV2(min_steps_between_growths=0))
+        assert grower._warmup_remaining == 0
+        assert grower.should_grow(
+            step=1_000_000, learning_progress=0.0, coverage_ratio=1.0) is True
+
+
 class TestGrowerV2ObsShapeCarryover:
     def test_created_model_keeps_real_obs_shape(self) -> None:
         """_create_larger_model must use the *real* observation shape from the

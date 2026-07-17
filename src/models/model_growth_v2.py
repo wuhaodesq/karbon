@@ -48,6 +48,7 @@ class GrowthConfigV2:
     grow_trigger_lp_threshold: float = 0.05
     grow_trigger_coverage: float = 0.3
     rmax_decay: float = 0.98
+    resume_warmup_calls: int = 5
 
 
 def _carry_over_adam_momentum(
@@ -136,6 +137,7 @@ class ModelGrowerV2(nn.Module):
         self._growth_count = 0
         self._growth_history: list[dict] = []
         self._rmax = 0.0  # running max of mean_return, for the plateau LP signal
+        self._warmup_remaining = 0  # post-resume plateau checks to skip before growing
 
     @property
     def capacity(self) -> int:
@@ -152,6 +154,12 @@ class ModelGrowerV2(nn.Module):
         coverage_ratio: float,
     ) -> bool:
         """Check if growth should trigger."""
+        # Post-resume warmup: skip the first few plateau checks so a transient
+        # resume spike (inflated first-step mean_return) cannot immediately
+        # force a growth. rmax also decays back to the true plateau in this window.
+        if self._warmup_remaining > 0:
+            self._warmup_remaining -= 1
+            return False
         if self._current_layers >= self._cfg.max_layers:
             return False
         if step - self._last_growth_step < self._cfg.min_steps_between_growths:
@@ -369,6 +377,7 @@ class ModelGrowerV2(nn.Module):
             "growth_count": self._growth_count,
             "growth_history": self._growth_history,
             "rmax": self._rmax,
+            "warmup_remaining": self._warmup_remaining,
             "config": {
                 "initial_layers": self._cfg.initial_layers,
                 "max_layers": self._cfg.max_layers,
@@ -383,3 +392,6 @@ class ModelGrowerV2(nn.Module):
         self._growth_count = int(state["growth_count"])
         self._growth_history = state["growth_history"]
         self._rmax = float(state.get("rmax", 0.0))
+        # A fresh post-resume warmup so the resume spike can't drive an
+        # immediate growth; rmax decays back to the true plateau meanwhile.
+        self._warmup_remaining = int(self._cfg.resume_warmup_calls)
