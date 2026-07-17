@@ -573,6 +573,30 @@ def _obs_to_tensor(obs: np.ndarray, device: torch.device) -> torch.Tensor:
     return t.to(device)
 
 
+def _ckpt_layer_count(path) -> int:
+    """Infer the number of backbone blocks in a checkpoint's model_state.
+
+    Used to build the model with the SAME layer count as a resume checkpoint,
+    so a 3-layer checkpoint does not fail to load into a 2-layer model (which
+    would silently reinitialize the model randomly). Returns 0 if unknown.
+    """
+    try:
+        import torch as _torch
+        _ck = _torch.load(path, map_location="cpu")
+        _ms = _ck.get("model_state") if isinstance(_ck, dict) else None
+        if _ms is None:
+            return 0
+        _n = 0
+        for _k in _ms.keys():
+            if _k.startswith("backbone.blocks."):
+                _parts = _k.split(".")
+                if len(_parts) > 2 and _parts[2].isdigit():
+                    _n = max(_n, int(_parts[2]) + 1)
+        return _n
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     setup_logging("INFO")
     device_info = get_device_info(config.get("device_preferred"))
@@ -652,12 +676,27 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
 
     # --- Model
     model_cfg = config["model"]
+    # On resume, build the model with the SAME number of backbone blocks as the
+    # checkpoint. Otherwise a 3-layer checkpoint loaded into a 2-layer model
+    # raises a state_dict size mismatch, the model is reinitialized RANDOMLY,
+    # and the grower's subsequent 2->3 growth silently trains from scratch
+    # (this produced the "spurious growth + crashed mean_return" symptom).
+    model_n_layers = int(model_cfg.get("hybrid_n_layers", 3))
+    grower_initial = int(model_cfg.get("hybrid_n_layers", 2))
+    if resume is not None:
+        _n = _ckpt_layer_count(resume)
+        if _n > 0:
+            model_n_layers = _n
+            grower_initial = _n
+            logger.info(
+                "Resume ckpt has %d layers; building model+grower to match "
+                "(prevents random reinit on layer-count mismatch).", _n)
     if bool(model_cfg.get("use_hybrid_backbone", False)):
         model = HybridActorCritic(
             obs_shape=obs_shape,
             num_actions=num_actions,
             d_model=int(model_cfg.get("hidden_size", 128)),
-            n_layers=int(model_cfg.get("hybrid_n_layers", 3)),
+            n_layers=model_n_layers,
             n_heads=int(model_cfg.get("hybrid_n_heads", 4)),
             swa_window=int(model_cfg.get("hybrid_swa_window", 16)),
             ttt_mini_batch=int(model_cfg.get("hybrid_ttt_mini_batch", 8)),
@@ -678,7 +717,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             tag_parts.append("VisionEncoder")
         vision_tag = " + " + " + ".join(tag_parts) if tag_parts else ""
         logger.info("Model: HybridActorCubit (d_model=%d, layers=%d%s)",
-                    model.d_model, int(model_cfg.get("hybrid_n_layers", 3)), vision_tag)
+                    model.d_model, model_n_layers, vision_tag)
     else:
         model = ActorCritic(obs_shape, num_actions, hidden=int(model_cfg.get("hidden_size", 64))).to(device)
         logger.info("Model: ActorCritic (hidden=%d)", int(model_cfg.get("hidden_size", 64)))
@@ -1223,7 +1262,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             d_model=int(model_cfg.get("hidden_size", 128)),
             n_heads=int(model_cfg.get("hybrid_n_heads", 4)),
             config=GrowthConfigV2(
-                initial_layers=int(model_cfg.get("hybrid_n_layers", 2)),
+                initial_layers=grower_initial,
                 max_layers=int(growth_cfg.get("max_layers", 20)),
                 min_steps_between_growths=int(growth_cfg.get("min_steps_between_growths", 100_000)),
                 grow_trigger_lp_threshold=float(growth_cfg.get("grow_trigger_lp_threshold", 0.05)),
@@ -1621,6 +1660,18 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         model_grower_v2._current_layers, actual)
                     model_grower_v2._current_layers = actual
             except AttributeError:
+                pass
+        # Enforce a growth cooldown from the resume step so the transient resume
+        # spike (inflated first-step mean_return) cannot immediately drive a
+        # 3->4 (or N->N+1) growth. The natural plateau (rmax decay) + 1M
+        # cooldown then gate the next *real* growth.
+        if model_grower_v2 is not None:
+            try:
+                model_grower_v2._last_growth_step = max(
+                    int(getattr(model_grower_v2, "_last_growth_step", -10**9)),
+                    int(state.step),
+                )
+            except Exception:  # noqa: BLE001
                 pass
         # TODO(Phase5+): restore extra states (RND, EWC Fisher, coverage, skills,
         # WM, imagination, symbolic, etc. — ~40 keys) for homogeneous resume.
