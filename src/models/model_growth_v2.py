@@ -209,6 +209,7 @@ class ModelGrowerV2(nn.Module):
         optimizer: torch.optim.Optimizer,
         step: int,
         n_layers_to_add: int = 1,
+        distill_inputs: torch.Tensor | None = None,
     ) -> tuple[nn.Module, torch.optim.Optimizer, dict]:
         """Perform architecture surgery and return new (model, optimizer).
 
@@ -247,8 +248,11 @@ class ModelGrowerV2(nn.Module):
         new_model = self._create_larger_model(model, new_layers)
         new_model.train()
 
-        # 3. Knowledge distillation
-        self._distill(teacher, new_model, optimizer)
+        # 3. Knowledge distillation (non-disruptive when real inputs supplied)
+        self._distill(
+            teacher, new_model, optimizer,
+            distill_inputs=distill_inputs, new_block_idx=old_layers,
+        )
 
         # 4. Create new optimizer for expanded parameters
         new_optimizer = torch.optim.Adam(
@@ -320,33 +324,58 @@ class ModelGrowerV2(nn.Module):
         teacher: nn.Module,
         student: nn.Module,
         _optimizer: torch.optim.Optimizer,  # for learning rate reference
+        distill_inputs: torch.Tensor | None = None,  # real obs (B,H,W,C) for non-disruptive growth
+        new_block_idx: int | None = None,
         batch_size: int = 16,
     ) -> None:
-        """Knowledge distillation: student mimics teacher on synthetic data.
+        """Knowledge distillation: student mimics teacher.
 
-        Uses random input + MSE between teacher and student outputs.
-        Bounded: exactly distill_steps SGD steps.
+        Non-disruptive growth: when ``new_block_idx`` is given we freeze every
+        parameter EXCEPT the freshly-added block and train ONLY that block to
+        reproduce the teacher's outputs on REAL observations (``distill_inputs``).
+        This forces the new block to learn the identity mapping on the agent's
+        actual data distribution, so the grown model equals the teacher at the
+        moment of growth (no performance drop), and RL can then exploit the
+        extra capacity. Without real inputs we fall back to the old behaviour
+        (distill all params on random noise), which is disruptive.
         """
         device = next(student.parameters()).device
-        opt = torch.optim.Adam(
-            [p for p in student.parameters() if p.requires_grad],
-            lr=self._cfg.distill_lr,
-        )
+
+        # Select which params to optimize.
+        if new_block_idx is not None and hasattr(student, "backbone"):
+            train_params = list(student.backbone.blocks[new_block_idx].parameters())
+            # Freeze everything else so the copied blocks/heads stay == teacher.
+            for p in student.parameters():
+                p.requires_grad_(False)
+            for p in train_params:
+                p.requires_grad_(True)
+        else:
+            train_params = [p for p in student.parameters() if p.requires_grad]
+
+        opt = torch.optim.Adam(train_params, lr=self._cfg.distill_lr)
+
+        use_real = distill_inputs is not None and distill_inputs.numel() > 0
+        n_data = int(distill_inputs.shape[0]) if use_real else 0
 
         for _ in range(self._cfg.distill_steps):
-            # Random observations (simulate diverse inputs)
-            x = torch.randint(0, 256, (batch_size, 64, 64, 3),
-                             dtype=torch.uint8, device=device)
+            if use_real:
+                if n_data <= batch_size:
+                    x = distill_inputs
+                else:
+                    idx = torch.randint(0, n_data, (batch_size,), device=device)
+                    x = distill_inputs[idx]
+            else:
+                # Random observations (fallback; disruptive).
+                x = torch.randint(0, 256, (batch_size, 64, 64, 3),
+                                 dtype=torch.uint8, device=device)
 
             with torch.no_grad():
                 t_logits, t_values = teacher(x)
             s_logits, s_values = student(x)
 
-            # P2: preserve the teacher's POLICY distribution (KL on softmax),
-            # not just raw logit magnitude, so the grown model keeps the
-            # agent's learned action preferences instead of resetting them.
-            # This is what makes growth non-disruptive to an otherwise-stuck
-            # policy.
+            # Preserve the teacher's POLICY distribution (KL on softmax), not
+            # just raw logit magnitude, so the grown model keeps the agent's
+            # learned action preferences instead of resetting them.
             kl = F.kl_div(
                 F.log_softmax(s_logits, dim=-1),
                 F.softmax(t_logits, dim=-1),
@@ -360,6 +389,10 @@ class ModelGrowerV2(nn.Module):
             opt.zero_grad()
             loss.backward()
             opt.step()
+
+        # Restore full trainability for the RL optimizer.
+        for p in student.parameters():
+            p.requires_grad_(True)
 
     def summary(self) -> dict:
         return {

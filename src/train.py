@@ -2606,11 +2606,28 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                             state.step, lp, cov, len(model_grower_v2))
             if model_grower_v2.should_grow(state.step, lp, cov):
                 try:
+                    # Non-disruptive growth: distill the new block on REAL
+                    # observations sampled from the replay buffer (so it learns
+                    # the identity map on the agent's actual data and the grown
+                    # model equals the teacher at growth time). Fall back to
+                    # random-noise distillation if the buffer is empty.
+                    distill_inputs = None
+                    if replay is not None and len(replay) > 0:
+                        try:
+                            db = min(int(replay_cfg.get("distill_batch", 1024))
+                                     if replay_cfg else 1024, len(replay))
+                            distill_inputs = replay.sample(db)["obs"].to(device)
+                        except Exception as exc:
+                            logger.warning("[growth] replay sample failed (%s); "
+                                           "falling back to random distill", exc)
+                            distill_inputs = None
                     model, optimizer, grow_rec = model_grower_v2.grow(
                         model, optimizer, state.step, n_layers_to_add=1,
+                        distill_inputs=distill_inputs,
                     )
-                    logger.info("[growth] grown to %d layers (step=%d)",
-                                grow_rec["new_layers"], state.step)
+                    logger.info("[growth] grown to %d layers (step=%d)%s",
+                                grow_rec["new_layers"], state.step,
+                                "" if distill_inputs is None else " (non-disruptive, real-data distill)")
                 except Exception as exc:
                     logger.error("[growth] failed: %s", exc)
 

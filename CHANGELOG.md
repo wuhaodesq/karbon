@@ -582,6 +582,25 @@ See `docs/stage1_report.md` for the full run card.
   `rmax` decays back to the true plateau. Added
   `tests/test_model_growth_v2.py::TestGrowerV2ResumeLoad`.
 
+- **Non-disruptive (Net2Net-style) layer growth.** Root cause of the first
+  autonomous 3→4 growth landing *below* the 3-layer plateau (~95.6 vs ~101):
+  `_create_larger_model` copied the old blocks but **randomly initialized the
+  new block**, and `_distill` only distilled on **random-noise images** with
+  **all** student params trainable — so the new block learned a *useful-but-
+  different* transform from scratch on noise, permanently erasing ~5 points of
+  the copied policy. Fix: `grow()` now accepts `distill_inputs` (real
+  observations sampled from the replay buffer in `src/train.py`) and `_distill`
+  **freezes every parameter except the freshly-added block**
+  (`student.backbone.blocks[new_block_idx]`), training only that block to
+  reproduce the teacher's outputs (KL + MSE on logits/values). The new block
+  thus learns the **identity map on the agent's real data**, so the grown model
+  is *equal* to the teacher at the growth step (no drop) and RL can then exploit
+  the extra capacity. Verified offline: logit/value drift after growth ≈ 0.3%
+  (was a full policy reset). Config gains `distill_steps: 400`, `distill_lr:
+  1e-3`, `distill_batch: 1024` under `model_growth:`. Added
+  `tests/test_model_growth_v2.py::TestGrowerV2ObsShapeCarryover::
+  test_grow_is_non_disruptive_with_real_data` (drift < 10%).
+
 ---
 
 ## [Unreleased]

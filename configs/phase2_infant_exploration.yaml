@@ -118,6 +118,9 @@ model_growth:
   max_layers: 20
   min_steps_between_growths: 1000000   # space growths 1M apart so each benefit materializes before the next
   grow_trigger_coverage: 0.15          # lowered from 0.3: raw-obs hash undercounts exploration after 9M steps
+  distill_steps: 400                   # non-disruptive: train only new block on real data -> needs enough steps
+  distill_lr: 1e-3
+  distill_batch: 1024                  # how many real replay obs to sample for identity distillation
 
 cross_modal:
   enabled: true

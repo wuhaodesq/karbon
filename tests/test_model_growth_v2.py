@@ -240,6 +240,39 @@ class TestGrowerV2ObsShapeCarryover:
         assert grown.obs_shape == obs_shape
 
 
+    def test_grow_is_non_disruptive_with_real_data(self) -> None:
+        """Growing a 3-layer model to 4 layers on REAL observations and training
+        ONLY the new block must leave the grown model's behaviour ~identical to
+        the teacher (the new block learns identity on the agent's data). This is
+        what makes capacity growth non-disruptive instead of resetting the policy.
+        """
+        torch.manual_seed(0)
+        obs_shape = (16, 16, 3)
+        model = HybridActorCritic(
+            obs_shape=obs_shape, num_actions=4, d_model=24, n_layers=3, n_heads=4,
+        )
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        grower = ModelGrowerV2(
+            d_model=24, n_heads=4,
+            config=GrowthConfigV2(initial_layers=3, distill_steps=300, distill_lr=1e-3),
+        )
+        # Real-ish observations the agent would actually see.
+        obs = torch.randint(0, 256, (128, *obs_shape), dtype=torch.uint8)
+        with torch.no_grad():
+            t_logits, t_values = model(obs)
+        grown, _, rec = grower.grow(
+            model, opt, step=1_000_000, n_layers_to_add=1, distill_inputs=obs,
+        )
+        assert rec["new_layers"] == 4
+        with torch.no_grad():
+            s_logits, s_values = grown(obs)
+        # Non-disruptive: grown model == teacher on the distilled data.
+        logit_rel = (s_logits - t_logits).abs().mean() / (t_logits.abs().mean() + 1e-6)
+        value_rel = (s_values - t_values).abs().mean() / (t_values.abs().mean() + 1e-6)
+        assert logit_rel < 0.10, f"logit drift {logit_rel:.3f} too high"
+        assert value_rel < 0.10, f"value drift {value_rel:.3f} too high"
+
+
 if __name__ == "__main__":
     import pytest
 
