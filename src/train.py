@@ -1661,18 +1661,6 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     model_grower_v2._current_layers = actual
             except AttributeError:
                 pass
-        # Enforce a growth cooldown from the resume step so the transient resume
-        # spike (inflated first-step mean_return) cannot immediately drive a
-        # 3->4 (or N->N+1) growth. The natural plateau (rmax decay) + 1M
-        # cooldown then gate the next *real* growth.
-        if model_grower_v2 is not None:
-            try:
-                model_grower_v2._last_growth_step = max(
-                    int(getattr(model_grower_v2, "_last_growth_step", -10**9)),
-                    int(state.step),
-                )
-            except Exception:  # noqa: BLE001
-                pass
         # TODO(Phase5+): restore extra states (RND, EWC Fisher, coverage, skills,
         # WM, imagination, symbolic, etc. — ~40 keys) for homogeneous resume.
         # Currently ~40 extra keys are written (lines ~2680-2740) but never read
@@ -1680,6 +1668,20 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         # modules) but needed for long-running homogeneous Phases (Phase 5+).
         resumed_stage = int(payload.get("stage", stage))
         resumed_step = int(payload.get("step", 0))
+        # Enforce a growth cooldown from the resumed step so the transient
+        # resume spike / exploration-reset dip (inflated-or-collapsed first-step
+        # mean_return) cannot immediately drive a 3->4 (or N->N+1) growth. The
+        # natural plateau (rmax decay) + 1M cooldown then gate the next *real*
+        # growth. NOTE: this must run after `resumed_step` is resolved (above),
+        # not while `state.step` is still 0.
+        if model_grower_v2 is not None:
+            try:
+                model_grower_v2._last_growth_step = max(
+                    int(getattr(model_grower_v2, "_last_growth_step", -10**9)),
+                    resumed_step,
+                )
+            except Exception:  # noqa: BLE001
+                pass
         if resumed_stage == stage:
             # Same-stage resume: continue the step counter.
             state.step = resumed_step

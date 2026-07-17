@@ -47,6 +47,26 @@ All notable changes to this project are documented here.
   **~101.4 是当前架构/预设的能力天花板**，超参仅在 99.5~101.4 内挪动、无法突破。
   故回退 bonus 0.5 / ent 0.015，`total_steps` 提到 13M 防自动停。
 
+### Fixed (Stage-2 ModelGrowerV2 resume correctness / 续跑不随机化)
+
+- **续跑时按检查点层数构建模型+生长器（防止 3 层权重误载入 2 层模型→随机初始化）。**
+  原 `train.py` 用 config 的 `hybrid_n_layers`(=2) 构建模型与 `ModelGrowerV2`，而
+  `ckpt_stage2_011000384.pt` 是 **3 层**模型；`model.load_state_dict` 因 `backbone.blocks.2.*`
+  尺寸不匹配报错 → "starting model fresh" → 模型被**随机重新初始化**，生长器随后 2→3
+  把随机模型当已训练模型继续训（表现为 `mean_ret` 续跑后暴跌到 ~70~82 且不再回升）。
+  修复：续跑前用新增的 `_ckpt_layer_count(resume)` 窥探检查点的 `backbone.blocks.N` 层数，
+  按该层数构建模型与生长器（`initial_layers` 同步），使 3 层权重正确载入。
+  新增 `tests/test_resume_layer_count.py`（合成 2/3 层 state_dict + 缺失文件/无 model_state 用例）。
+  实证：续跑日志出现 `Resume ckpt has 3 layers; building model+grower to match` 且
+  `Model: HybridActorCubit (... layers=3 ...)`，首步 `mean_ret≈103`（真实权重，非随机）。
+
+- **续跑生长冷静期用 `resumed_step` 而非 `state.step`（防续跑探索重置谷里误触 3→4）。**
+  原冷却逻辑在 `state.step` 仍=0 时读取，导致 `last_growth_step` 被设为 0、1M 冷却形同虚设，
+  续跑后仅数千步即在 `mean_ret` 探索谷（~73）触发 `grown to 4 layers`。
+  改为在 `resumed_step` 解析后设置 `last_growth_step = max(原有, resumed_step)`，
+  使下一次真实生长被 1M 冷却挡到架构真正平台期。当前 4 层任务已自发突破并自动备份
+  （`watch_backup.sh` → `/root/autodl-tmp/karbon/backup/`）。
+
 ### Known limitation (first cut)
 
 - Single-env-only cognitive blocks (homeostatic drives, emotion, number-sense /
