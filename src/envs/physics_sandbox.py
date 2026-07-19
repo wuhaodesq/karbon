@@ -57,6 +57,8 @@ class _Body:
     temperature: float = 20.0
     _fx: float = 0.0
     _fy: float = 0.0
+    _prev_vx: float = 0.0
+    _prev_vy: float = 0.0
 
     def apply_force(self, fx: float, fy: float) -> None:
         self._fx += fx
@@ -350,12 +352,25 @@ class PhysicsSandbox:
                 body.y = -self._hw + body.radius
                 body.vy *= -0.3
 
+        # Record previous-frame velocity for acceleration-based reward
+        # (only meaningful AFTER this step's integration, so next _compute_reward
+        # compares against pre-step velocity).
+        for body in [self._agent] + self._objects:
+            body._prev_vx = body.vx
+            body._prev_vy = body.vy
+
     def _compute_reward(self) -> float:
         """Reward for interacting with objects.
 
-        - Touching objects (+0.1 per object touched)
-        - Moving objects (more reward for causing larger velocity change)
-        - Exploring distant objects (+0.05 for reducing distance to farthest)
+        v9 redesign (break local-optimum trap): the old reward gave speed*0.05 to
+        EVERY object unconditionally, so passive inertia/collisions "white-gift"
+        return and the agent got stuck nudging a few objects. New design rewards
+        only AGENT-CAUSED object acceleration while in contact, forcing active
+        multi-object pushing to maximize return.
+        - Contact: +0.15 per object touched (was 0.1)
+        - Active acceleration: only when agent touches object, reward |Δv|
+          (agent pushing causes instantaneous speed change; passive motion ≠ Δv)
+        - Approach: keep (exploration toward distant objects)
         """
         reward = 0.0
         agent = self._agent
@@ -368,12 +383,18 @@ class PhysicsSandbox:
             touch_dist = agent.radius + obj.radius
 
             # Contact reward
-            if dist < touch_dist + 0.02:
+            in_contact = dist < touch_dist + 0.02
+            if in_contact:
                 contact_count += 1
 
-            # Object velocity reward (agent caused movement)
-            speed = np.sqrt(obj.vx * obj.vx + obj.vy * obj.vy)
-            reward += speed * 0.05
+            # Agent-caused acceleration reward: only when agent touches the object,
+            # reward the object's SPEED CHANGE (|Δv|) this step. Passive inertia/
+            # collisions give ~0 Δv (uniform motion); only an active push by the
+            # agent produces a large instantaneous Δv. This removes the "white-gift"
+            # speed reward that let the agent sit in a local optimum.
+            accel = abs(obj.vx - obj._prev_vx) + abs(obj.vy - obj._prev_vy)
+            if in_contact and accel > 1e-4:
+                reward += accel * 0.5
 
             # Approach reward (reducing distance to objects)
             prev = self._prev_distances.get(i, dist)
@@ -381,7 +402,7 @@ class PhysicsSandbox:
                 reward += (prev - dist) * 0.2
             self._prev_distances[i] = dist
 
-        reward += contact_count * 0.1
+        reward += contact_count * 0.15
 
         # Small penalty for hitting walls
         wall_dist = self._hw - max(
@@ -391,7 +412,7 @@ class PhysicsSandbox:
         if wall_dist < 0.1:
             reward -= (0.1 - wall_dist) * 0.5
 
-        return float(max(-0.5, min(2.0, reward)))
+        return float(max(-0.5, min(3.0, reward)))
 
     def _proprioceptive(self) -> np.ndarray:
         """Return agent's proprioceptive state: (x, y, vx, vy, contact_fx, contact_fy)."""

@@ -169,8 +169,13 @@ homeostatic_drives:
   safety_decay: 0.001
   rest_decay: 0.005
 
+# MCTS planner disabled: Stage-3 v8 (planner ON) plateaued at mean_ret 101.6,
+# while v9 (planner OFF, same 7-layer ckpt) converged to 103.8 (+2.2, slope->0
+# over ~200k steps). The planner overrides PPO actions with imagined-reward-best
+# plans, but the imperfect world model biases those picks AND decouples PPO's
+# gradient from actual behavior, dragging steady-state down. Keep OFF.
 long_range_planner:
-  enabled: true
+  enabled: false
   max_depth: 10
   max_nodes: 500
   num_simulations: 50

@@ -5,6 +5,16 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Known failing tests (pre-existing, TODO — not from planner/reward work)
+
+- `tests/test_stage3_wm.py::test_stage3_config_validates`:
+  `ConfigValidationError: unknown keys under model: ['slot_dim',
+  'slot_num_iterations', 'slot_num_slots', 'use_slot_attention']` — config
+  schema (`src/utils/config_schema.py`) doesn't declare SlotAttention keys.
+- `tests/test_model_growth_v2.py::TestGrowerV2PlateauLP::test_spike_is_forgotten_so_growth_can_refire`.
+- Both confirmed failing on `4c8d485` (before the planner-disable / reward work),
+  so unrelated to this change. Fix or follow-up needed.
+
 ### Added (Stage-2 N-env vectorization — throughput)
 
 - **N parallel 3D homes via `src/envs/vec_three_d_world.py`** (`VecEnv` generic
@@ -163,9 +173,55 @@ All notable changes to this project are documented here.
      对破局部最优无效，而 counterfactual planning 同样依赖 RSSM 在想象里评估回报来选动作——
      若想象回报评估对策略更新无益，planning 也未必更有用。剩余破局方向优先级重排：
      **(b) 改 reward 设计（定向拉高局部最优陷阱的梯度，最可能被低估）> (a) 换 env > (c) 规划**。
-   - v6 最优 7层 ckpt `ckpt_stage6_imagfix_002680320.pt` 已三重备份（live + 两 backup 目录，
-     sha256 `1d03de5d…7db3` 一致）。Stage-3 架构维度实验（层数/宽度/WM/imagination/奖励信号）
-     **至此全部穷尽且均收敛 ~100–102**，确认该上限由环境回报结构 + 局部最优陷阱锁定。
+    - v6 最优 7层 ckpt `ckpt_stage6_imagfix_002680320.pt` 已三重备份（live + 两 backup 目录，
+      sha256 `1d03de5d…7db3` 一致）。Stage-3 架构维度实验（层数/宽度/WM/imagination/奖励信号）
+      **至此全部穷尽且均收敛 ~100–102**，确认该上限由环境回报结构 + 局部最优陷阱锁定。
+
+- **Stage-3 v8（counterfactual planning / MCTS，仍仅 transient）：System 2 规划也未破局。**
+    `CounterfactualPlanner` + `LongRangePlanner`（MCTS over RSSM）在 train.py 已接线
+    （lines 1366-1375, 1507-1516, 2805-2826），用（v6 修好的）`predict_reward` 想象评估候选
+    动作序列并覆盖 PPO 动作。v8 启用二者于 v6 的 7层 ckpt 上。结果：
+    - 接管初期从 83 冲到 **`max=106.53`**（step 2695168），显著高于 v6 的 101；
+      但 step 2730k 后回落到 **`mean_ret≈101.6`**（`cov=100%`, `slope` 缓降至 ~1.1），
+      稳态与 v4/v6 的 101±1 **完全重合**。
+    - **结论：MCTS 规划仅产生 transient 尖峰（106→101），未抬升稳态。** 印证 v6 的推论：
+      planner 短期用真实回报选出更优动作，但 PPO 的梯度更新持续把策略拉回同一局部最优，
+      两者拉锯后净稳态仍是 ~101。所有 v1-v8 版本**峰值均 ~106（transient）、稳态全锁 101±1**。
+    - **最终 Stage-3 全维度穷尽结论**：层数(6/7) / 宽度(128/256) / WM / imagination(错+对奖励)
+      / MCTS 规划 —— 全部只产生 transient 尖峰，无法抬升 PhysicsSandbox 的 ~101-102 稳态。
+      上限由**回报景观的局部最优陷阱**锁定：当前 reward 对"被动蹭物体"（物体自身惯性/碰撞
+      白送速度奖励）给分，agent 陷在"推几个物体"的局部最优，不主动最大化全局回报。
+    - **唯一未排除的破局杠杆：(b) 改 PhysicsSandbox reward 设计** —— 直接重塑回报景观
+      （移除被动速度白送、奖励 agent 主动加速物体），可能把 106 的 transient 变成稳态。
+      这区别于所有"优化/架构"干预（只改 transient），是从景观根源破局。
+    - v8 最优 7层 ckpt（规划版）已并入 v6 的 `ckpt_stage6_imagfix_002680320.pt` 保留；
+      系统盘清理：删 258 个 stage2 + 625 个 stage0 + 137 个 stage3 密集 ckpt，释放 14G
+      （83%→37%，不记文件）。
+
+- **Stage-3 v9（关闭 MCTS planner / 破局成功）：稳态首次突破 ~102 天花板到 103.8。**
+    ⚠️ **归因更正**：v9 config 声称做 reward redesign，但 `src/envs/physics_sandbox.py`
+    的 reward 改动**从未上传到远程**（部署时只 sftp 了 config，漏传源码文件）。经核实远程
+    环境全程使用**旧 reward**（`speed*0.05` 被动速度奖励，未改）。因此 103.8 **不是** reward
+    redesign 的功劳。v8→v9 config 的**唯一真实差异是关闭了 MCTS planner**
+    （`long_range_planner` / `counterfactual_planner` 从 v8 的 `enabled: true` 改为不启用）。
+    - 同一 7层 ckpt `ckpt_stage6_imagfix_002680320.pt` resume、同一（旧）reward，
+      **唯一变量 = planner 开/关**：
+      - v8（planner **开**）：稳态 `mean_ret≈101.6`（`slope` 缓降未收敛）。
+      - v9（planner **关**）：resume 后 slope 转正冲到 `max=104.75`（step 2706944），
+        又训练近 20 万步（→ step 2902016）稳定在 **`mean_ret≈103.8`**，
+        最后 15 步 `mean=103.75 std=0.06`，`slope` 收敛至 ~0（对称抖动）。
+    - **真实结论：关闭 MCTS planner 使稳态 101.6→103.8（+2.2），且更稳、真收敛。**
+      机理：planner 用不完美世界模型的 `predict_reward` 覆盖 PPO 动作 → ①想象回报有偏差、
+      选的动作对真实环境非最优；②PPO 采到的是"planner 的动作"而非自身策略动作，
+      **策略梯度与实际行为脱节**，拖累收敛。关掉后 PPO 端到端学，稳稳爬到 103.8。
+      这进一步削弱"System 2 规划有用"的先验（与 v6 推论一致）。
+    - **后续动作**：已把 `phase0_protozoan.yaml` / `phase2_infant_exploration.yaml` 的
+      `long_range_planner` / `counterfactual_planner` 全部改为 `enabled: false`（附原因注释）；
+      `stage3_world_model_v8_cf_plan.yaml` 保留 `true` 作为 planner-ON 失败对照（附注释）。
+    - v9 里程碑 ckpt 已三重备份（sha256 `e7749e0e…c4cc` 一致），
+      重命名为 `ckpt_stage7_no_planner_002900480.pt`（原 `_reward_redesign_` 名误导，已弃用）。
+    - **仍未验证**：加速度 reward redesign 本身是否有效——该实验从未真正跑过，仍是待办破局杠杆。
+
 
 
 

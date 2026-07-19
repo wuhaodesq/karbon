@@ -148,8 +148,12 @@ theory_of_mind:
 homeostatic_drives:
   enabled: true
 
+# MCTS planner disabled: Stage-3 v8 (planner ON) plateaued at mean_ret 101.6,
+# while v9 (planner OFF, same 7-layer ckpt) converged to 103.8 (+2.2, slope->0
+# over ~200k steps). Imperfect-WM plan picks + PPO gradient/behavior decoupling
+# drag steady-state down. Keep OFF.
 long_range_planner:
-  enabled: true
+  enabled: false
   max_depth: 10
   max_nodes: 500
   num_simulations: 50
@@ -185,8 +189,11 @@ program_synthesis:
   max_patterns: 100
   min_occurrences: 3
 
+# Counterfactual planner disabled: same reason as long_range_planner above —
+# Stage-3 v8 showed planning overriding PPO actions drags steady-state (101.6 vs
+# 103.8 without). Keep OFF until the world model is accurate enough to trust.
 counterfactual_planner:
-  enabled: true
+  enabled: false
   num_candidates: 5
   max_imagine_steps: 8
 
