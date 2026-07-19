@@ -130,8 +130,25 @@ All notable changes to this project are documented here.
    - **结论**：当前 6–7 层架构 + PhysicsSandbox 的**硬上限 ≈ 101–102**；继续训练 v4 信息增量≈0。
      真正破局需换**架构维度**（更大 `hidden_size` 128→256 / 更长 `imagination_horizon` 8→15）
      或**换 env 难度**，而非层数/WM/imagination 的现有组合。
-   - v4 最优 7层 ckpt `ckpt_stage4_7layer_002460160.pt` 已三重备份（live + 两 backup 目录，
-     sha256 `ff103b15…e802` 一致）；v3 6层最优 `ckpt_stage3_002300416.pt` 亦留档。
+    - v4 最优 7层 ckpt `ckpt_stage4_7layer_002460160.pt` 已三重备份（live + 两 backup 目录，
+      sha256 `ff103b15…e802` 一致）；v3 6层最优 `ckpt_stage3_002300416.pt` 亦留档。
+
+- **Stage-3 v5（宽度实验，否定宽度假设）：256 宽 7层 fresh 训练，稳态仍 ≈100.4，未破天花板。**
+  为验证「~102 是否为容量/回报估计精度瓶颈」，v5 将 `hidden_size` 128→256（fresh 起 7层，
+  关 growth，沿用 v4 的 RSSM+imagination+env）。结果：
+  - step 32k 爬到 97（`slope=5`）、step 119k 摸到 `max=101.28`、step 272k **`slope=0` 进入平台**，
+    稳态 **`mean_ret≈100.4`**——与 v4（128 宽 7层）的 100–101 **完全重合**。
+  - **结论：宽度假设被否定。** 256 宽未带来任何突破，证明 ~102 不是 backbone 容量或回报估计
+    精度问题（加宽无效）、也不是层数（6→7 无效）、也不是 WM/imagination（v1-v4 已证）。
+    `cov=100%` 表明状态空间已完全覆盖，可达回报上限由 **PhysicsSandbox 的回报结构本身** 锁定。
+  - **最终 Stage-3 结论**：PhysicsSandbox + 当前 hybrid(d_model 128/256)+SlotAttention+RSSM 栈的
+    **真实能力上限 ≈ 100–102**，与环境回报结构绑定，非同维度容量可破。继续训练 v5 信息增量≈0。
+  - **真正破局方向（换维度，非加容量）**：(a) 改 env 本身（更多可交互对象 / 更高回报上限）；
+    (b) 改 reward 设计（当前回报信号限制了可达上限）；(c) 加 RSSM **反事实规划**（counterfactual
+    planning，DEV_PLAN 提及但 v3/v4 的 imagination 仅是直训 actor，未做规划打分）。
+  - v5 最优 256宽 7层 ckpt `ckpt_stage5_wide256_000260096.pt` 已三重备份（live + 两 backup 目录，
+    sha256 `52c57cde…c586` 一致）。
+
 
 ### Known limitation (first cut)
 
