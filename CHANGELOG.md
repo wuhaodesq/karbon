@@ -112,7 +112,26 @@ All notable changes to this project are documented here.
   注入 PPO（样本高效探索，Stage 3 设计本意）；并清理 `model` 块里 `hybrid_*` 的重复键
   （28–42 行曾重复定义 n_heads/swa_window/ttt_mini_batch/dropout，后写覆盖前写，实际生效
   swa_window=16 / ttt_mini_batch=8）。env/backbone 与 v1 完全一致，可直接 resume v1 最优
-  检查点切换。待 v1 跑到 ~1M 步确认平台后，再决定是否用 v2 重启验证 RSSM 驱动增益。
+   检查点切换。待 v1 跑到 ~1M 步确认平台后，再决定是否用 v2 重启验证 RSSM 驱动增益。
+
+- **Stage-3 三版全测 + 结论：6–7 层 hybrid(d_model=128)+SlotAttention 在 PhysicsSandbox
+   的真实能力上限 ≈ 101–102，无任何组合稳定突破 Stage-2 的 102.47 天花板。**
+   - **v1（RND，已停）**：开局 102.47 → 稳态 **99.5**（退化，RSSM 未进 PPO 梯度）。
+   - **v2（`rssm_uncertainty` 好奇心，已停）**：开局 ~105 → 平台 **100–102** → 2M 后**滑落**
+     （RSSM 仅作探索奖励，仍不驱动策略）。
+   - **v3（v2 + `imagination.enabled=true`，RSSM 直训 actor/critic，已停）**：开局 **105.6**
+     → 回落 **99**。Dreamer 式想象训练给出 transient 提升，但终值与 v1/v2 同落 ~99–100。
+   - **v4（v3 + `model_growth` 重新开生长，已停）**：resume 2.3M 6层 ckpt 后 **6→7 立即触发**
+     （cooldown 重置），7 层稳在 **100.7–101.1**，略高于 v3 的 99 但**未破 102.47**；
+     `slope` 衰减到 ~0.95 进入平台，`rmax` 卡 104.77。
+   - **四版对比**：v1=99.5 / v2=100–102(slide) / v3=105.6→99 / v4=101±1。
+     WM、imagination、层数都只改变 **transient 动态**，无组合稳定突破 102.47。
+     `max mean_ret` 各版均为开局 transient 尖峰（v4 max=109.99 @ step1），非真实平台。
+   - **结论**：当前 6–7 层架构 + PhysicsSandbox 的**硬上限 ≈ 101–102**；继续训练 v4 信息增量≈0。
+     真正破局需换**架构维度**（更大 `hidden_size` 128→256 / 更长 `imagination_horizon` 8→15）
+     或**换 env 难度**，而非层数/WM/imagination 的现有组合。
+   - v4 最优 7层 ckpt `ckpt_stage4_7layer_002460160.pt` 已三重备份（live + 两 backup 目录，
+     sha256 `ff103b15…e802` 一致）；v3 6层最优 `ckpt_stage3_002300416.pt` 亦留档。
 
 ### Known limitation (first cut)
 
