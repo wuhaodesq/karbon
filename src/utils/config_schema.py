@@ -35,6 +35,11 @@ class ModelSchema:
     vision_model: str = "dinov2_vits14"
     vision_freeze: bool = True
     vision_target_size: int = 224
+    # Stage 3+: Object-centric SlotAttention front-end. Ignored when disabled.
+    use_slot_attention: bool = False
+    slot_num_slots: int = 7
+    slot_dim: int = 128
+    slot_num_iterations: int = 3
 
     def _validate(self) -> None:
         if self.hidden_size <= 0:
@@ -59,6 +64,13 @@ class ModelSchema:
         if self.use_vision_encoder:
             if self.vision_target_size < 14:
                 raise ConfigValidationError("model.vision_target_size must be >= 14")
+        if self.use_slot_attention:
+            if self.slot_num_slots <= 0:
+                raise ConfigValidationError("model.slot_num_slots must be positive")
+            if self.slot_dim <= 0:
+                raise ConfigValidationError("model.slot_dim must be positive")
+            if self.slot_num_iterations <= 0:
+                raise ConfigValidationError("model.slot_num_iterations must be positive")
 
 
 @dataclass
@@ -85,8 +97,13 @@ class MemorySchema:
 @dataclass
 class EnvSchema:
     id: str
-    num_envs: int
+    num_envs: int = 1
     max_episode_steps: int | None = None
+    # PhysicsSandbox (Stage 3+) knobs. Ignored by envs that don't use them.
+    num_objects: int | None = None
+    render_size: int | None = None
+    gravity: float | None = None
+    action_force: float | None = None
 
     def _validate(self) -> None:
         if not self.id:
@@ -95,6 +112,10 @@ class EnvSchema:
             raise ConfigValidationError("env.num_envs must be positive")
         if self.max_episode_steps is not None and self.max_episode_steps <= 0:
             raise ConfigValidationError("env.max_episode_steps must be positive or null")
+        if self.num_objects is not None and self.num_objects <= 0:
+            raise ConfigValidationError("env.num_objects must be positive")
+        if self.render_size is not None and self.render_size <= 0:
+            raise ConfigValidationError("env.render_size must be positive")
 
 
 @dataclass
@@ -166,6 +187,10 @@ class TopLevelSchema:
     replay: dict | None = None
     coverage: dict | None = None
     world_model: dict | None = None
+    # Stage 3+: RSSM-uncertainty curiosity, imagination rollouts, model growth.
+    curiosity: dict | None = None
+    imagination: dict | None = None
+    model_growth: dict | None = None
     skills: dict | None = None
     curriculum: dict | None = None
     continual: dict | None = None

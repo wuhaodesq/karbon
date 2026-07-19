@@ -1,0 +1,103 @@
+# Stage 3 · World Model (v10 — reward redesign ACTUALLY applied on no-planner base)
+# CORRECTION history: v9 was mislabelled "reward redesign" but the
+# physics_sandbox.py reward edit was NEVER uploaded to remote; v9's real gain
+# (101.6->103.8) came only from disabling the MCTS planner. v10 is the FIRST run
+# that actually applies the redesigned reward:
+#   * remove unconditional speed*0.05 (passive "white-gift" reward)
+#   * reward ONLY agent-caused acceleration (|Δv|) while in contact with object
+#   * contact reward 0.1->0.15, per-step cap 2.0->3.0
+# Base = confirmed-best no-planner ckpt (ckpt_stage7_no_planner_002900480.pt,
+# steady-state 103.8). No MCTS planner (already proven to hurt). This isolates
+# the reward-redesign delta on top of the best known config. Tests whether the
+# acceleration reward lifts steady-state above 103.8.
+# NOTE: WM reward head must re-adapt to the new reward scale after resume.
+
+stage: 3
+name: "stage3_world_model_v10_reward_on_noplanner"
+
+env:
+  id: "PhysicsSandbox"
+  num_objects: 10
+  max_episode_steps: 300
+  render_size: 64
+  gravity: -9.8
+  action_force: 50.0
+
+model:
+  use_hybrid_backbone: true
+  hidden_size: 128
+  hybrid_n_layers: 7
+  hybrid_n_heads: 4
+  hybrid_swa_window: 16
+  hybrid_ttt_mini_batch: 8
+  hybrid_ffn_hidden_mult: 4
+  hybrid_dropout: 0.0
+  use_slot_attention: true
+  slot_num_slots: 7
+  slot_dim: 128
+  slot_num_iterations: 3
+  use_vision_encoder: false
+
+world_model:
+  z_dim: 32
+  h_dim: 64
+  embed_dim: 64
+  hidden: 128
+  max_rollout_steps: 10
+  kl_free_nats: 1.0
+  update_every_steps: 8
+  lr: 3.0e-4
+  wm_loss_coef: 1.0
+  log_every_steps: 5000
+
+curiosity:
+  mode: "rssm_uncertainty"
+  coef: 0.3
+
+imagination:
+  enabled: true
+  imagination_horizon: 8
+  imagination_batch: 32
+  discount: 0.99
+  actor_entropy_scale: 0.01
+  critic_loss_scale: 0.5
+  update_every_steps: 16
+  min_replay_size: 256
+  lambda_gae: 0.95
+  lr: 3.0e-4
+
+model_growth:
+  enabled: false
+
+# No planner for v10: proven to hurt steady-state (v8 101.6 vs v9 103.8).
+
+intrinsic:
+  embed_dim: 128
+  lr: 1.0e-4
+  reward_clip: 5.0
+  reward_coef: 0.1
+  update_every_steps: 1
+
+replay:
+  hot_capacity: 4096
+  warm_capacity: 32728
+  cold_max_shards: 8
+  cold_shard_size: 4096
+  per_alpha: 0.6
+  min_size_to_sample: 1024
+  sample_every_steps: 4
+  batch_size_offpolicy: 128
+  archive_subdir: "replay"
+
+coverage:
+  num_buckets: 4096
+  log_every_steps: 5000
+
+train:
+  total_steps: 5000000
+  ppo_clip: 0.2
+  ppo_epochs: 4
+  entropy_coef: 0.01
+  value_coef: 0.5
+  gamma: 0.99
+  gae_lambda: 0.95

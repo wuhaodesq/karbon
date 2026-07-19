@@ -1,51 +1,64 @@
 # Stage 4 · Bounded Skill Library
-# Adds a persistent LoRA-based skill store on top of Stage 3.
-# The skill library is instantiated but skills are discovered/populated
-# lazily during training as reward-carrying behaviors are identified.
+# Adds a persistent 3-tier LoRA-based skill store on top of the proven Stage-3
+# no-planner backbone. Resume from ckpt_stage7_no_planner_002900480.pt
+# (7-layer hybrid + SlotAttention + RSSM, steady-state ~104 on OLD reward).
 #
-# For MiniGrid this is a scaffold — skill discovery is a Stage-4 research
-# activity, not something we hardcode. What we DO validate here:
-#   - The library is bounded (3-tier: GPU top-K / CPU cache / SSD archive).
-#   - It conforms to BoundedComponent and is registered in HealthChecker.
-#   - Persistence works (state_dict roundtrip).
+# Config aligned to the ACTUAL Stage-3 training line (the old stage4_skills.yaml
+# was a stale 3-layer scaffold with no env/slot/imagination blocks — replaced).
+# NO MCTS planner (proven to hurt steady-state: v8 101.6 vs v9 104).
+# env uses OLD reward (restored) to match the resume ckpt's reward landscape.
+#
+# What Stage 4 validates (ROADMAP exit criteria):
+#   - Bounded 3-tier skill library (GPU top-K / CPU cache / SSD archive).
+#   - Observable skill reuse across tasks.
+#   - GPU skill count strictly <= K under long runs.
 
 stage: 4
 name: "stage4_skills"
 
+env:
+  id: "PhysicsSandbox"
+  num_objects: 10
+  max_episode_steps: 300
+  render_size: 64
+  gravity: -9.8
+  action_force: 50.0
+
 model:
   use_hybrid_backbone: true
-  hybrid_n_layers: 3
+  hidden_size: 128
+  hybrid_n_layers: 7
   hybrid_n_heads: 4
   hybrid_swa_window: 16
   hybrid_ttt_mini_batch: 8
   hybrid_ffn_hidden_mult: 4
   hybrid_dropout: 0.0
+  use_slot_attention: true
+  slot_num_slots: 7
+  slot_dim: 128
+  slot_num_iterations: 3
+  use_vision_encoder: false
 
-# --- Stage 4 sub-block: skill library ---
+# --- Stage 4 sub-block: bounded skill library ---
 skills:
   # Skill representation is LoRA A @ B with shape (d_out, rank, d_in).
-  # Each skill ≈ 6 KB (fp32) → VRAM impact is negligible.
-  # GPU tier stores top-K for fast lookup; CPU + SSD are archives.
+  # Each skill ~= 6 KB (fp32) -> VRAM impact negligible.
   skill_d_out: 128
   skill_d_in: 128
   skill_rank: 8
-  # 3-tier bounded storage — tuned for generous capacity.
-  # GPU: 256 skills (~1.5 MB VRAM, O(256×384) per lookup ≈ 100k ops)
-  # CPU: 2048 skills (~12 MB RAM)
-  # SSD: 64 shards × 128 = 8192 skills (~50 MB disk)
-  # Total capacity: 256 + 2048 + 8192 = 10496 skills
+  # 3-tier bounded storage (Axiom 1: declared capacity).
   gpu_capacity: 256
   cpu_capacity: 2048
   ssd_max_shards: 64
   ssd_shard_size: 128
   merge_similarity_threshold: 0.9
-  # Scoring weights for LRU × usefulness × avg-reward
+  # Scoring weights for LRU x usefulness x avg-reward eviction.
   score_alpha: 1.0    # avg_reward
   score_beta: 0.5     # log(1 + usage)
   score_gamma: 0.1    # recency (higher = penalize idle more)
   archive_subdir: "skills"
 
-# --- Prior blocks carry forward ---
+# --- Prior Stage-3 blocks carry forward ---
 world_model:
   z_dim: 32
   h_dim: 64
@@ -58,6 +71,27 @@ world_model:
   wm_loss_coef: 1.0
   log_every_steps: 5000
 
+curiosity:
+  mode: "rssm_uncertainty"
+  coef: 0.3
+
+imagination:
+  enabled: true
+  imagination_horizon: 8
+  imagination_batch: 32
+  discount: 0.99
+  actor_entropy_scale: 0.01
+  critic_loss_scale: 0.5
+  update_every_steps: 16
+  min_replay_size: 256
+  lambda_gae: 0.95
+  lr: 3.0e-4
+
+model_growth:
+  enabled: false
+
+# No planner: proven to hurt steady-state (v8 101.6 vs v9 104).
+
 intrinsic:
   embed_dim: 128
   lr: 1.0e-4
@@ -67,7 +101,7 @@ intrinsic:
 
 replay:
   hot_capacity: 4096
-  warm_capacity: 32768
+  warm_capacity: 32728
   cold_max_shards: 8
   cold_shard_size: 4096
   per_alpha: 0.6
@@ -81,6 +115,7 @@ coverage:
   log_every_steps: 5000
 
 train:
+  total_steps: 5000000
   ppo_clip: 0.2
   ppo_epochs: 4
   entropy_coef: 0.01

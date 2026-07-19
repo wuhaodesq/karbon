@@ -220,7 +220,58 @@ All notable changes to this project are documented here.
       `stage3_world_model_v8_cf_plan.yaml` 保留 `true` 作为 planner-ON 失败对照（附注释）。
     - v9 里程碑 ckpt 已三重备份（sha256 `e7749e0e…c4cc` 一致），
       重命名为 `ckpt_stage7_no_planner_002900480.pt`（原 `_reward_redesign_` 名误导，已弃用）。
-    - **仍未验证**：加速度 reward redesign 本身是否有效——该实验从未真正跑过，仍是待办破局杠杆。
+
+- **Stage-3 v10（真正的 reward redesign，已验证 / 结论：效果中性，无显著增益）。**
+    v10 是首次把 acceleration reward **真正上传远程**（v9 漏传）并训练的实验：从 no-planner
+    ckpt resume、无 planner、env 用新 reward（移除 `speed*0.05` 白送，改奖励接触时 `|Δv|`，
+    contact 0.1→0.15，cap 2.0→3.0）。训练 ~15 万步收敛到 `mean_ret≈60`（新 reward 尺度，
+    不可直接与旧 reward 的 104 比）。
+    - 为跨 reward 尺度对比，写了 `eval_policy.py`（固定 seed + 100 episode，双 reward 尺子 +
+      行为指标）。**在旧 reward 这把公平尺子上评估两个策略**：
+      | 指标（100ep, seed 固定, stochastic） | no_planner（旧reward训练） | v10（新reward训练） |
+      |---|---|---|
+      | OLD reward（公平尺子） | **97.31** ±19.4 | **97.88** ±13.9 |
+      | NEW reward | 59.96 | 63.81 |
+      | 接触物体数/ep | 371.5 | 402.9（+8.5%） |
+      | active \|Δv\|（主动推力） | 135.8 | 119.9 |
+      | agent path len | 8.42 | 7.20 |
+    - **结论：reward redesign 效果中性。** 在公平尺子（旧 reward）上 v10 vs no_planner =
+      97.88 vs 97.31，差异 <1%、远在 std 内，**统计上持平**。v10 接触物体更多（+8.5%）但主动
+      推力（active |Δv|）反而略低——行为风格不同，但**没有证据表明整体能力更强**。
+    - **最终 Stage-3 破局归因**：真正抬升稳态的是**关闭 MCTS planner**（101.6→104）；
+      reward redesign 只是把 agent 调到"同等强度、不同行为风格"。
+    - **收尾**：远程 + 本地 env `physics_sandbox.py` 均已恢复旧 reward（与 no_planner 起点、
+      后续 stage config 一致），reward redesign 代码归档在 git 历史（commit 044703a）+
+      `stage3_world_model_v10_reward_on_noplanner.yaml` config 保留。`eval_policy.py` 保留为
+      跨 reward 策略评估工具。
+    - **附加发现**：greedy（argmax）下两个策略都塌缩成"永远动作 6"，轨迹退化；必须用
+      stochastic 采样评估才能体现策略差异（已记录在 eval 脚本注释）。
+    - no_planner 稳态复测：v9 继续训练到 step 3M，稳态实为 **~104.1**（比早期记的 103.8 略高，
+      slope 完全收敛）。Stage-4 从 `ckpt_stage7_no_planner_002900480.pt` 起步。
+
+- **Stage-4 启动 · Bounded Skill Library。**
+    从 `ckpt_stage7_no_planner_002900480.pt`（旧 reward 稳态 ~104）跨 stage 3→4 resume，
+    在验证过的 no-planner 7层 hybrid + SlotAttention + RSSM 骨干上叠加持久化技能库。
+    - **重写 `configs/stage4_skills.yaml`**：旧版是过时的 3层脚手架（无 env/slot/imagination
+      块、num_objects 用默认 3）。新版对齐**实际训练线**：7层 hybrid、SlotAttention(7 slots)、
+      PhysicsSandbox(num_objects=10)、imagination、`model_growth.enabled=false`、无 planner、
+      旧 reward。skills 块：3-tier 有界库（gpu=256 / cpu=2048 / ssd=64×128，总容量 10496）。
+    - **schema 修复（`src/utils/config_schema.py`）**：补齐实际训练线一直在用、但 schema 缺失
+      的键，修好长期存在的 config 校验失败：
+      - `ModelSchema` 加 SlotAttention 字段（`use_slot_attention/slot_num_slots/slot_dim/
+        slot_num_iterations`）+ 校验 → **顺带修复 pre-existing `test_stage3_config_validates`**。
+      - `EnvSchema` 加 PhysicsSandbox 字段（`num_objects/render_size/gravity/action_force`），
+        `num_envs` 改为可选（default 1）。
+      - `TopLevelSchema` 加 `curiosity/imagination/model_growth` 三个可选块。
+    - **env reward 回退**：v10 评估确认 reward redesign 无显著增益后，远程 + 本地
+      `physics_sandbox.py` 均恢复旧 reward（`speed*0.05`，cap 2.0），与 no_planner 起点一致。
+    - smoke（200 步）通过：7层+slot 加载 OK、BoundedSkillLibrary 初始化 OK（有界 10496）、
+      旧 reward 得分正常。正式训练已启动（tmux `s4`+`s4rec`），前 4k 步 `mean_ret≈110-133`
+      （与起点 ~104 平滑衔接，无 v10 那种 reward 尺度突变），`skills` 计数随训练增长（有界）。
+    - 新增 `scripts/eval/eval_policy.py`：跨 reward 尺度的策略评估工具（固定 seed、双 reward
+      尺子、行为指标），stochastic 采样（greedy 会塌缩成单动作）。
+    - 已知遗留失败（与本次无关）：`test_model_growth_v2.py::...test_spike_is_forgotten...`
+      （`GrowthConfigV2` 无 `rmax_decay` 参数）。
 
 
 
