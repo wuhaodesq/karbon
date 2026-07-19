@@ -97,8 +97,22 @@ All notable changes to this project are documented here.
   `phase2_infant_exploration.yaml` 的 `model:` 块完全一致；并加 `train.total_steps: 5000000`
   （原缺失 → 默认 200 步即停）。env 沿用 `PhysicsSandbox`（与 Stage 2 同分布，backbone
   直接迁移）。切换后日志确认 `Model: HybridActorCritic (d_model=128, layers=6 + SlotAttention)`
-  且 `Cross-stage resume: loaded weights from stage 2 ckpt`，`mean_ret` 稳态 ~102（无掉点），
-  RSSM 每步正常更新（`wm≈1.3`）。
+  且 `Cross-stage resume: loaded weights from stage 2 ckpt`，backbone 权重完整载入。
+
+  **重要修正（原"RSSM win"措辞不实）**：v1 训练实测 `mean_ret` 从 102.47 天花板
+  稳定爬升至 **105–106**（step 150k→490k 全程站上 105，未回落），但**此突破并非 RSSM
+  驱动**——v1 的 `curiosity.mode` 默认 `"none"`，RSSM 只独立训练自身表征（recon 降到
+  0.012）、**不进入 PPO 梯度**。突破真实来源是「resume 6 层 backbone 后**不被生长打断**的
+  持续 PPO 续训 + RND 探索」让策略真正收敛到比 Stage-2 早停点更高的平台。RSSM 作为策略
+  驱动信号尚未验证。
+
+- **备选 `stage3_world_model_v2.yaml`（已备未启用）：让 RSSM 真正驱动策略。**
+  v1 证明 backbone 继承 + 不间断续训可破 102.47 天花板；v2 进一步把 RSSM 变成真实辅助信号：
+  新增 `curiosity: {mode: rssm_uncertainty, coef: 0.3}`，使 WM 预测误差作为 intrinsic reward
+  注入 PPO（样本高效探索，Stage 3 设计本意）；并清理 `model` 块里 `hybrid_*` 的重复键
+  （28–42 行曾重复定义 n_heads/swa_window/ttt_mini_batch/dropout，后写覆盖前写，实际生效
+  swa_window=16 / ttt_mini_batch=8）。env/backbone 与 v1 完全一致，可直接 resume v1 最优
+  检查点切换。待 v1 跑到 ~1M 步确认平台后，再决定是否用 v2 重启验证 RSSM 驱动增益。
 
 ### Known limitation (first cut)
 
