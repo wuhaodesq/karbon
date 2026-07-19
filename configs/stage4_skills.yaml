@@ -115,7 +115,7 @@ coverage:
   log_every_steps: 5000
 
 train:
-  total_steps: 5000000
+  total_steps: 2000000
   ppo_clip: 0.2
   ppo_epochs: 4
   entropy_coef: 0.01
