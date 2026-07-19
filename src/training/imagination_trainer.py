@@ -155,10 +155,12 @@ class ImaginationTrainer:
             imagined_logprobs.append(logprob)
             imagined_values.append(value.squeeze(-1))
 
-            # Imagine reward: use reconstruction error as proxy
-            recons = world_model.decode(curr_state)
-            recon_err = F.mse_loss(recons, obs_flat.reshape(bsz, -1).detach(), reduction="none").mean(dim=-1)
-            imagined_r = -recon_err * 0.1
+            # Imagine reward: use the RSSM reward head (objective env reward
+            # prediction), NOT reconstruction error. The reward head is trained
+            # on real replay rewards (world_model.compute_loss) so it grounds
+            # imagination in PhysicsSandbox's actual return (contact/speed/
+            # approach), letting Dreamer-style training optimize real payoff.
+            imagined_r = world_model.predict_reward(curr_state)
             imagined_rewards.append(imagined_r)
 
             # Step world model forward with imagined action

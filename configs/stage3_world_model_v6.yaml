@@ -1,0 +1,103 @@
+# Stage 3 · World Model (v6 — FIX imagination reward)
+# v3/v4 proved imagination alone did NOT break the ~102 ceiling. Root cause found:
+# ImaginationTrainer used reconstruction-error as the imagined reward
+# (`imagined_r = -recon_err * 0.1`), which is uncorrelated with PhysicsSandbox's
+# real return (contact/speed/approach). The RSSM reward head (predict_reward) is
+# trained on real replay rewards but was never used in imagination. v6 fixes that:
+# imagined reward now comes from world_model.predict_reward (objective env reward
+# prediction), so Dreamer-style training optimizes REAL payoff. Same 7-layer
+# backbone + RSSM + imagination + growth-disabled as v4. Tests whether the
+# imagination mechanism was always capable of breaking 102 but was sabotaged by
+# the wrong reward signal.
+
+stage: 3
+name: "stage3_world_model_v6_imag_reward_fix"
+
+env:
+  id: "PhysicsSandbox"
+  num_objects: 10
+  max_episode_steps: 300
+  render_size: 64
+  gravity: -9.8
+  action_force: 50.0
+
+model:
+  use_hybrid_backbone: true
+  hidden_size: 128
+  hybrid_n_layers: 7
+  hybrid_n_heads: 4
+  hybrid_swa_window: 16
+  hybrid_ttt_mini_batch: 8
+  hybrid_ffn_hidden_mult: 4
+  hybrid_dropout: 0.0
+  use_slot_attention: true
+  slot_num_slots: 7
+  slot_dim: 128
+  slot_num_iterations: 3
+  use_vision_encoder: false
+
+# --- Stage 3 sub-block: world model ---
+world_model:
+  z_dim: 32
+  h_dim: 64
+  embed_dim: 64
+  hidden: 128
+  max_rollout_steps: 10
+  kl_free_nats: 1.0
+  update_every_steps: 8
+  lr: 3.0e-4
+  wm_loss_coef: 1.0
+  log_every_steps: 5000
+
+curiosity:
+  mode: "rssm_uncertainty"
+  coef: 0.3
+
+# Real WM drive: train actor/critic on dreamed RSSM rollouts (FIXED reward).
+imagination:
+  enabled: true
+  imagination_horizon: 8
+  imagination_batch: 32
+  discount: 0.99
+  actor_entropy_scale: 0.01
+  critic_loss_scale: 0.5
+  update_every_steps: 16
+  min_replay_size: 256
+  lambda_gae: 0.95
+  lr: 3.0e-4
+
+# Growth disabled for v6: test imagination-reward fix on fixed 7-layer arch.
+model_growth:
+  enabled: false
+
+# --- Stage 1 / 2 blocks carry forward ---
+intrinsic:
+  embed_dim: 128
+  lr: 1.0e-4
+  reward_clip: 5.0
+  reward_coef: 0.1
+  update_every_steps: 1
+
+replay:
+  hot_capacity: 4096
+  warm_capacity: 32728
+  cold_max_shards: 8
+  cold_shard_size: 4096
+  per_alpha: 0.6
+  min_size_to_sample: 1024
+  sample_every_steps: 4
+  batch_size_offpolicy: 128
+  archive_subdir: "replay"
+
+coverage:
+  num_buckets: 4096
+  log_every_steps: 5000
+
+train:
+  total_steps: 5000000
+  ppo_clip: 0.2
+  ppo_epochs: 4
+  entropy_coef: 0.01
+  value_coef: 0.5
+  gamma: 0.99
+  gae_lambda: 0.95

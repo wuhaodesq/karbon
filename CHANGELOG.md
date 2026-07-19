@@ -146,8 +146,27 @@ All notable changes to this project are documented here.
   - **真正破局方向（换维度，非加容量）**：(a) 改 env 本身（更多可交互对象 / 更高回报上限）；
     (b) 改 reward 设计（当前回报信号限制了可达上限）；(c) 加 RSSM **反事实规划**（counterfactual
     planning，DEV_PLAN 提及但 v3/v4 的 imagination 仅是直训 actor，未做规划打分）。
-  - v5 最优 256宽 7层 ckpt `ckpt_stage5_wide256_000260096.pt` 已三重备份（live + 两 backup 目录，
-    sha256 `52c57cde…c586` 一致）。
+   - v5 最优 256宽 7层 ckpt `ckpt_stage5_wide256_000260096.pt` 已三重备份（live + 两 backup 目录，
+     sha256 `52c57cde…c586` 一致）。
+
+- **Stage-3 v6（修复想象奖励 bug，仍无效）：证明 ~102 非想象奖励信号所致，RSSM 想象训练
+   无法破局。** `ImaginationTrainer` 原用 reconstruction-error 当想象奖励
+   （`imagined_r = -recon_err * 0.1`），与 PhysicsSandbox 真实回报无关。v6 改为
+   `world_model.predict_reward(state)`（RSSM reward head，已在 `compute_loss` 用真实 replay
+   reward 监督训练），使 Dreamer 式想象训练优化**真实回报**。结果：
+   - 开局从 94.7 冲到 **`max=106.39`**（比 v4 错误奖励的开局 101 更高），但 step 2683k
+     **`slope=0` 进入平台**，稳态 **`mean_ret≈101.9`**——与 v4（错奖励）的 101±1 **完全重合**。
+   - **结论：修复想象奖励 bug 未破局。** 开局 transient 更高（106 vs 101），但稳态仍锁死在
+     ~102 同一平台。这彻底证伪「v3/v4 无效是因想象奖励信号错」的假设；RSSM 想象训练无论用
+     错/对奖励，都无法让 PPO 策略突破 PhysicsSandbox 的 ~102 回报上限。
+   - **关键推论（削弱 counterfactual planning 先验）**：v6 已证明「在想象里用真实回报优化策略」
+     对破局部最优无效，而 counterfactual planning 同样依赖 RSSM 在想象里评估回报来选动作——
+     若想象回报评估对策略更新无益，planning 也未必更有用。剩余破局方向优先级重排：
+     **(b) 改 reward 设计（定向拉高局部最优陷阱的梯度，最可能被低估）> (a) 换 env > (c) 规划**。
+   - v6 最优 7层 ckpt `ckpt_stage6_imagfix_002680320.pt` 已三重备份（live + 两 backup 目录，
+     sha256 `1d03de5d…7db3` 一致）。Stage-3 架构维度实验（层数/宽度/WM/imagination/奖励信号）
+     **至此全部穷尽且均收敛 ~100–102**，确认该上限由环境回报结构 + 局部最优陷阱锁定。
+
 
 
 ### Known limitation (first cut)
