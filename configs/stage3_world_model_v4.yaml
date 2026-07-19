@@ -1,0 +1,110 @@
+# Stage 3 · World Model (v4 — v3 + model growth re-enabled)
+# v1 (RND) -> 99.5, v2 (RSSM curiosity) -> ~100-102 sliding, v3 (RSSM+imagination)
+# -> opened at 105.6 but settled back to ~99. All three converge near 99-100 on
+# the 6-layer backbone: the 6-layer architecture is at its PhysicsSandbox ceiling.
+# The one untested lever is LAYER GROWTH under WM assistance: Stage-2 claimed
+# "saturated" (6->7 gain -0.29) but that was WITHOUT the RSSM/imagination helping
+# each new block learn faster. v4 re-enables ModelGrowerV2 so 6->7 can fire again
+# and we measure whether the WM-assisted 7th layer is now a POSITIVE gain.
+# Env + backbone + WM identical to v3.
+
+stage: 3
+name: "stage3_world_model_v4"
+
+env:
+  id: "PhysicsSandbox"
+  num_objects: 10
+  max_episode_steps: 300
+  render_size: 64
+  gravity: -9.8
+  action_force: 50.0
+
+model:
+  use_hybrid_backbone: true
+  hidden_size: 128
+  hybrid_n_layers: 3
+  hybrid_n_heads: 4
+  hybrid_swa_window: 16
+  hybrid_ttt_mini_batch: 8
+  hybrid_ffn_hidden_mult: 4
+  hybrid_dropout: 0.0
+  use_slot_attention: true
+  slot_num_slots: 7
+  slot_dim: 128
+  slot_num_iterations: 3
+  use_vision_encoder: false
+
+# --- Stage 3 sub-block: world model ---
+world_model:
+  z_dim: 32
+  h_dim: 64
+  embed_dim: 64
+  hidden: 128
+  max_rollout_steps: 10
+  kl_free_nats: 1.0
+  update_every_steps: 8
+  lr: 3.0e-4
+  wm_loss_coef: 1.0
+  log_every_steps: 5000
+
+# WM prediction error as exploration bonus (better than RND).
+curiosity:
+  mode: "rssm_uncertainty"
+  coef: 0.3
+
+# Real WM drive: train actor/critic on dreamed RSSM rollouts.
+imagination:
+  enabled: true
+  imagination_horizon: 8
+  imagination_batch: 32
+  discount: 0.99
+  actor_entropy_scale: 0.01
+  critic_loss_scale: 0.5
+  update_every_steps: 16
+  min_replay_size: 256
+  lambda_gae: 0.95
+  lr: 3.0e-4
+
+# v4 NEW: re-enable layer growth. Resume ckpt is 6 layers; grower starts at 6
+# and 6->7 can fire again (1M cooldown). With WM+imagination assisting each new
+# block, the 7th layer may now be a positive gain (Stage-2 measured -0.29 without).
+model_growth:
+  enabled: true
+  max_layers: 20
+  min_steps_between_growths: 1000000
+  grow_trigger_coverage: 0.15
+  distill_steps: 400
+  distill_lr: 1e-3
+  distill_batch: 1024
+
+# --- Stage 1 / 2 blocks carry forward ---
+intrinsic:
+  embed_dim: 128
+  lr: 1.0e-4
+  reward_clip: 5.0
+  reward_coef: 0.1
+  update_every_steps: 1
+
+replay:
+  hot_capacity: 4096
+  warm_capacity: 32728
+  cold_max_shards: 8
+  cold_shard_size: 4096
+  per_alpha: 0.6
+  min_size_to_sample: 1024
+  sample_every_steps: 4
+  batch_size_offpolicy: 128
+  archive_subdir: "replay"
+
+coverage:
+  num_buckets: 4096
+  log_every_steps: 5000
+
+train:
+  total_steps: 5000000
+  ppo_clip: 0.2
+  ppo_epochs: 4
+  entropy_coef: 0.01
+  value_coef: 0.5
+  gamma: 0.99
+  gae_lambda: 0.95

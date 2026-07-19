@@ -1,0 +1,90 @@
+# Stage 3 · World Model (v2 — RSSM actually drives the policy)
+# v1 proved the 6-layer backbone resumes cleanly and keeps climbing (mean_ret
+# ~105-106 vs Stage-2 ceiling 102.47) under uninterrupted PPO. The win there was
+# "no growth-interruption + continued convergence", NOT the RSSM (curiosity_mode
+# was "none", so the world model only trained its own representation and never
+# touched the policy gradient).
+#
+# v2 turns the RSSM into a real auxiliary signal:
+#   * curiosity.mode = rssm_uncertainty  -> WM prediction error becomes an
+#     intrinsic reward injected into PPO (sample-efficient exploration).
+#   * model block duplicate keys cleaned (swa_window=16 / ttt_mini_batch=8 kept,
+#     the earlier 8/4 duplicates removed).
+# Env + backbone identical to v1 (PhysicsSandbox, 6-layer, d_model=128, SlotAttn)
+# so it can resume the best v1 checkpoint directly.
+
+stage: 3
+name: "stage3_world_model_v2"
+
+env:
+  id: "PhysicsSandbox"
+  num_objects: 10
+  max_episode_steps: 300
+  render_size: 64
+  gravity: -9.8
+  action_force: 50.0
+
+model:
+  use_hybrid_backbone: true
+  hidden_size: 128
+  hybrid_n_layers: 3
+  hybrid_n_heads: 4
+  hybrid_swa_window: 16
+  hybrid_ttt_mini_batch: 8
+  hybrid_ffn_hidden_mult: 4
+  hybrid_dropout: 0.0
+  use_slot_attention: true
+  slot_num_slots: 7
+  slot_dim: 128
+  slot_num_iterations: 3
+  use_vision_encoder: false
+
+# --- Stage 3 sub-block: world model ---
+world_model:
+  z_dim: 32
+  h_dim: 64
+  embed_dim: 64
+  hidden: 128
+  max_rollout_steps: 10
+  kl_free_nats: 1.0
+  update_every_steps: 8
+  lr: 3.0e-4
+  wm_loss_coef: 1.0
+  log_every_steps: 5000
+
+# v2 change: let the RSSM actually drive exploration.
+curiosity:
+  mode: "rssm_uncertainty"
+  coef: 0.3
+
+# --- Stage 1 / 2 blocks carry forward ---
+intrinsic:
+  embed_dim: 128
+  lr: 1.0e-4
+  reward_clip: 5.0
+  reward_coef: 0.1
+  update_every_steps: 1
+
+replay:
+  hot_capacity: 4096
+  warm_capacity: 32768
+  cold_max_shards: 8
+  cold_shard_size: 4096
+  per_alpha: 0.6
+  min_size_to_sample: 1024
+  sample_every_steps: 4
+  batch_size_offpolicy: 128
+  archive_subdir: "replay"
+
+coverage:
+  num_buckets: 4096
+  log_every_steps: 5000
+
+train:
+  total_steps: 5000000
+  ppo_clip: 0.2
+  ppo_epochs: 4
+  entropy_coef: 0.01
+  value_coef: 0.5
+  gamma: 0.99
+  gae_lambda: 0.95
