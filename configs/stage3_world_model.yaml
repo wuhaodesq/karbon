@@ -10,9 +10,31 @@
 stage: 3
 name: "stage3_world_model"
 
+# Env kept identical to Stage 2 (PhysicsSandbox) so the saturated 6-layer
+# backbone transfers directly; the RSSM is added as an auxiliary objective.
+# Swap to MiniGrid/Crafter here to test on a different distribution.
+env:
+  id: "PhysicsSandbox"
+  num_objects: 10
+  max_episode_steps: 300
+  render_size: 64
+  gravity: -9.8
+  action_force: 50.0
+
 model:
   use_hybrid_backbone: true
+  hidden_size: 128
   hybrid_n_layers: 3
+  hybrid_n_heads: 4
+  hybrid_swa_window: 8
+  hybrid_ttt_mini_batch: 4
+  hybrid_ffn_hidden_mult: 4
+  hybrid_dropout: 0.0
+  use_slot_attention: true
+  slot_num_slots: 7
+  slot_dim: 128
+  slot_num_iterations: 3
+  use_vision_encoder: false
   hybrid_n_heads: 4
   hybrid_swa_window: 16
   hybrid_ttt_mini_batch: 8
@@ -63,6 +85,7 @@ coverage:
   log_every_steps: 5000
 
 train:
+  total_steps: 5000000
   ppo_clip: 0.2
   ppo_epochs: 4
   entropy_coef: 0.01

@@ -666,11 +666,12 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             max_episode_steps=env_cfg.get("max_episode_steps"),
             auto_reset=True,
         )
-        logger.info("Env: %s  obs_shape=%s  actions=%d", env_cfg["id"], obs_shape, num_actions)
+        logger.info("Env: %s (MiniGrid wrapper)", env_cfg["id"])
 
     obs = env.reset()
     obs_shape = env.observation_shape
     num_actions = env.action_space_n
+    logger.info("Env shape: %s  obs_shape=%s  actions=%d", env_cfg["id"], obs_shape, num_actions)
     if int(env_cfg.get("num_envs", 1)) > 1 and n_envs == 1:
         logger.warning("n_envs>1 only supported for ThreeDWorld; falling back to 1")
 
@@ -732,6 +733,10 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # --- Bounded rollout buffer (declared capacity)
     rollout_capacity = 128 if smoke_only else 512
     buffer = RolloutBuffer(rollout_capacity, obs_shape, device=device, n_envs=n_envs)
+
+    # Growth LP signal refresh interval (steps). plateau_lp's windowed rmax spans
+    # this many steps per call; too small collapses rmax to the instantaneous value.
+    growth_check_every = 50_000
 
     # --- Health check
     health = HealthChecker(strict=True)
@@ -1267,6 +1272,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 min_steps_between_growths=int(growth_cfg.get("min_steps_between_growths", 100_000)),
                 grow_trigger_lp_threshold=float(growth_cfg.get("grow_trigger_lp_threshold", 0.05)),
                 grow_trigger_coverage=float(growth_cfg.get("grow_trigger_coverage", 0.3)),
+                rmax_window=int(growth_cfg.get("rmax_window", 40)),
                 distill_steps=int(growth_cfg.get("distill_steps", 100)),
                 distill_lr=float(growth_cfg.get("distill_lr", 1e-3)),
             ),
@@ -1669,17 +1675,20 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         resumed_stage = int(payload.get("stage", stage))
         resumed_step = int(payload.get("step", 0))
         # Enforce a growth cooldown from the resumed step so the transient
-        # resume spike / exploration-reset dip (inflated-or-collapsed first-step
-        # mean_return) cannot immediately drive a 3->4 (or N->N+1) growth. The
-        # natural plateau (rmax decay) + 1M cooldown then gate the next *real*
-        # growth. NOTE: this must run after `resumed_step` is resolved (above),
-        # not while `state.step` is still 0.
+        # Keep the grower's true last-growth step from the loaded checkpoint
+        # state. We must NOT bump it to `resumed_step`: doing so pushes the next
+        # growth unlock to `resumed_step + min_steps_between_growths`, discarding
+        # the cooldown already elapsed inside the checkpoint and forcing an extra
+        # ~1M-step wait after every relaunch (this is what stalled 4->5 at
+        # 14.40M+). The `resume_warmup_calls` plateau-check warmup already
+        # prevents a resume spike from driving an immediate growth, so the loaded
+        # `_last_growth_step` is the correct unlock reference. NOTE: runs after
+        # `resumed_step` is resolved, not while `state.step` is still 0.
         if model_grower_v2 is not None:
             try:
-                model_grower_v2._last_growth_step = max(
-                    int(getattr(model_grower_v2, "_last_growth_step", -10**9)),
-                    resumed_step,
-                )
+                _loaded_lgs = int(getattr(model_grower_v2, "_last_growth_step", -10**9))
+                if _loaded_lgs > 0:
+                    model_grower_v2._last_growth_step = _loaded_lgs
             except Exception:  # noqa: BLE001
                 pass
         if resumed_stage == stage:
@@ -2514,7 +2523,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     reward_seq = sample["reward"].reshape(bsz, T, 1).float()
                 wm_out = wm.compute_loss(obs_flat, actions_onehot, reward_seq=reward_seq)
                 wm_optimizer.zero_grad(set_to_none=True)
-                wm_loss.backward()
+                wm_out["loss"].backward()
                 torch.nn.utils.clip_grad_norm_(wm.parameters(), max_norm=1.0)
                 wm_optimizer.step()
                 wm_last_loss = {
@@ -2597,13 +2606,28 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 pass
 
         # --- Phase 0: model growth check ---
+        # plateau_lp is called once per growth-check interval (growth_check_every
+        # steps) so its windowed rmax spans a meaningful horizon. Calling it every
+        # training step collapsed rmax to the instantaneous mean_return and growth
+        # never fired. The check itself runs every step (cheap) but the LP signal
+        # only refreshes on the interval. BOUNDS-OK: fixed interval, no growth.
         if model_grower_v2 is not None and coverage is not None:
             mean_ret = float(env.summary().get("mean_return", 0.0))
-            lp = model_grower_v2.plateau_lp(mean_ret)
             cov = coverage.coverage_ratio()
-            if state.step % 50000 == 0:
-                logger.info("[growth-debug] step=%d lp=%.4f cov=%.3f layers=%d",
-                            state.step, lp, cov, len(model_grower_v2))
+            # Refresh the LP signal every growth_check_every steps. Step cadence is
+            # not a multiple of growth_check_every, so use integer-division buckets
+            # (fire when the bucket index advances) rather than exact modulo.
+            _bucket = state.step // growth_check_every
+            if _bucket != getattr(model_grower_v2, "_last_lp_bucket", -1):
+                model_grower_v2._last_lp = model_grower_v2.plateau_lp(mean_ret)
+                model_grower_v2._last_lp_bucket = _bucket
+            lp = getattr(model_grower_v2, "_last_lp", 1.0)
+            _dbg_bucket = state.step // 50000
+            if _dbg_bucket != getattr(model_grower_v2, "_last_dbg_bucket", -1):
+                logger.info("[growth-debug] step=%d lp=%.4f cov=%.3f layers=%d rmax=%.2f",
+                            state.step, lp, cov, len(model_grower_v2),
+                            getattr(model_grower_v2, "_rmax", 0.0))
+                model_grower_v2._last_dbg_bucket = _dbg_bucket
             if model_grower_v2.should_grow(state.step, lp, cov):
                 try:
                     # Non-disruptive growth: distill the new block on REAL

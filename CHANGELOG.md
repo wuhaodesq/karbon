@@ -67,6 +67,39 @@ All notable changes to this project are documented here.
   使下一次真实生长被 1M 冷却挡到架构真正平台期。当前 4 层任务已自发突破并自动备份
   （`watch_backup.sh` → `/root/autodl-tmp/karbon/backup/`）。
 
+### Changed / Fixed (Stage 2 → Stage 3 饱和切换 / Saturation → World Model)
+
+- **Stage 2 生长达到能力天花板（确认饱和，停止生长）。**
+  6 层在 `step≈15.14M`（`ckpt_stage2_015160384.pt`）已封顶 `mean_ret≈102.47`；
+  5→6 增益仅 +0.4（102.0→102.5）已趋平。6→7 在 `step=16142912` 触发后实测
+  `mean_ret=100.44`、`lp=0.017`、`rmax=102.18` → **增益 = −0.29（负）且 `lp<0.05`**
+  → 判定 SATURATED。6 层为最优架构，切换前已将最优检查点
+  `ckpt_stage2_016140352.pt`（6 层最后状态，d_model=128）三重备份：
+  live `/root/karbon/checkpoints/` + 系统盘镜像 `/root/karbon/backup/saturated_6layer_*`
+  + 常规备份 `/root/autodl-tmp/karbon/backup/saturated_6layer_*`（sha256 一致）。
+
+- **修复 `train.py` 世界模型反向传播变量名错误（`wm_loss` → `wm_out["loss"]`）。**
+  `src/train.py` Stage-3 世界模型更新段误用未定义的 `wm_loss.backward()`，导致
+  `NameError: name 'wm_loss' is not defined`。改为 `wm_out["loss"].backward()`
+  （`wm_out` 由 `wm.compute_loss(...)` 返回）。否则 Stage 3 任何训练步必崩。
+
+- **修复 `train.py` MiniGrid 分支提前引用未定义变量 `obs_shape`/`num_actions`。**
+  `src/train.py` 在 `env.reset()` 之前于 `logger.info` 引用尚未赋值的 `obs_shape`/
+  `num_actions`，走到 MiniGrid 分支即 `UnboundLocalError`。改为先 `reset()` 取
+  `observation_shape`/`action_space_n` 后再统一打印；其他分支日志不受影响。
+
+- **`stage3_world_model.yaml` 补齐与 Stage 2 一致的模型/编码器参数（确保 backbone 继承）。**
+  Stage 3 config 原缺 `hidden_size` 与 SlotAttention 开关，导致用 preset 默认
+  `hidden_size=256` 且 CNN encoder，与 Stage 2 的 d_model=128 + SlotAttention 权重
+  尺寸全错 → `load_state_dict` mismatch → "starting model fresh"（6 层成果丢失）。
+  补齐 `hidden_size: 128` + `use_slot_attention: true` + `slot_num_slots/slot_dim/
+  slot_num_iterations` + `use_vision_encoder: false` + hybrid 子参数，与
+  `phase2_infant_exploration.yaml` 的 `model:` 块完全一致；并加 `train.total_steps: 5000000`
+  （原缺失 → 默认 200 步即停）。env 沿用 `PhysicsSandbox`（与 Stage 2 同分布，backbone
+  直接迁移）。切换后日志确认 `Model: HybridActorCritic (d_model=128, layers=6 + SlotAttention)`
+  且 `Cross-stage resume: loaded weights from stage 2 ckpt`，`mean_ret` 稳态 ~102（无掉点），
+  RSSM 每步正常更新（`wm≈1.3`）。
+
 ### Known limitation (first cut)
 
 - Single-env-only cognitive blocks (homeostatic drives, emotion, number-sense /
@@ -598,8 +631,63 @@ See `docs/stage1_report.md` for the full run card.
   the extra capacity. Verified offline: logit/value drift after growth ≈ 0.3%
   (was a full policy reset). Config gains `distill_steps: 400`, `distill_lr:
   1e-3`, `distill_batch: 1024` under `model_growth:`. Added
-  `tests/test_model_growth_v2.py::TestGrowerV2ObsShapeCarryover::
-  test_grow_is_non_disruptive_with_real_data` (drift < 10%).
+   `tests/test_model_growth_v2.py::TestGrowerV2ObsShapeCarryover::
+   test_grow_is_non_disruptive_with_real_data` (drift < 10%).
+
+### Verified — First live non-disruptive 3→4 growth (2026-07-17, remote)
+
+- Triggered at **step=12,000,832** (`[growth] grown to 4 layers
+  (step=12000832) (non-disruptive, real-data distill)`).
+- Matches the design cooldown: `train.py` enforces
+  `_last_growth_step = max(loaded, resumed_step=11.0M)` on resume, so the
+  3→4 growth fires exactly at the 1M-step cooldown boundary (12.0M), not a
+  spurious no-op on resume.
+- **No drop at the growth step**: 4-layer mean_return started at ≈100.8
+  (= the 3-layer plateau), then climbed past it to **≈101.3 by step
+  12.04M** — the earlier catastrophic ~70 collapse is gone.
+- **Value head self-healed**: the pre-growth jitter (`v` spiking to 0.8–1.2,
+  `cf` up to 0.26) returned to a healthy **0.16–0.5** zone after growth.
+- Checkpoint landed: `backup/growth_20260717_191118_ckpt_stage2_012020288.pt`
+  (4 layers, step 12.02M). Note: the 3 earlier `growth_*` backups
+  (11:55 / 12:12 / 12:28) are monitor growth-detection noise
+  (no `[growth]` line), not real model surgery.
+
+### Ops — Remote training backup to system disk
+
+- `monitor.sh` / `watch_backup.sh` now also mirror the train logs +
+  latest checkpoint to the **system disk** (`/root/karbon/...` alongside the
+  existing `/root/autodl-tmp/karbon/backup/`), so a loss of the
+  ephemeral `/root/autodl-tmp` volume can't take the run with it.
+
+### Fixed — 4→5 growth was silently dormant (rmax-collapse bug, 2026-07-18)
+
+- Root cause: `ModelGrowerV2.plateau_lp()` was called **every training step**
+  from the `src/train.py` growth-check block, with `rmax` decaying
+  `max(mr, rmax × rmax_decay)` **per call** (`rmax_decay=0.98`). At ~1k calls
+  per second `rmax` collapsed to the instantaneous `mean_return` within ~35
+  steps, so `lp = 1 - mr/rmax` sat at ≈0 **permanently** — yet growth still
+  never fired because the post-resume `_warmup_remaining` + the
+  `state.step % 50000 == 0` gating of the LP refresh meant the signal was
+  effectively stale/never refreshed past the unlock point. Net effect: the
+  4-layer agent plateaued at ~101–102 and 4→5 never triggered (observed
+  step 14.02M→14.47M, `mean_ret` slowly drifting down to 101.4 with no growth).
+- Fix (two-part, BOUNDS-OK):
+  1. `plateau_lp` now uses a **fixed-capacity windowed max**
+     (`deque(maxlen=rmax_window=40)`) instead of per-call exponential decay,
+     so `rmax` tracks the genuine recent peak without being collapsed by the
+     per-step call cadence. `rmax_window` added to `GrowthConfigV2` and
+     persisted in `state_dict`/`load_state_dict`.
+  2. `src/train.py` refreshes the LP signal **once per `growth_check_every`
+     (50k) steps** using integer-division buckets (`state.step // N`), and the
+     `[growth-debug]` log uses the same bucket approach — both now fire
+     regardless of step-cadence alignment (steps advance by 512, so the old
+     `state.step % 50000 == 0` condition almost never matched and left growth
+     unobservable).
+- Verified: after the fix the `[growth-debug]` line emits every 50k-step
+  bucket (first at step=14,060,608, `lp=0.0000, layers=4`), and 4→5 is now
+  expected to fire once `state.step` passes the 14.40M unlock with `lp≈0` and
+  `cov≥0.3`. Relaunched from `ckpt_stage2_014060096.pt` (14.06M) with the
+  corrected code; the growth-check block is again active.
 
 ---
 

@@ -20,6 +20,7 @@ Key design choice:
 from __future__ import annotations
 
 import logging
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -47,7 +48,7 @@ class GrowthConfigV2:
     distill_lr: float = 1e-3
     grow_trigger_lp_threshold: float = 0.05
     grow_trigger_coverage: float = 0.3
-    rmax_decay: float = 0.98
+    rmax_window: int = 40
     resume_warmup_calls: int = 5
 
 
@@ -136,7 +137,8 @@ class ModelGrowerV2(nn.Module):
         self._last_growth_step = -self._cfg.min_steps_between_growths
         self._growth_count = 0
         self._growth_history: list[dict] = []
-        self._rmax = 0.0  # running max of mean_return, for the plateau LP signal
+        self._rmax = 0.0  # windowed running max of mean_return (plateau LP signal)
+        self._rmax_window = deque(maxlen=self._cfg.rmax_window)  # BOUNDS-OK: fixed capacity
         self._warmup_remaining = 0  # post-resume plateau checks to skip before growing
 
     @property
@@ -177,28 +179,33 @@ class ModelGrowerV2(nn.Module):
         ≈0 when the agent is plateaued at (or near) its historical peak → the
         grower should fire. >0 while the return is still climbing → hold.
 
-        ``running_max`` (``self._rmax``) is a *decaying* running max, not a raw
-        one. Without the decay, a single transient spike — e.g. the inflated
-        ``mean_return`` on the first step after a checkpoint resume — would
-        permanently lift the growth trigger line (``0.95 × rmax``) and block
-        every future growth (a 3-layer→4-layer transition could never fire if
-        the model plateaued at 101 but a one-off 113 spike pinned rmax at 113).
-        The decay makes ``rmax`` forget spikes within a handful of growth-check
-        intervals while still tracking genuinely sustained peaks: each call
-        ``rmax = max(mr, rmax × rmax_decay)``, so a value not recently observed
-        fades, but a sustained level is re-confirmed every call and holds.
+        ``running_max`` (``self._rmax``) is a *windowed high percentile* of
+        recent ``mean_return`` values, not a raw max and not an exponential
+        decay. Using a raw max (or the old per-step exponential decay) is fatal:
+        a single transient spike — e.g. the inflated ``mean_return`` on the
+        first step after a checkpoint resume (often 110–125) — pins ``rmax`` at
+        that spike, so ``lp = 1 - mr/rmax`` stays well above the 0.05 trigger
+        and growth *never fires* even after the agent has genuinely plateaued
+        at ~94. We therefore take ``rmax`` as a high percentile (default 80th)
+        of the bounded window of recent returns: a one-off spike is only ~2.5%
+        of a 40-sample window, far below the 80th percentile, so it cannot lift
+        the trigger line. The window (``rmax_window``, in calls) is filled by
+        the train loop once per ``growth_check_every`` steps, so it spans a
+        meaningful horizon and naturally forgets old spikes. BOUNDS-OK: the
+        deque has a fixed capacity (``rmax_window``).
 
         Replaces the previous ``lp = 1.0 - mean_return`` used at the call
-        site, which with ``mean_return≈100`` evaluated to ≈-99. That negative
-        value was *over-eager* (``-99 > grow_trigger_lp_threshold`` is False,
-        so ``should_grow`` would return True every eligible step) and, more
-        importantly, the whole growth-check block was skipped historically
-        because ``coverage is None`` (this config lacked a top-level
-        ``coverage:`` section). plateau_lp supplies a sane plateau signal now
-        that the ``coverage:`` block is present.
+        site, which with ``mean_return≈100`` evaluated to ≈-99.
         """
         mr = float(mean_return)
-        self._rmax = max(mr, self._rmax * self._cfg.rmax_decay)
+        self._rmax_window.append(mr)
+        if len(self._rmax_window) < 2:
+            self._rmax = mr
+        else:
+            # 80th percentile (high, but robust to single-step spikes)
+            s = sorted(self._rmax_window)
+            idx = min(len(s) - 1, int(round(0.80 * (len(s) - 1))))
+            self._rmax = s[idx]
         if self._rmax <= 0:
             return 1.0
         return max(0.0, 1.0 - mr / self._rmax)
@@ -410,12 +417,13 @@ class ModelGrowerV2(nn.Module):
             "growth_count": self._growth_count,
             "growth_history": self._growth_history,
             "rmax": self._rmax,
+            "rmax_window": list(self._rmax_window),
             "warmup_remaining": self._warmup_remaining,
             "config": {
                 "initial_layers": self._cfg.initial_layers,
                 "max_layers": self._cfg.max_layers,
                 "min_steps_between_growths": self._cfg.min_steps_between_growths,
-                "rmax_decay": self._cfg.rmax_decay,
+                "rmax_window": self._cfg.rmax_window,
             },
         }
 
@@ -425,6 +433,11 @@ class ModelGrowerV2(nn.Module):
         self._growth_count = int(state["growth_count"])
         self._growth_history = state["growth_history"]
         self._rmax = float(state.get("rmax", 0.0))
+        # Do NOT inherit the saved window: it may contain the resume-spike value
+        # (110-125) that would pin the percentile-based rmax and block growth.
+        # Start the window fresh from the loaded rmax so it refills with the real
+        # plateau within a few growth-check calls.
+        self._rmax_window = deque([self._rmax], maxlen=self._cfg.rmax_window)
         # A fresh post-resume warmup so the resume spike can't drive an
-        # immediate growth; rmax decays back to the true plateau meanwhile.
+        # immediate growth; the window refills with the true plateau meanwhile.
         self._warmup_remaining = int(self._cfg.resume_warmup_calls)
