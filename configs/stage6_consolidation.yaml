@@ -148,7 +148,7 @@ rule_induction:
   induction_min_positive: 3
 
 llm_fusion:
-  enabled: true
+  enabled: false
   model: "Qwen/Qwen2.5-7B-Instruct"
   max_new_tokens: 64
   call_interval_steps: 50
