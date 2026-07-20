@@ -57,6 +57,16 @@ continual:
   sleep_skills_merge_every: 20000
   sleep_ttt_distill_every: 20000
 
+# --- Stage 6 sub-block: Core-Knowledge P2 auxiliary loss (open-gap A#4) ---
+# Soft inductive-bias losses (object permanence / intuitive physics / number
+# sense) wired into the PPO total loss. Enabled for Stage 6; pairs with the P1
+# demo-prefill recipe. Zero cost when no core-knowledge records accumulate.
+core_knowledge_loss:
+  enabled: true
+  coef_object_permanence: 0.1
+  coef_intuitive_physics: 0.1
+  coef_number_sense: 0.1
+
 # --- Stage 6 sub-block: Dreamer-style imagination training ---
 # Path-2 completion (docs/path-to-northstar.md). The ImaginationTrainer is
 # already wired into the training loop (train.py:2630, gradient flows back to

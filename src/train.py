@@ -55,6 +55,10 @@ from src.intrinsic import (
     SocialCuriosity,
     SocialCuriosityConfig,
 )
+from src.intrinsic.core_knowledge_loss import (
+    CoreKnowledgeAuxLoss,
+    CoreKnowledgeLossConfig,
+)
 from src.memory import (
     BoundedReplayBuffer,
     BoundedSkillLibrary,
@@ -1463,6 +1467,17 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         health.register("concept_clusterer", concept_clusterer)
         logger.info("ConceptClusterer enabled (every %d steps)", meta_cfg.get("cluster_every_steps", 5000))
 
+    # --- Core-Knowledge auxiliary losses (open-gap A#4 / P2) ---
+    ck_cfg = config.get("core_knowledge_loss")
+    ck_loss: CoreKnowledgeAuxLoss | None = None
+    if ck_cfg and bool(ck_cfg.get("enabled", False)):
+        ck_loss = CoreKnowledgeAuxLoss(CoreKnowledgeLossConfig(
+            coef_object_permanence=float(ck_cfg.get("coef_object_permanence", 0.1)),
+            coef_intuitive_physics=float(ck_cfg.get("coef_intuitive_physics", 0.1)),
+            coef_number_sense=float(ck_cfg.get("coef_number_sense", 0.1)),
+        )).to(device)
+        logger.info("CoreKnowledgeAuxLoss enabled (P2 priors into PPO loss)")
+
     # --- IQ Boost: 6 tier-1 upgrades ---
     iq_cfg = config.get("iq_boost")
     cross_domain: CrossDomainTransfer | None = None
@@ -1887,6 +1902,9 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # ---- Main loop
     _prof_env = _prof_model = _prof_cog = _prof_buf = _prof_total = 0.0
     _prof_n = 0
+    # Bounded accumulator of core-knowledge records for the P2 aux loss.
+    ck_records: list[dict[str, torch.Tensor]] = []
+    CK_RECORD_CAP = 4096  # BOUNDS-OK: fixed cap on accumulated records
     while state.step < total_steps:
         buffer.clear()
 
@@ -2117,6 +2135,37 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 done=done_arr,
             )
             t_buf_end = time.perf_counter()
+
+            # --- Core-Knowledge P2 record (single-env PhysicsSandbox only) ---
+            # Extracts observable physics for the auxiliary loss; skipped safely
+            # otherwise (aux loss stays 0). Mirrors the n_envs==1 gating of the
+            # other cognitive modules but keeps the loss path ready for Stage 6.
+            if ck_loss is not None and n_envs == 1 and hasattr(env, "_agent"):
+                try:
+                    agent = env._agent
+                    objs = env._objects
+                    K = max(len(objs), 1)
+                    agent_pos = torch.tensor([[agent.x, agent.y]], device=device)
+                    obj_pos = torch.zeros(1, K, 2, device=device)
+                    obj_vel = torch.zeros(1, K, 2, device=device)
+                    removed = torch.zeros(1, K, device=device)
+                    belief = torch.ones(1, K, device=device)
+                    for k, o in enumerate(objs):
+                        obj_pos[0, k] = torch.tensor([o.x, o.y], device=device)
+                        obj_vel[0, k] = torch.tensor([o.vx, o.vy], device=device)
+                    force = torch.tensor([[0.0, 0.0]], device=device)
+                    ck_records.append({
+                        "existence_belief": belief,
+                        "removed_mask": removed,
+                        "force": force,
+                        "object_vel": obj_vel,
+                        "count_est": torch.tensor([float(len(objs))], device=device),
+                        "true_count": torch.tensor([float(len(objs))], device=device),
+                    })
+                    if len(ck_records) > CK_RECORD_CAP:
+                        ck_records.pop(0)
+                except Exception:
+                    pass
 
             # --- Stage 1: coverage tracking ---
             if coverage is not None:
@@ -2538,6 +2587,13 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 loss = policy_loss + value_coef * value_loss - entropy_coef * entropy
                 if ewc is not None and ewc.has_consolidated():
                     loss = loss + ewc.penalty(model).to(loss.device)
+                # Core-Knowledge P2 auxiliary loss (open-gap A#4): soft priors
+                # (object permanence / intuitive physics / number sense) added to
+                # the PPO objective. Zero when no records accumulated.
+                if ck_loss is not None and ck_records:
+                    ck_parts = [ck_loss(r)["total"] for r in ck_records]
+                    ck_total = torch.stack(ck_parts).mean()
+                    loss = loss + ck_total
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
