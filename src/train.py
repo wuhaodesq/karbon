@@ -3116,7 +3116,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 curr_active_task = new_task
             last_curr_switch_step = state.step
 
-        if state.step % ckpt_every < rollout_capacity:
+        if state.step % ckpt_every == 0:
             extra: dict[str, Any] = {"preset": config.get("preset"), "run_id": run_id}
             if rnd is not None:
                 extra["rnd_state"] = rnd.rnd_state_dict()

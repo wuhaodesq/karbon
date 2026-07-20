@@ -229,3 +229,4 @@ train:
   gamma: 0.99
   gae_lambda: 0.95
   total_steps: 5000000
+  ckpt_every_steps: 50000

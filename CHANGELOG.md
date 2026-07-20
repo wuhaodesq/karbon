@@ -18,6 +18,17 @@ All notable changes to this project are documented here.
   CoreKnowledgeAuxLoss/ImaginationTrainer` 全激活, 跨阶段 resume 成功。
 - 打 tag: `v0.5.0-stage5`(fc895cb) + `v0.6.0-stage6`(a59fa5a), 不碰现有
   `-cloud` 占位 tag。
+- **存盘 bug 修复 (training throughput + 防数据盘爆)**: `train.py:3119` 的
+  `state.step % ckpt_every < rollout_capacity` 因 `rollout_capacity=512 > ckpt_every=200`
+  恒成立, 导致**每一步都存一次 ckpt**, 把步速从算力上限 ~60步/秒 压到 ~5.5步/秒,
+  并向数据盘狂写数万 ~95MB 文件。改为 `state.step % ckpt_every == 0`,
+  `stage6 ckpt_every_steps: 50000`(全程约 100 个 ckpt ≈ 9.5GB)。ETA 由 ~10.5 天
+  降至 ~1–1.5 天。
+- `llm_fusion.py`: `_resolve_local_path` 修正 modelscope 缓存布局判定
+  (`models/` 而非 `hub/`), 离线解析更稳。
+- `scripts/eval/run_developmental_eval.py`: 数感里程碑改接**真实 NumberSense 头**
+  (从 `ckpt.extra.number_sense_state` 加载权重, 用 `model._last_slots` 调
+  `predict_count()`), 无权重时回退 env 行为代理; 新增信号样本计数诊断输出。
 
 ### A#1 hardened: public read_states() replaces private-attr access / 稳健化
 

@@ -11,6 +11,10 @@
     - 对比不同 ckpt 的发育年龄,作为 exit criterion 的 *认知能力* 维度补充
       (现有 exit 标准只衡量系统韧性: 30 天 / 10 任务 / 显存趋平)。
 
+数感 (number sense) 默认接 **真实 NumberSense 头** (从 ckpt 的
+``extra.number_sense_state`` 加载权重), 比 env 的 "接触不同物体数" 行为代理更准;
+若 ckpt 无该权重则回退到行为代理, 并在诊断中标注来源。
+
 用法:
     python scripts/eval/run_developmental_eval.py \\
         --ckpt /root/autodl-tmp/karbon_ckpts/checkpoints/ckpt_stage5_002000000.pt \\
@@ -40,6 +44,7 @@ if ROOT not in sys.path:
 
 from src.eval.developmental_milestones import DevelopmentalEvaluator  # noqa: E402
 from src.envs.physics_sandbox import PhysicsSandbox  # noqa: E402
+from src.models.number_sense import NumberSense  # noqa: E402
 from src.platform import get_device  # noqa: E402
 from src.utils import load_config  # noqa: E402
 from src.train import (  # noqa: E402
@@ -83,6 +88,23 @@ def build_model(
     return model
 
 
+def build_number_sense(model_cfg: dict, num_sense_cfg: dict, device: torch.device,
+                       state: dict | None):
+    """Build NumberSense head; load weights if provided. Returns (module|None)."""
+    if num_sense_cfg is None:
+        return None
+    ns = NumberSense(
+        slot_dim=int(model_cfg.get("slot_dim", 128)),
+        max_count=int(num_sense_cfg.get("max_count", 10)),
+        hidden=int(num_sense_cfg.get("hidden", 32)),
+    ).to(device)
+    if state:
+        ns.load_state_dict(state, strict=False)
+        return ns
+    # No weights in ckpt -> return None so caller falls back to env proxy.
+    return None
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="C#8 developmental milestone eval")
     ap.add_argument("--ckpt", type=str, required=True, help="Path to checkpoint .pt")
@@ -94,6 +116,8 @@ def main() -> None:
     ap.add_argument("--max-steps", type=int, default=1000,
                     help="Max env steps per episode")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--no-number-head", action="store_true",
+                    help="Disable NumberSense head; use env behavioral proxy")
     ap.add_argument("--out", type=str, default=None,
                     help="Optional path to write JSON report")
     args = ap.parse_args()
@@ -110,6 +134,7 @@ def main() -> None:
         cfg_name = f"stage{args.stage}_curriculum.yaml"
     cfg = load_config(cfg_name, args.preset)
     model_cfg = cfg["model"]
+    num_sense_cfg = cfg.get("number_sense")
 
     # --- Env (PhysicsSandbox, matching resume ckpt obs shape) ---
     env_cfg = cfg.get("env", {})
@@ -135,32 +160,67 @@ def main() -> None:
     ck = torch.load(args.ckpt, map_location="cpu")
     state = ck.get("model_state") if isinstance(ck, dict) else None
     if state is None:
-        # 兼容直接存 state_dict 的情况
         state = ck
     missing, unexpected = model.load_state_dict(state, strict=False)
-    print(f"[eval] loaded ckpt; missing={len(missing)} unexpected={len(unexpected)}")
+    print(f"[eval] loaded model_state; missing={len(missing)} unexpected={len(unexpected)}")
     model.eval()
+
+    # --- NumberSense head (real counting) ---
+    number_sense = None
+    if not args.no_number_head:
+        ns_state = (ck.get("extra") or {}).get("number_sense_state")
+        number_sense = build_number_sense(model_cfg, num_sense_cfg, device, ns_state)
+    use_head = number_sense is not None
+    print(f"[eval] number_sense source: {'NumberSense head' if use_head else 'env behavioral proxy'}")
 
     # --- Rollout, collect developmental signals ---
     rng = np.random.RandomState(args.seed)
     env_states: list[dict] = []
+    head_count_trials: list[dict] = []  # filled only when use_head
     for ep in range(args.episodes):
         obs = env.reset(seed=int(rng.randint(0, 2**31 - 1)))
         done = False
         steps = 0
+        ep_est: list[int] = []
         while not done and steps < args.max_steps:
             obs_t = _obs_to_tensor(obs, device)
             with torch.no_grad():
                 out = model(obs_t)
             logits = out[0] if isinstance(out, (tuple, list)) else out
             action = int(torch.argmax(logits, dim=-1).item())
+            if use_head:
+                slots = model._last_slots
+                if slots is not None:
+                    ep_est.append(int(number_sense.predict_count(slots).item()))
             step_out = env.step(action)
             info = dict(step_out.info) if step_out.info else {}
+            if use_head:
+                # replace env behavioral proxy with head-based (fed at ep end)
+                info["count_trials"] = []
             env_states.append(info)
             obs = step_out.obs
             done = bool(step_out.terminated) or bool(step_out.truncated)
             steps += 1
+        # episode-end true count from env public snapshot
+        true_count = int(env.read_states()["num_objects"])
+        if use_head:
+            est = int(round(float(np.mean(ep_est)))) if ep_est else 0
+            head_count_trials.append(
+                {"true_count": true_count, "estimated_count": est})
         print(f"[eval] episode {ep + 1}/{args.episodes} steps={steps} done={done}")
+    if use_head:
+        env_states.append({
+            "occlusion_events": [],
+            "force_motion_pairs": [],
+            "count_trials": head_count_trials,
+        })
+
+    # --- Diagnostics: how many signal samples did we actually collect? ---
+    n_occ = sum(len(s.get("occlusion_events", [])) for s in env_states)
+    n_fm = sum(len(s.get("force_motion_pairs", [])) for s in env_states)
+    n_ct = sum(len(s.get("count_trials", [])) for s in env_states)
+    print(f"[diag] signal samples: occlusion={n_occ} force_motion={n_fm} "
+          f"count_trials={n_ct} (n_states={len(env_states)})")
 
     # --- Evaluate milestones ---
     report = DevelopmentalEvaluator().evaluate(env_states)
@@ -174,6 +234,9 @@ def main() -> None:
             "preset": args.preset,
             "episodes": args.episodes,
             "n_states": len(env_states),
+            "signal_samples": {"occlusion": n_occ, "force_motion": n_fm,
+                               "count_trials": n_ct},
+            "number_sense_source": "head" if use_head else "env_proxy",
             "scores": report.scores,
             "passed": report.passed,
             "estimated_age": report.estimated_age,

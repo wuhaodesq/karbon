@@ -353,19 +353,24 @@ class LLMFusionBridge(nn.Module):
         ms_home = os.environ.get("MODELSCOPE_CACHE") or os.path.join(
             os.path.expanduser("~"), ".cache", "modelscope"
         )
-        ms_dir = os.path.join(ms_home, "hub", model_name.replace("/", "--"))
+        # ModelScope stores under <ms_home>/models/<name-->/snapshots/<rev>/
+        # (NOT hub/). Check both layouts for robustness.
+        ms_dir = os.path.join(ms_home, "models", model_name.replace("/", "--"))
+        ms_dir_legacy = os.path.join(ms_home, "hub", model_name.replace("/", "--"))
         hf_home = os.environ.get("HF_HOME") or os.path.join(
             os.path.expanduser("~"), ".cache", "huggingface"
         )
         hf_dir = os.path.join(hf_home, "hub", "models--" + model_name.replace("/", "--"))
         # No local cache at all -> do NOT import any network lib, just skip.
-        if not (os.path.isdir(ms_dir) or os.path.isdir(hf_dir)):
+        if not (os.path.isdir(ms_dir) or os.path.isdir(ms_dir_legacy)
+                or os.path.isdir(hf_dir)):
             return None
         # Cache dir exists: resolve offline only (no network, ever).
         os.environ["MODELSCOPE_OFFLINE"] = "1"
         os.environ["HF_HUB_OFFLINE"] = "1"
         try:
-            if os.path.isdir(ms_dir) and LLM_FUSION_SOURCE == "modelscope":
+            if (os.path.isdir(ms_dir) or os.path.isdir(ms_dir_legacy)) \
+                    and LLM_FUSION_SOURCE == "modelscope":
                 from modelscope import snapshot_download
                 local_dir = snapshot_download(model_name, local_dir=None)
             else:
