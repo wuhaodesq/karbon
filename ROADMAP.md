@@ -349,19 +349,6 @@ per its timing section) activates as the language anchor.
 > 回报天花板已验证(~102–104)、交互类型有限。**这把 Step 6 的 3D 世界 + 社会教师
 > 从"可选项"提升为"承载高级认知评估的必需品"**——B#7(ToM)、C#8 means_ends /
 > systematic 接口均依赖此环境到位。优先级由此锁定。
-  entirely; no need to wait for X to be solved (AlphaGeometry/AlphaProof did the
-  same).
-
-**Training-plan steps (Stage 6 后支线, first cognitive item):**
-1. Wire `kanren` (or `clplog`) as the real backend behind `RuleInduction` /
-   `CausalDiscovery` outputs — replace cosine-match in `neuro_symbolic_bridge.py`.
-2. First validation domain: **physics puzzles** (PhysicsSandbox causal/stacking
-   constraints) or **simple algebra equation solving** — narrow domain keeps the
-   symbol backend small/stable and suppresses the interface problem.
-3. Close the loop: neural predicates → external inference → results feed back to
-   train the neural extractor. Verify restricted-domain 15y-level symbolic behavior.
-4. Only after Y1 validates, consider Y2 (differentiable relaxation) / Y3 (program
-   synthesis already in `program_synthesis.py`) for broader coverage.
 
 This is a **planned engineering task**, not blocked on open research.
 
