@@ -5,6 +5,32 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### LLMFusion timing decision / LLM 融合激活时机
+
+- **Corrected a misstatement**: `src/models/llm_fusion.py` is a **local offline
+  frozen Qwen-7B** (4-bit, ~5 GB, no external API; template-mode fallback), not
+  a cloud dependency. Verified by reading the code (`_try_load_llm`).
+- **Decision**: keep LLMFusion **deactivated during Stage 5–6 main line**; defer
+  to the late B-plan "language emergence" phase. Raising `call_interval_steps`
+  frequency / model size now would only slow training and destabilize the
+  forming policy. Config stays at defaults. Rationale documented in ROADMAP
+  Post-Stage-6 section.
+
+### Stage 6 config + Roadmap branch clarification / Stage 6 配置与支线定位
+
+- **`configs/stage6_consolidation.yaml` corrected to resume from Stage 5:**
+  switched `hybrid_n_layers` 3 → 7, replaced the (incompatible) MiniGrid task
+  list with the Stage-5 PhysicsSandbox difficulty ladder (same 64×64 obs / 8-action),
+  bumped replay capacities to Stage-5 scale (hot 16384 / warm 131072 / cold 32×16384),
+  and added `train.total_steps: 5000000` (was missing). Keeps Online EWC +
+  generative replay + sleep loop.
+- **ROADMAP: split cognitive branch from the developmental main line.** Stage 6
+  now explicitly *continues on PhysicsSandbox* (the developmental backbone M1–M5);
+  MiniGrid 3D + language is documented as a **post-Stage-6 cognitive branch**
+  (instruction-following + sparse-reward multi-step planning — needed for the
+  8–15y North Star but not on the critical path). Noted MiniGrid obs is
+  incompatible with the Stage-5 vision encoder and needs its own adapter.
+
 ### Goal clarification / 目标澄清
 
 - **Confirmed North Star: human 8–15-year-old intelligence, reached *from

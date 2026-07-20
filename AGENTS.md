@@ -13,6 +13,8 @@ minimum operating protocol for working inside this repo.
 - **Python**: 3.10 in a project-local `.venv`.
 - **PyTorch**: `2.5.1+cpu` locally / `2.5.1+cu121` on cloud & home rigs.
 - **Docs are bilingual**: Chinese-friendly first, English follows.
+- **User communication language / 交流语言**: 与用户的所有对话一律使用
+  **中文**(代码、标识符、英文技术术语可保留英文)。用户已明确要求中文交流。
 - **Everything must pass `make test` + `make check-bounds`** before commit.
 
 ## 2. Cardinal Rules / 铁律

@@ -131,6 +131,11 @@ Six sequential stages. Each stage has a hard exit criterion that must pass befor
 
 **Duration**: long-term (months)
 **Hardware**: home-64G rig (Phase 3)
+**Environment**: **continues on PhysicsSandbox** (same 64×64 obs / 8-action as
+Stage 5) so the developmental chain (M1–M5) carries forward without an
+architecture break. Resumes from the Stage 5 ckpt (7-layer hybrid + SlotAttention
++ RSSM + bounded skill library). Do **NOT** switch the base env to MiniGrid here
+— see the post-Stage-6 cognitive branch below.
 **Deliverables**:
 - `src/continual/online_ewc.py` — single accumulating Fisher, weighted decay
 - `src/memory/generative_replay.py` — small VAE substituting for stored history
@@ -146,6 +151,50 @@ Six sequential stages. Each stage has a hard exit criterion that must pass befor
 - Memory footprint asymptotes (VRAM slope ≈ 0 over 7-day windows).
 
 **Git tag**: `v1.0.0-stage6`.
+
+---
+
+## Post-Stage-6 Cognitive Branch (MiniGrid → 3D → language)
+
+After the developmental backbone (M1–M5) is closed on PhysicsSandbox, a
+**separate branch** validates the *upper* cognitive abilities the North Star
+(8–15-year-old intelligence) requires but PhysicsSandbox alone cannot:
+
+- **MiniGrid** (first step): instruction-following + sparse-reward multi-step
+  planning (DoorKey etc.). Spins off from the mature Stage-6 ckpt as its own
+  training line. NOTE: MiniGrid obs is a discrete grid encoding, **incompatible**
+  with the 64×64 vision encoder — the branch needs its own grid/observation
+  adapter (or `use_vision_encoder` reconfigured); it does **not** reuse the
+  Stage-5 CNN encoder weights. The hybrid backbone + skill library still transfer.
+- **3D world + real language** (Crafter / `three_d_world` + `social_teacher`):
+  the next rung toward juvenile-level grounded language and longer-horizon
+  planning. Already scaffolded in `src/envs/`; paused.
+
+This branch is **complementary, not on the critical path**: the PhysicsSandbox
+main line is the developmental foundation; the cognitive branch is the upper
+room built on top of it. Starting the branch before Stage 6 closes would waste
+the accumulated developmental state.
+
+### LLMFusion timing / LLM 融合激活时机
+
+`src/models/llm_fusion.py` is a **local, offline, frozen Qwen-7B** (4-bit,
+~5 GB, zero network dependency; gracefully degrades to template mode if the
+weights are absent). It is a *self-contained* capability, **not** an external
+API — confirmed by reading the code.
+
+Decision: **keep LLMFusion deactivated during Stage 5–6 main-line training,
+and defer it to the late B-plan "language emergence" phase.** Rationale:
+- Current bottleneck is *sensorimotor* development, not language; earlier/higher
+  LLM involvement (smaller `call_interval_steps`, larger model) only slows
+  training (Qwen forward is the speed bottleneck) and destabilizes the
+  still-forming policy via FiLM modulation of noise.
+- Its trainable projectors can only learn a useful modulation once the base
+  policy + slot representations are mature.
+- Config stays at defaults (`call_interval_steps: 50`, `max_new_tokens: 64`,
+  Qwen-7B). Do **not** raise frequency/model size during the main line.
+- Activate only after the 5 lightweight cognitive modules (HomeostaticDrives /
+  Metacognition / LongRangePlanner / CausalDiscovery / CreativityOrchestrator)
+  are wired into the loss loop and the backbone is stable.
 
 ---
 

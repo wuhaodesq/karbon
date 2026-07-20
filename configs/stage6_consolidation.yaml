@@ -4,18 +4,30 @@
 #   - Generative Replay VAE: synthesizes past observations for rehearsal.
 #   - Sleep Consolidation Loop: periodic offline "night" that trims replay,
 #     merges skills, and runs EWC consolidate.
+#
+# ENV NOTE: continues on PhysicsSandbox (same 64x64 obs / 8-action as Stage 5)
+# so the developmental chain carries forward. Resumes from the Stage-5 ckpt
+# (7-layer hybrid + SlotAttention + RSSM + bounded skill library). MiniGrid is
+# intentionally NOT the base env here — it is a post-Stage-6 cognitive branch
+# (see ROADMAP). Switching base env to MiniGrid would break the resume (obs
+# shape + layer count mismatch) and discard all accumulated developmental state.
 
 stage: 6
 name: "stage6_consolidation"
 
 model:
   use_hybrid_backbone: true
-  hybrid_n_layers: 3
+  hybrid_n_layers: 7
   hybrid_n_heads: 4
   hybrid_swa_window: 16
   hybrid_ttt_mini_batch: 8
   hybrid_ffn_hidden_mult: 4
   hybrid_dropout: 0.0
+  use_slot_attention: true
+  slot_num_slots: 7
+  slot_dim: 128
+  slot_num_iterations: 3
+  use_vision_encoder: false
 
 # --- Stage 6 sub-block: continual learning ---
 continual:
@@ -46,6 +58,10 @@ continual:
   sleep_ttt_distill_every: 20000
 
 # --- Prior blocks carry forward (with enlarged capacity) ---
+# TASKS ARE PhysicsSandbox VARIANTS (not MiniGrid): the difficulty knobs are all
+# physics params (num_objects / gravity / action_force) so obs shape stays 64x64
+# and the Stage-5 resume weights remain valid. MiniGrid lives in the post-Stage-6
+# cognitive branch (ROADMAP), which needs its own obs adapter.
 curriculum:
   max_tasks: 8
   lp_window_size: 32
@@ -55,11 +71,11 @@ curriculum:
   switch_every_steps: 20000
   report_every_steps: 500
   tasks:
-    - {id: 0, env_id: "MiniGrid-Empty-5x5-v0",  difficulty: 0.1, tag: "empty-5x5"}
-    - {id: 1, env_id: "MiniGrid-Empty-6x6-v0",  difficulty: 0.2, tag: "empty-6x6"}
-    - {id: 2, env_id: "MiniGrid-Empty-8x8-v0",  difficulty: 0.3, tag: "empty-8x8"}
-    - {id: 3, env_id: "MiniGrid-DoorKey-5x5-v0", difficulty: 0.5, tag: "doorkey-5x5"}
-    - {id: 4, env_id: "MiniGrid-DoorKey-6x6-v0", difficulty: 0.6, tag: "doorkey-6x6"}
+    - {id: 0, env_id: "PhysicsSandbox", num_objects: 3,  gravity: -4.0,  action_force: 70.0, difficulty: 0.1, tag: "few-light-strong"}
+    - {id: 1, env_id: "PhysicsSandbox", num_objects: 5,  gravity: -6.0,  action_force: 60.0, difficulty: 0.3, tag: "some-mid"}
+    - {id: 2, env_id: "PhysicsSandbox", num_objects: 10, gravity: -9.8,  action_force: 50.0, difficulty: 0.5, tag: "base-10obj"}
+    - {id: 3, env_id: "PhysicsSandbox", num_objects: 14, gravity: -12.0, action_force: 45.0, difficulty: 0.7, tag: "many-heavy"}
+    - {id: 4, env_id: "PhysicsSandbox", num_objects: 18, gravity: -14.0, action_force: 40.0, difficulty: 0.9, tag: "crowded-heavy-weak"}
 
 skills:
   skill_d_out: 128
@@ -95,10 +111,10 @@ intrinsic:
   update_every_steps: 1
 
 replay:
-  hot_capacity: 4096
-  warm_capacity: 32768
-  cold_max_shards: 8
-  cold_shard_size: 4096
+  hot_capacity: 16384
+  warm_capacity: 131072
+  cold_max_shards: 32
+  cold_shard_size: 16384
   per_alpha: 0.6
   min_size_to_sample: 1024
   sample_every_steps: 4
@@ -116,3 +132,4 @@ train:
   value_coef: 0.5
   gamma: 0.99
   gae_lambda: 0.95
+  total_steps: 5000000
