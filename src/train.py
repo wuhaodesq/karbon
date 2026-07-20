@@ -1710,6 +1710,21 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     model_grower_v2._current_layers = actual
             except AttributeError:
                 pass
+        # Restore the bounded skill library so developmental accumulation (M1/M2
+        # skills learned in prior stages) carries across resumes — required for
+        # cross-task transfer (M3) to be meaningful in later stages.
+        if skills is not None:
+            _sk_state = (payload.get("extra") or {}).get("skills_state")
+            if _sk_state:
+                try:
+                    skills.load_state_dict(_sk_state)
+                    logger.info(
+                        "Resumed skill library (%d in-memory skills, next_id=%d)",
+                        len(skills), skills._next_id,
+                    )
+                except (ValueError, RuntimeError, KeyError) as exc:
+                    logger.warning(
+                        "Skill library state mismatch on resume (%s); starting fresh.", exc)
         # TODO(Phase5+): restore extra states (RND, EWC Fisher, coverage, skills,
         # WM, imagination, symbolic, etc. — ~40 keys) for homogeneous resume.
         # Currently ~40 extra keys are written (lines ~2680-2740) but never read
