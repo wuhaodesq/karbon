@@ -30,7 +30,19 @@ def test_stage5_tasks_have_env_ids():
     for t in tasks:
         assert "id" in t
         assert "env_id" in t
-        assert t["env_id"].startswith("MiniGrid")
+        # Stage-5 tasks are PhysicsSandbox difficulty variants (continues the
+        # Stage 3/4 training line). Difficulty comes from num_objects / gravity
+        # / action_force, none of which change obs/action shape.
+        assert t["env_id"] == "PhysicsSandbox"
+
+
+def test_stage5_task_variants_preserve_obs_shape():
+    """Difficulty knobs must NOT include render_size (would break the CNN input
+    shape of a resumed model). Only num_objects/gravity/action_force may vary."""
+    cfg = load_config("stage5_curriculum.yaml", "cloud_5090")
+    for t in cfg["curriculum"]["tasks"]:
+        assert "render_size" not in t
+        assert "max_episode_steps" not in t
 
 
 def test_stage5_tasks_within_max():

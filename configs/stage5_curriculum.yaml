@@ -1,49 +1,68 @@
-# Stage 5 · Auto Curriculum (LP driven)
-# Adds an AutoCurriculum on top of Stage 4. Instead of training on a fixed
-# env/task, the agent samples the next task from an LP-driven distribution.
+# Stage 5 · Auto Curriculum (Learning-Progress driven)
+# Adds an LP-driven AutoCurriculum on top of the proven Stage-4 backbone.
+# Resume from the final Stage-4 skill-library ckpt (7-layer hybrid +
+# SlotAttention + RSSM + bounded skill library).
 #
-# For MiniGrid this uses variants of MiniGrid environments as tasks
-# (Empty-5x5, Empty-6x6, DoorKey-5x5, ...). Each task is registered as a
-# TaskTemplate with a `spec` that the trainer can turn into an env instance.
-#
-# The learning-progress signal is fed from PPO's mean-return delta on the task.
+# TASKS ARE PhysicsSandbox VARIANTS (not MiniGrid): the difficulty knobs
+# (num_objects / gravity / action_force) do NOT change obs/action shape, so
+# the resumed model keeps working across task switches. render_size and
+# max_episode_steps are pinned by the env block below to keep the CNN input
+# fixed. The agent autonomously samples the next task from an LP-weighted
+# distribution as easy variants plateau.
 
 stage: 5
 name: "stage5_curriculum"
 
+# Base env: pins the invariant knobs (obs/action shape). Per-task overrides
+# come from the curriculum.tasks specs below.
+env:
+  id: "PhysicsSandbox"
+  num_objects: 10
+  max_episode_steps: 300
+  render_size: 64
+  gravity: -9.8
+  action_force: 50.0
+
 model:
   use_hybrid_backbone: true
-  hybrid_n_layers: 3
+  hidden_size: 128
+  hybrid_n_layers: 7
   hybrid_n_heads: 4
   hybrid_swa_window: 16
   hybrid_ttt_mini_batch: 8
   hybrid_ffn_hidden_mult: 4
   hybrid_dropout: 0.0
+  use_slot_attention: true
+  slot_num_slots: 7
+  slot_dim: 128
+  slot_num_iterations: 3
+  use_vision_encoder: false
 
-# --- Stage 5 sub-block: curriculum ---
+# --- Stage 5 sub-block: LP-driven curriculum over PhysicsSandbox variants ---
 curriculum:
-  # Bounded task pool (Axiom 1)
+  # Bounded task pool (Axiom 1).
   max_tasks: 8
   lp_window_size: 32
   lp_min_samples: 8
-  # 10% uniform exploration, 90% LP-weighted
+  # 10% uniform exploration, 90% LP-weighted.
   exploration_epsilon: 0.1
   smoothing: 0.5
-  # How often (env steps) to sample a new task
+  # How often (env steps) to (re)sample a task.
   switch_every_steps: 20000
-  # Report error signal (prediction error / negative reward) to LP tracker
-  # every N env steps
+  # Report LP error signal every N env steps.
   report_every_steps: 500
-  # Predefined task list (env_id → spec).
-  # The trainer instantiates the MiniGridWrapper with these env_ids in rotation.
+  # PhysicsSandbox difficulty ladder. Each spec keeps render_size/action shape
+  # fixed (pinned by env block); only num_objects/gravity/action_force vary.
+  # Easy = few objects, gentle gravity, strong push. Hard = many objects,
+  # strong gravity, weak push.
   tasks:
-    - {id: 0, env_id: "MiniGrid-Empty-5x5-v0",  difficulty: 0.1, tag: "empty-5x5"}
-    - {id: 1, env_id: "MiniGrid-Empty-6x6-v0",  difficulty: 0.2, tag: "empty-6x6"}
-    - {id: 2, env_id: "MiniGrid-Empty-8x8-v0",  difficulty: 0.3, tag: "empty-8x8"}
-    - {id: 3, env_id: "MiniGrid-DoorKey-5x5-v0", difficulty: 0.5, tag: "doorkey-5x5"}
-    - {id: 4, env_id: "MiniGrid-DoorKey-6x6-v0", difficulty: 0.6, tag: "doorkey-6x6"}
+    - {id: 0, env_id: "PhysicsSandbox", num_objects: 3,  gravity: -4.0,  action_force: 70.0, difficulty: 0.1, tag: "few-light-strong"}
+    - {id: 1, env_id: "PhysicsSandbox", num_objects: 5,  gravity: -6.0,  action_force: 60.0, difficulty: 0.3, tag: "some-mid"}
+    - {id: 2, env_id: "PhysicsSandbox", num_objects: 10, gravity: -9.8,  action_force: 50.0, difficulty: 0.5, tag: "base-10obj"}
+    - {id: 3, env_id: "PhysicsSandbox", num_objects: 14, gravity: -12.0, action_force: 45.0, difficulty: 0.7, tag: "many-heavy"}
+    - {id: 4, env_id: "PhysicsSandbox", num_objects: 18, gravity: -14.0, action_force: 40.0, difficulty: 0.9, tag: "crowded-heavy-weak"}
 
-# --- Stage 4 blocks carry forward (with enlarged capacity) ---
+# --- Stage 4 blocks carry forward ---
 skills:
   skill_d_out: 128
   skill_d_in: 128
@@ -58,6 +77,7 @@ skills:
   score_gamma: 0.1
   archive_subdir: "skills"
 
+# --- Stage 3 blocks carry forward ---
 world_model:
   z_dim: 32
   h_dim: 64
@@ -70,6 +90,27 @@ world_model:
   wm_loss_coef: 1.0
   log_every_steps: 5000
 
+curiosity:
+  mode: "rssm_uncertainty"
+  coef: 0.3
+
+imagination:
+  enabled: true
+  imagination_horizon: 8
+  imagination_batch: 32
+  discount: 0.99
+  actor_entropy_scale: 0.01
+  critic_loss_scale: 0.5
+  update_every_steps: 16
+  min_replay_size: 256
+  lambda_gae: 0.95
+  lr: 3.0e-4
+
+model_growth:
+  enabled: false
+
+# No planner (proven to hurt steady-state: v8 101.6 vs v9 104).
+
 intrinsic:
   embed_dim: 128
   lr: 1.0e-4
@@ -79,7 +120,7 @@ intrinsic:
 
 replay:
   hot_capacity: 4096
-  warm_capacity: 32768
+  warm_capacity: 32728
   cold_max_shards: 8
   cold_shard_size: 4096
   per_alpha: 0.6
@@ -93,6 +134,7 @@ coverage:
   log_every_steps: 5000
 
 train:
+  total_steps: 2000000
   ppo_clip: 0.2
   ppo_epochs: 4
   entropy_coef: 0.01

@@ -597,6 +597,34 @@ def _ckpt_layer_count(path) -> int:
         return 0
 
 
+def _build_env_from_spec(spec: dict[str, Any], env_cfg: dict[str, Any]):
+    """Build a fresh env from a curriculum task spec.
+
+    Stage-5 task variants must preserve obs/action shape so a resumed model
+    keeps working. For PhysicsSandbox the difficulty knobs (num_objects,
+    gravity, action_force) do NOT change obs/action shape; render_size and
+    max_episode_steps are pinned to the base env_cfg so the CNN input is fixed.
+    """
+    env_id = str(spec.get("env_id", env_cfg.get("id", "MiniGrid-Empty-5x5-v0")))
+    if env_id == "PhysicsSandbox":
+        from src.envs.physics_sandbox import PhysicsSandbox
+        return PhysicsSandbox(
+            num_objects=int(spec.get("num_objects", env_cfg.get("num_objects", 3))),
+            seed=42,
+            # Pinned to base cfg: keep obs/action shape stable across tasks.
+            max_episode_steps=env_cfg.get("max_episode_steps", 200),
+            render_size=int(env_cfg.get("render_size", 64)),
+            gravity=float(spec.get("gravity", env_cfg.get("gravity", -9.8))),
+            action_force=float(spec.get("action_force", env_cfg.get("action_force", 50.0))),
+        )
+    return MiniGridWrapper(
+        env_id=env_id,
+        seed=42,
+        max_episode_steps=env_cfg.get("max_episode_steps"),
+        auto_reset=True,
+    )
+
+
 def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     setup_logging("INFO")
     device_info = get_device_info(config.get("device_preferred"))
@@ -622,6 +650,14 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             action_force=float(env_cfg.get("action_force", 50.0)),
         )
         logger.info("Env: PhysicsSandbox (2D physics, %d objects)", env_cfg.get("num_objects", 3))
+    elif env_id == "Crafter":
+        from src.envs.crafter_wrapper import CrafterWrapper
+        env = CrafterWrapper(
+            seed=42,
+            length=env_cfg.get("max_episode_steps"),
+            auto_reset=True,
+        )
+        logger.info("Env: Crafter (2D open-world survival sandbox)")
     elif env_id == "SocialTeacher":
         from src.envs.social_teacher import SocialTeacherWrapper
         env = SocialTeacherWrapper(
@@ -902,7 +938,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         for task_spec in curriculum_tasks:
             curriculum.add_task(TaskTemplate(
                 id=int(task_spec["id"]),
-                spec={"env_id": task_spec["env_id"]},
+                spec={k: v for k, v in task_spec.items()
+                      if k not in ("id", "difficulty", "tag")},
                 difficulty=float(task_spec.get("difficulty", 0.0)),
                 tag=str(task_spec.get("tag", "")),
             ))
@@ -1743,10 +1780,17 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     curr_report_every = int(curriculum_cfg.get("report_every_steps", 500)) if curriculum_cfg else 0
     curr_active_task: TaskTemplate | None = None
     if curriculum is not None:
-        # Start with the first task
+        # Start with the first task; rebuild env so training begins on the
+        # sampled curriculum task (not the fixed base env_cfg env).
         curr_active_task = curriculum.sample_task()
         logger.info("Curriculum: initial task=%s (id=%d)",
                     curr_active_task.tag, curr_active_task.id)
+        try:
+            env.close()
+        except Exception:
+            pass
+        env = _build_env_from_spec(curr_active_task.spec, env_cfg)
+        obs = env.reset()
     last_curr_switch_step = 0
     last_curr_report_step = 0
     last_curr_mean_ret: float = 0.0
@@ -2941,17 +2985,13 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     curr_active_task.id if curr_active_task else -1,
                     new_task.tag, new_task.id,
                 )
-                # Rebuild env from task spec
+                # Rebuild env from task spec (PhysicsSandbox-aware; keeps
+                # obs/action shape stable so the resumed model keeps working).
                 try:
                     env.close()
                 except Exception:
                     pass
-                env = MiniGridWrapper(
-                    env_id=new_task.spec["env_id"],
-                    seed=42,
-                    max_episode_steps=env_cfg.get("max_episode_steps"),
-                    auto_reset=True,
-                )
+                env = _build_env_from_spec(new_task.spec, env_cfg)
                 obs = env.reset()
                 curr_active_task = new_task
             last_curr_switch_step = state.step
