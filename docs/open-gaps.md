@@ -15,7 +15,7 @@
 
 | 编号 | 内容 | 状态 | 落地 |
 |---|---|---|---|
-| A#1 | 五认知模块接 loss(解除 n_envs==1 + 加权接 PPO) | **已完成(核心基础设施)** | `CoreKnowledgeAuxLoss` 接入 PPO loss 点(仿 EWC);record 提取就位。注:完整解除所有模块 n_envs==1 门控降级为待办(避免多 env 状态缓冲大重构),但*认知先验进入梯度*的核心已落地 |
+| A#1 | 五认知模块接 loss + 消除私有属性脆弱依赖 | **已完成(稳健化)** | P2 aux loss 已接 PPO(C#8/A#4)。本次把 ck_loss / homeostatic 三处从直接读 `env._agent`/`_objects` 私有属性改为公共 `env.read_states()`,消除脆弱硬依赖、为未来 VecPhysicsSandbox 铺路。**n_envs==1 门控保留**——2D 发育路径设计恒为单 env(多 env 仅 3D 路径支持),强行解门控无训练收益且违铁律#0,故记录原因而非盲目重构 |
 | A#2 | skill_library 推广为通用有界分层外部记忆 | **已完成** | `BoundedExternalMemory` + `MemoryItem`(payload 泛型,复用三层容量/评分/淘汰) |
 | A#3 | 程序化生成 Core Knowledge 演示轨迹 | **已完成** | `core_knowledge_demos.py` 生成三类演示; `BoundedReplayBuffer.prefill()` 注入 |
 | A#4 | P2 可微辅助 loss(客体永存/直觉物理/数感) | **已完成** | `core_knowledge_loss.py` + stage6 config 开关 `core_knowledge_loss.enabled` |
@@ -74,7 +74,9 @@ Step4 Y1 → Step5 MiniGrid → Step6 3D+LLMFusion)。具体:
 ## 四、剩余待办(非阻塞)
 
 - [ ] B#9 干预因果:在 replay 插 do-operator 实验模块(路径3 深化)。
-- [ ] A#1 完全解除 n_envs==1:多 env 下为 Homeostatic/Creativity/Emotion 维护
-      per-env 状态缓冲(当前单 env 生效,Stage 6 可单 env 跑)。
+- [ ] A#1 多 env 门控:如需真正 n_envs>1 跑 2D 发育路径,需 (a) 给 PhysicsSandbox
+      加向量化包装或 (b) 把 Homeostatic/Emotion/Creativity 模块内部状态改为
+      per-env 实例。当前不紧急——2D 路径设计恒为单 env,3D 路径已原生支持多 env。
+      已先消除对 env 私有属性的脆弱依赖(read_states 接口)。
 - [ ] C#8 剩余 3 里程碑(Means-ends / ToM / 系统推理)需 3D/符号环境接口。
 - [ ] 把 C#8 评测接入 Stage 5/6 的退出复验脚本(自动打 tag 前量化认知年龄)。

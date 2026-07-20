@@ -164,6 +164,36 @@ class PhysicsSandbox:
     def close(self) -> None:
         pass
 
+    # ------------------------------------------------------------------ public state read
+
+    def read_states(self) -> dict:
+        """Public, vectorization-safe snapshot of agent + objects.
+
+        Used by cognitive modules (homeostatic/emotion/core-knowledge) instead
+        of reaching into private ``_agent``/``_objects``. Returns plain values so
+        callers can vectorize without env-specific knowledge. Bounded: reflects
+        current world only (max self._num_objects bodies).
+
+        Keys:
+            agent_pos: (2,) float
+            agent_vel: (2,) float
+            num_objects: int
+            obj_pos: (num_objects, 2) float
+            obj_vel: (num_objects, 2) float
+            world_half: float (half-width of world)
+        """
+        agent = self._agent
+        obj_pos = [(o.x, o.y) for o in self._objects]
+        obj_vel = [(o.vx, o.vy) for o in self._objects]
+        return {
+            "agent_pos": (agent.x, agent.y),
+            "agent_vel": (agent.vx, agent.vy),
+            "num_objects": len(self._objects),
+            "obj_pos": obj_pos,
+            "obj_vel": obj_vel,
+            "world_half": self._hw,
+        }
+
     # ------------------------------------------------------------------ gym-like
 
     def reset(self, seed: int | None = None) -> np.ndarray:

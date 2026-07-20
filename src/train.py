@@ -1968,12 +1968,14 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 try:
                     success = extrinsic_r > 0.5
                     danger = 0.0
-                    if hasattr(env, '_agent'):
-                        ax, ay = env._agent.x, env._agent.y
-                        hw = getattr(env, '_hw', 1.0)
-                        wall_dist = hw - max(abs(ax), abs(ay), 0.05)
+                    movement = 0.0
+                    if hasattr(env, "read_states"):
+                        stt = env.read_states()
+                        ax, ay = stt["agent_pos"]
+                        wall_dist = stt["world_half"] - max(abs(ax), abs(ay), 0.05)
                         danger = max(0.0, 1.0 - wall_dist)
-                    movement = float(abs(getattr(env._agent, 'vx', 0)) + abs(getattr(env._agent, 'vy', 0)))
+                        avx, avy = stt["agent_vel"]
+                        movement = float(abs(avx) + abs(avy))
                     social_dist = 1.0  # default far
                     drive_rewards = homeostatic_drives.tick(
                         novelty=int_r if curiosity_mode != "none" else 0.0,
@@ -2140,19 +2142,20 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             # Extracts observable physics for the auxiliary loss; skipped safely
             # otherwise (aux loss stays 0). Mirrors the n_envs==1 gating of the
             # other cognitive modules but keeps the loss path ready for Stage 6.
-            if ck_loss is not None and n_envs == 1 and hasattr(env, "_agent"):
+            if ck_loss is not None and n_envs == 1 and hasattr(env, "read_states"):
                 try:
-                    agent = env._agent
-                    objs = env._objects
+                    st = env.read_states()
+                    objs = st["obj_pos"]
                     K = max(len(objs), 1)
-                    agent_pos = torch.tensor([[agent.x, agent.y]], device=device)
+                    agent_pos = torch.tensor([[st["agent_pos"][0], st["agent_pos"][1]]], device=device)
                     obj_pos = torch.zeros(1, K, 2, device=device)
                     obj_vel = torch.zeros(1, K, 2, device=device)
                     removed = torch.zeros(1, K, device=device)
                     belief = torch.ones(1, K, device=device)
-                    for k, o in enumerate(objs):
-                        obj_pos[0, k] = torch.tensor([o.x, o.y], device=device)
-                        obj_vel[0, k] = torch.tensor([o.vx, o.vy], device=device)
+                    for k, (ox, oy) in enumerate(objs):
+                        obj_pos[0, k] = torch.tensor([ox, oy], device=device)
+                        ovx, ovy = st["obj_vel"][k]
+                        obj_vel[0, k] = torch.tensor([ovx, ovy], device=device)
                     force = torch.tensor([[0.0, 0.0]], device=device)
                     ck_records.append({
                         "existence_belief": belief,

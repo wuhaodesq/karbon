@@ -5,6 +5,18 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### A#1 hardened: public read_states() replaces private-attr access / 稳健化
+
+- `PhysicsSandbox.read_states()` public snapshot (agent/object pos+vel, world
+  half-width) added; `train.py` ck_loss + homeostatic drives now call it instead
+  of reaching into `_agent`/`_objects`. Vectorization-safe, removes a fragile
+  coupling.
+- `n_envs==1` gating on cognitive modules intentionally kept: 2D developmental
+  path is single-env by design (multi-env only in 3D path). Fully lifting the
+  gate would add risk with no training benefit (violates "no green-metric
+  refactors"), so the reason is documented in open-gaps, not silently dropped.
+- Tests: ck_loss integration + sandbox-signal + milestone suites still green.
+
 ### PhysicsSandbox emits C#8 developmental signals / 沙盒产发育信号
 
 - `src/envs/physics_sandbox.py` step() now tracks and exposes three milestone
