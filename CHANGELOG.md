@@ -28,6 +28,20 @@ All notable changes to this project are documented here.
   a random policy reads ~0.25 intuitive-physics, correctly flagging the gap.
 - Added `tests/test_physics_sandbox_signals.py` (4 tests, all pass).
 
+### External review risk note archived / 外部评审风险提示入档
+
+- A independent code/roadmap review (2026-07-20) praised engineering discipline,
+  doc honesty, and the verifiable milestone ladder; flagged the top risk as
+  "whether PhysicsSandbox can承载 higher cognitive eval" — which elevates Step 6's
+  3D world + social_teacher from optional to necessary for B#7 / C#8 interfaces.
+- Archived in `docs/open-gaps.md` §5 (外部独立评审风险提示) and ROADMAP Step 6.
+- Review also noted: M2 reuse lacks usage-count实证 (to be filled when Stage 6
+  skill_library has data), train.py is oversized (known tech debt, not touched
+  during main line), LLMFusion effect unverified (deferred per ROADMAP:258).
+- Review agreed with open-gaps: no new omissions; corrected its stale claim that
+  cognitive modules were "only active single-env" — they are now enabled in Stage 6
+  config (constrained by 2D single-env architecture, not unactivated).
+
 ### Cognitive-module activation timing locked / 认知模块激活时机已定
 
 - Per user decision (2026-07-20): enable the five lightweight cognitive modules

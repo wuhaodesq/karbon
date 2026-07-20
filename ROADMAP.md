@@ -343,6 +343,12 @@ transfer.
 The top rung toward juvenile-level grounded language and longer-horizon planning.
 Already scaffolded in `src/envs/`; paused. This is where **LLMFusion** (deferred
 per its timing section) activates as the language anchor.
+
+> **外部独立评审最大风险(2026-07-20):** 评审明确指出"唯一最大的风险不是技术
+> 方案,而是 PhysicsSandbox 环境是否能承载更高级认知能力的评估"。当前 2D 刚体沙盒
+> 回报天花板已验证(~102–104)、交互类型有限。**这把 Step 6 的 3D 世界 + 社会教师
+> 从"可选项"提升为"承载高级认知评估的必需品"**——B#7(ToM)、C#8 means_ends /
+> systematic 接口均依赖此环境到位。优先级由此锁定。
   entirely; no need to wait for X to be solved (AlphaGeometry/AlphaProof did the
   same).
 
