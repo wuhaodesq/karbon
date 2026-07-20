@@ -33,6 +33,20 @@ model:
   slot_num_iterations: 3
   use_vision_encoder: false
 
+# --- Base env: MUST match Stage 5 (PhysicsSandbox, render_size=64) so the
+# Stage-5 ckpt's obs/action shapes load correctly on resume. The home_64g
+# preset defaults to MiniGrid-DoorKey-8x8-v0 (obs 7x7x3) which would break
+# loading. HomeostaticDrives/EmotionSystem are gated on n_envs==1, so keep
+# single-env here.
+env:
+  id: "PhysicsSandbox"
+  num_objects: 10
+  max_episode_steps: 300
+  render_size: 64
+  gravity: -9.8
+  action_force: 50.0
+  num_envs: 1
+
 # --- Stage 6 sub-block: continual learning ---
 continual:
   # Online EWC
