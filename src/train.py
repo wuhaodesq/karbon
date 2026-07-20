@@ -97,7 +97,7 @@ from src.models.counterfactual_planner import CounterfactualPlanner
 from src.models.marginal_gains import CompositionalTester, LearningProgressTracker
 from src.models.visual_analyzer import VisualAnalyzer
 from src.monitoring import HealthChecker, MemoryWatcher, WatcherConfig
-from src.platform import data_dir, get_device, get_device_info, stage_ckpt_path
+from src.platform import data_dir, get_device, get_device_info, is_cuda, stage_ckpt_path
 from src.utils import (
     load_ckpt,
     load_config,
@@ -2226,7 +2226,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 # VRAM snapshot (cuda only) — folds memory into the PROF line so
                 # the A#11 Stage-6 memory/throughput measurement is one glance.
                 _vram_gb = 0.0
-                if device.type == "cuda":
+                if is_cuda():
                     _vram_gb = torch.cuda.memory_allocated(device) / (1024.0 ** 3)
                 logger.info(
                     "PROF per_step=%.1fms env=%.1f(%.0f%%) model=%.1f(%.0f%%) cog=%.1f(%.0f%%) buf=%.1f(%.0f%%) other=%.1f(%.0f%%) vram=%.2fGB",

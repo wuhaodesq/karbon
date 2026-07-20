@@ -197,6 +197,12 @@ class TopLevelSchema:
     cognitive: dict | None = None
     language: dict | None = None
     advanced: dict | None = None
+    # Stage 6+: implemented cognitive modules (activated, safe-skip paths).
+    causal_discovery: dict | None = None
+    number_sense: dict | None = None
+    rule_induction: dict | None = None
+    llm_fusion: dict | None = None
+    core_knowledge_loss: dict | None = None
     # Count-based exploration bonus (3D deadlock guard). Top-level so
     # enabling it does NOT switch on RND / change curiosity mode.
     exploration_bonus: dict | None = None

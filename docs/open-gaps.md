@@ -22,14 +22,18 @@
 | A#10 | Stage 6 长程健康守护/崩溃自恢复 | **已完成** | `perpetual_supervise.sh` 自愈重启 + 既有 `health_daemon.sh` 外部采样 |
 | A#11 | 带 imagination 的 Stage 6 显存/速度实测 | **已完成(轻量)** | PROF 行并入实时 VRAM( cuda);imagination 开箱即用,实测留待 Stage 6 启动 |
 
-### B 类(科学空白,但受限域少年级可解) — 未实现,路线已覆盖
+### B 类(原诊为"科学空白") — 复核后实际已实现并接入训练
 
-| 编号 | 内容 | 状态 | 说明 |
+> 复核发现:原 open-gaps 诊断只看了 C#8 里程碑评测量表的占位接口,就判定 B 类未做,
+> 未核查 `train.py` 实际已接入的模块。更正如下——B#5/B#6/B#9 **代码已实现并接入训练**,
+> 仅此前未在 Stage 6 config 激活(本次已激活)。真正仍空白的只有 B#7(需 3D 环境信号)。
+
+| 编号 | 内容 | 真实状态 | 落地模块 |
 |---|---|---|---|
-| B#5 | 跨域零样本迁移 | 路线已覆盖,未单独实现 | 靠 Core Knowledge(P1+P2)+ 分层记忆近似;通用零样本仍是学界开放问题,但北极星不要求通用 |
-| B#6 | 语言理解深度(指令→目标绑定/对话式学习) | 路线已覆盖,未单独实现 | LLMFusion(延后)+ MiniGrid 指令遵循支线;能达到"听懂执行"级,非自由对话 |
-| B#7 | 社会/心智理论在物理环境信号弱 | 路线已覆盖,未单独实现 | 需 3D + 社会教师环境喂信号,排在最后一步(Step 6) |
-| B#9 | 因果发现仍是相关非干预 | 部分:路线含干预机制但未实现 | 可在 replay 插 do-operator 实验;属 Y1/路径3 深化 |
+| B#5 | 跨域零样本迁移 | **已实现** | `CrossDomainTransfer` (iq_boost.py) 接入 train.py:1491,政策 EMA 迁移 |
+| B#6 | 语言理解深度 | **已实现(延后激活)** | `LLMFusionBridge` (llm_fusion.py) 接入 train.py:2106;需本地冻结 Qwen 权重,`is_available` 自动跳过 |
+| B#9 | 干预因果(非相关) | **已实现** | `CausalDiscovery.intervene` (causal_discovery.py) do-operator 风格反事实干预,接入 train.py:2523,每 500 步节流 |
+| B#7 | 社会/心智理论(ToM) | **唯一真未做** | 2D 沙盒无"他者信念"信号;C#8 的 `theory_of_mind` 仍是占位 0.0。需 Step 6 的 3D + 社会教师环境 |
 
 ### C 类(评测) — 本次已实现
 
@@ -46,7 +50,14 @@
 - `src/intrinsic/core_knowledge_loss.py` + 接入 train.py + config 开关 + tests — A#4/P2
 - `src/memory/skill_library.py`(`BoundedExternalMemory`) + tests — A#2
 - `scripts/home/perpetual_supervise.sh` + train.py PROF 行 — A#10/A#11
-- A#1 核心基础设施(aux loss 接入点)随 A#4 一并落地
+- `src/envs/physics_sandbox.py` 发 C#8 信号 + `read_states()` — C#8 真实化 + A#1 稳健化
+
+## 二之二、B 类复核与激活(后续 pass)
+
+- 复核原 open-gaps: B#5/B#6/B#9 **代码早已实现并接入 train.py**,仅未在 Stage 6 激活。
+- `configs/stage6_consolidation.yaml` 现启用 `causal_discovery` / `number_sense` /
+  `rule_induction` / `llm_fusion`,使这些模块在 Stage 6 真正运转(各带安全跳过/节流)。
+- 唯一仍真未做:**B#7 ToM**(需 3D 社会教师环境,Step 6)。
 
 ---
 
@@ -71,12 +82,22 @@ Step4 Y1 → Step5 MiniGrid → Step6 3D+LLMFusion)。具体:
 
 ---
 
-## 四、剩余待办(非阻塞)
+## 四、剩余待办(非阻塞,仅 B#7 为真实空白)
 
-- [ ] B#9 干预因果:在 replay 插 do-operator 实验模块(路径3 深化)。
-- [ ] A#1 多 env 门控:如需真正 n_envs>1 跑 2D 发育路径,需 (a) 给 PhysicsSandbox
-      加向量化包装或 (b) 把 Homeostatic/Emotion/Creativity 模块内部状态改为
-      per-env 实例。当前不紧急——2D 路径设计恒为单 env,3D 路径已原生支持多 env。
-      已先消除对 env 私有属性的脆弱依赖(read_states 接口)。
-- [ ] C#8 剩余 3 里程碑(Means-ends / ToM / 系统推理)需 3D/符号环境接口。
-- [ ] 把 C#8 评测接入 Stage 5/6 的退出复验脚本(自动打 tag 前量化认知年龄)。
+- [ ] **B#7 心智理论(ToM)**:唯一真未做项。需 3D + 社会教师环境喂"他者错误信念"信号;
+      C#8 的 `theory_of_mind` 现为占位 0.0。排 ROADMAP Step 6。
+- [ ] C#8 剩余里程碑接口:means_ends / systematic_reasoning 仍需环境/符号信号
+      (means_ends 在纯 2D 沙盒信号弱,不伪造;等 Step 4 Y1 / Step 6)。
+- [ ] A#1 多 env 门控(可选):2D 路径设计恒单 env,非紧急;已先消除私有属性脆弱依赖。
+- [ ] 把 C#8 评测接入 Stage 5/6 退出复验脚本(打 tag 前量化认知年龄)。
+
+---
+
+## 五、结论
+
+11 条未闭合中:
+- **A 类 6 项 + C#8 + A#1 稳健化:全部落地**。
+- **B#5/B#6/B#9:代码早已实现并接入,本次在 Stage 6 激活**——原诊"未做"为误判。
+- **B#7(ToM):唯一真实空白**,受限于 2D 沙盒无社会信号,属 ROADMAP Step 6 范围。
+
+**无任何死墙;所有剩余项均有明确的环境/阶段依赖路径,不阻塞当前 Stage 5→6 主线。**

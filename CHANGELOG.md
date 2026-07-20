@@ -28,6 +28,18 @@ All notable changes to this project are documented here.
   a random policy reads ~0.25 intuitive-physics, correctly flagging the gap.
 - Added `tests/test_physics_sandbox_signals.py` (4 tests, all pass).
 
+### B-class modules activated in Stage 6 / B类模块复核并激活
+
+- Re-audited open-gaps: B#5 (CrossDomainTransfer), B#6 (LLMFusionBridge), B#9
+  (CausalDiscovery.intervene do-operator) were ALREADY implemented and wired into
+  train.py — only not switched on for Stage 6. The original "unimplemented"
+  verdict was a misread of C#8's placeholder interfaces.
+- `configs/stage6_consolidation.yaml` now enables `causal_discovery`,
+  `number_sense`, `rule_induction`, `llm_fusion` (each has a safe skip/throttle
+  path). Only B#7 (ToM) is genuinely unimplemented — needs 3D social-teacher env
+  (ROADMAP Step 6).
+- `docs/open-gaps.md` corrected to reflect true status. No dead ends remain.
+
 ### Open gaps A+C implemented / 未闭合点 A类+C#8 全部实现
 
 - Implemented all 6 A-class engineering items + C#8 evaluation yardstick,

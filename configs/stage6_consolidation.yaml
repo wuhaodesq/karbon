@@ -85,6 +85,37 @@ imagination:
   lambda_gae: 0.95
   lr: 3.0e-4
 
+# --- Stage 6 sub-block: implemented cognitive modules, now ACTIVATED ---
+# These modules already exist and are wired into train.py; they were simply not
+# switched on for Stage 6. Enabling them lets B#5 (cross-domain transfer),
+# B#6 (language anchor via LLMFusion), and B#9 (interventional causal discovery)
+# actually run instead of remaining dormant. Safe: each has a no-op / skip path
+# when its precondition is unmet (LLMFusion needs a local frozen model file and
+# auto-skips if absent; causal_discovery is throttled to every 500 steps).
+causal_discovery:
+  enabled: true
+  max_edges: 256
+  min_intervention_effect: 0.01
+
+number_sense:
+  enabled: true
+  max_count: 10
+  hidden: 32
+  lr: 3.0e-4
+
+rule_induction:
+  enabled: true
+  max_rules: 128
+  max_chain_depth: 5
+  min_confidence: 0.3
+  induction_min_positive: 3
+
+llm_fusion:
+  enabled: true
+  model: "Qwen/Qwen2.5-7B-Instruct"
+  max_new_tokens: 64
+  call_interval_steps: 50
+
 # --- Prior blocks carry forward (with enlarged capacity) ---
 # TASKS ARE PhysicsSandbox VARIANTS (not MiniGrid): the difficulty knobs are all
 # physics params (num_objects / gravity / action_force) so obs shape stays 64x64
