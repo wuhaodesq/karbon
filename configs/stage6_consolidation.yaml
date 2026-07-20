@@ -57,6 +57,24 @@ continual:
   sleep_skills_merge_every: 20000
   sleep_ttt_distill_every: 20000
 
+# --- Stage 6 sub-block: Dreamer-style imagination training ---
+# Path-2 completion (docs/path-to-northstar.md). The ImaginationTrainer is
+# already wired into the training loop (train.py:2630, gradient flows back to
+# the main model) and is merely gated by `enabled`. Flipping this on makes the
+# agent train its actor-critic on RSSM-imagined rollouts — the missing piece
+# for long-horizon physical planning. Bounded: fixed horizon + fixed batch.
+imagination:
+  enabled: true
+  imagination_horizon: 8
+  imagination_batch: 32
+  discount: 0.99
+  actor_entropy_scale: 0.01
+  critic_loss_scale: 0.5
+  update_every_steps: 16
+  min_replay_size: 256
+  lambda_gae: 0.95
+  lr: 3.0e-4
+
 # --- Prior blocks carry forward (with enlarged capacity) ---
 # TASKS ARE PhysicsSandbox VARIANTS (not MiniGrid): the difficulty knobs are all
 # physics params (num_objects / gravity / action_force) so obs shape stays 64x64
