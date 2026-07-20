@@ -5,6 +5,21 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Open gaps A+C implemented / 未闭合点 A类+C#8 全部实现
+
+- Implemented all 6 A-class engineering items + C#8 evaluation yardstick,
+  merged to main (does not affect the running Stage 5 process; changes take
+  effect on next training start):
+  - C#8: `src/eval/developmental_milestones.py` (estimated cognitive age).
+  - A#3/P1: `core_knowledge_demos.py` + `BoundedReplayBuffer.prefill()`.
+  - A#4/P2: `src/intrinsic/core_knowledge_loss.py` wired into PPO loss + config.
+  - A#2: `BoundedExternalMemory` generic three-tier memory in skill_library.py.
+  - A#10: `scripts/home/perpetual_supervise.sh` self-healing supervisor.
+  - A#11: VRAM added to train.py PROF line.
+  - A#1 core infra (cognitive aux-loss path) landed with A#4.
+- Added `docs/open-gaps.md` tracking all 11 gaps + status. Verdict: all solvable,
+  none a dead end. Plan order unchanged; C#8 strengthens (not reorders) the route.
+
 ### Core Knowledge P1+P2 adopted / 核心先验 P1+P2 解法落地
 
 - Adopted concrete Core-Knowledge injection recipe (no academic breakthrough
