@@ -85,6 +85,25 @@ imagination:
   lambda_gae: 0.95
   lr: 3.0e-4
 
+# --- Stage 6 sub-block: infant-foundational drives + emotion (batch ①) ---
+# Most foundational cognitive blocks (motivation + affective modulation). Open at
+# Stage 6 start per ROADMAP "Stage 6 认知模块分批激活时机". Single-env only
+# (gated on n_envs==1 in train.py); safe to enable.
+homeostatic_drives:
+  enabled: true
+  curiosity_decay: 0.002
+  competence_decay: 0.001
+  social_decay: 0.003
+  safety_decay: 0.001
+  rest_decay: 0.005
+
+emotion_system:
+  enabled: true
+  pleasure_decay: 0.01
+  frustration_decay: 0.02
+  surprise_decay: 0.05
+  fear_decay: 0.03
+
 # --- Stage 6 sub-block: implemented cognitive modules, now ACTIVATED ---
 # These modules already exist and are wired into train.py; they were simply not
 # switched on for Stage 6. Enabling them lets B#5 (cross-domain transfer),

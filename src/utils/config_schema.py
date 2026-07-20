@@ -203,6 +203,8 @@ class TopLevelSchema:
     rule_induction: dict | None = None
     llm_fusion: dict | None = None
     core_knowledge_loss: dict | None = None
+    homeostatic_drives: dict | None = None
+    emotion_system: dict | None = None
     # Count-based exploration bonus (3D deadlock guard). Top-level so
     # enabling it does NOT switch on RND / change curiosity mode.
     exploration_bonus: dict | None = None
