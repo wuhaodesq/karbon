@@ -124,6 +124,19 @@ class PhysicsSandbox:
         self._auto_reset = True
         self._prev_distances: dict[int, float] = {}
 
+        # --- Developmental signal trackers (C#8 milestone evaluation) ---
+        # All buffers are episode-scoped and reset on (auto)reset; bounded by
+        # episode length so they cannot grow unboundedly (Axiom 1).
+        self._occlusion_events: list[dict] = []
+        self._force_motion_pairs: list[dict] = []
+        self._count_trials: list[dict] = []
+        self._active_occlusions: dict[int, dict] = {}
+        self._contacted_this_ep: set[int] = set()
+        self._last_force: tuple[float, float] = (0.0, 0.0)
+        # Occlusion zones: world corners where an object is "hidden" from agent
+        # view (agent is on the opposite side of a fixed occluder at origin).
+        self._occluder_radius = 0.25
+
     # ------------------------------------------------------------------ properties
 
     @property
@@ -177,6 +190,13 @@ class PhysicsSandbox:
         ]
         self._objects = []
         self._prev_distances = {}
+        # clear developmental trackers
+        self._occlusion_events = []
+        self._force_motion_pairs = []
+        self._count_trials = []
+        self._active_occlusions = {}
+        self._contacted_this_ep = set()
+        self._last_force = (0.0, 0.0)
         for i in range(self._num_objects):
             for _ in range(50):  # try 50 times to place without overlap
                 ox = self._rng.uniform(-self._hw + 0.3, self._hw - 0.3)
@@ -225,6 +245,7 @@ class PhysicsSandbox:
         directions = [(0, force_mag), (0, -force_mag), (-force_mag, 0), (force_mag, 0)]
         fx, fy = directions[action]
         self._agent.apply_force(fx, fy)
+        self._last_force = (fx, fy)
 
         # Physics step (semi-implicit Euler)
         self._physics_step()
@@ -236,7 +257,12 @@ class PhysicsSandbox:
         self._current_return += reward
         done = self._step_count >= self._max_steps
 
+        # --- Developmental signal tracking (C#8) ---
+        self._track_developmental_signals()
+
         if done:
+            # Finalize count trial for this episode (number sense probe).
+            self._finalize_count_trial()
             self._episode_returns.append(self._current_return)
             self._episode_lengths.append(self._step_count)
             if len(self._episode_returns) > 1024:  # BOUNDS-OK: rolling window cap
@@ -246,15 +272,119 @@ class PhysicsSandbox:
                 self._reset_world()
             self._current_return = 0.0
             self._step_count = 0
+            # Clear episode-scoped trackers after auto-reset.
+            self._occlusion_events = []
+            self._force_motion_pairs = []
+            self._count_trials = []
+            self._active_occlusions = {}
+            self._contacted_this_ep = set()
 
         return EnvStep(
             obs=self._render(),
             reward=reward,
             terminated=done,
             truncated=done,
-            info={"step": self._step_count, "max_steps": self._max_steps},
+            info={
+                "step": self._step_count,
+                "max_steps": self._max_steps,
+                # C#8 milestone signals (empty lists until populated)
+                "occlusion_events": self._occlusion_events,
+                "force_motion_pairs": self._force_motion_pairs,
+                "count_trials": self._count_trials,
+            },
             proprio=self._proprioceptive(),
         )
+
+    # ------------------------------------------------------------------ C#8 signals
+
+    def _track_developmental_signals(self) -> None:
+        """Accumulate per-step developmental signals for milestone eval.
+
+        Bounded: appends only; lists are cleared on episode reset.
+        """
+        agent = self._agent
+        fx, fy = self._last_force
+
+        # --- force_motion_pairs (intuitive physics ~2.5y) ---
+        # Record the agent's applied force direction and a sampled object's
+        # resulting velocity direction (causal force->motion pairing).
+        if (fx, fy) != (0.0, 0.0):
+            # pick the nearest object to the agent as the affected body
+            nearest = None
+            best = float("inf")
+            for obj in self._objects:
+                d = (obj.x - agent.x) ** 2 + (obj.y - agent.y) ** 2
+                if d < best:
+                    best = d
+                    nearest = obj
+            if nearest is not None:
+                self._force_motion_pairs.append({
+                    "force": (fx, fy),
+                    "velocity_after": (nearest.vx, nearest.vy),
+                })
+
+        # --- occlusion_events (object permanence ~1y) ---
+        # An object is "occluded" when it is behind the central occluder
+        # relative to the agent (line agent->object passes within occluder_radius
+        # of world origin). While occluded, record agent trajectory; on exit,
+        # append the event for milestone scoring.
+        for i, obj in enumerate(self._objects):
+            occ = self._is_occluded(agent, obj)
+            if occ and i not in self._active_occlusions:
+                self._active_occlusions[i] = {
+                    "last_known": (obj.x, obj.y),
+                    "agent_traj_during_occ": [(agent.x, agent.y)],
+                }
+            elif occ and i in self._active_occlusions:
+                ev = self._active_occlusions[i]
+                ev["last_known"] = (obj.x, obj.y)
+                ev["agent_traj_during_occ"].append((agent.x, agent.y))
+            elif not occ and i in self._active_occlusions:
+                ev = self._active_occlusions.pop(i)
+                if len(ev["agent_traj_during_occ"]) >= 2:
+                    self._occlusion_events.append(ev)
+
+        # --- contact tracking for number-sense probe ---
+        for i, obj in enumerate(self._objects):
+            dx = agent.x - obj.x
+            dy = agent.y - obj.y
+            if np.sqrt(dx * dx + dy * dy) < agent.radius + obj.radius + 0.02:
+                self._contacted_this_ep.add(i)
+
+    @staticmethod
+    def _is_occluded(agent: "_Body", obj: "_Body") -> bool:
+        """True if the segment agent->obj passes within occluder radius of origin."""
+        ax, ay = agent.x, agent.y
+        bx, by = obj.x, obj.y
+        # Distance from origin (0,0) to segment a-b.
+        vx, vy = bx - ax, by - ay
+        wx, wy = 0.0 - ax, 0.0 - ay
+        c1 = vx * wx + vy * wy
+        if c1 <= 0:
+            return np.hypot(wx, wy) < 0.25
+        c2 = vx * vx + vy * vy
+        if c2 <= c1:
+            return np.hypot(0.0 - bx, 0.0 - by) < 0.25
+        t = c1 / c2
+        px, py = ax + t * vx, ay + t * vy
+        return np.hypot(px, py) < 0.25
+
+    def _finalize_count_trial(self) -> None:
+        """Number-sense probe (~3.5y): agent's explored-object count vs truth.
+
+        True count is the number of objects in the world. Estimated count is the
+        number of *distinct* objects the agent contacted this episode — a
+        lower-bound proxy for the agent's exploratory number sense (more
+        exploration -> closer to truth). Not a fake head; a real behavioral read.
+        """
+        true_count = len(self._objects)
+        if true_count == 0:
+            return
+        estimated = float(len(self._contacted_this_ep))
+        self._count_trials.append({
+            "true_count": true_count,
+            "estimated_count": estimated,
+        })
 
     # ------------------------------------------------------------------ internals
 

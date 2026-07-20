@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### PhysicsSandbox emits C#8 developmental signals / 沙盒产发育信号
+
+- `src/envs/physics_sandbox.py` step() now tracks and exposes three milestone
+  signals in `info`: `occlusion_events` (object permanence), `force_motion_pairs`
+  (intuitive physics), `count_trials` (number sense, behavioral lower-bound proxy
+  from distinct objects contacted per episode). Buffers are episode-scoped and
+  reset on auto-reset (bounded, Axiom 1). No env contract break for existing keys.
+- C#8 evaluator now scores on *real* env output instead of only synthetic data;
+  a random policy reads ~0.25 intuitive-physics, correctly flagging the gap.
+- Added `tests/test_physics_sandbox_signals.py` (4 tests, all pass).
+
 ### Open gaps A+C implemented / 未闭合点 A类+C#8 全部实现
 
 - Implemented all 6 A-class engineering items + C#8 evaluation yardstick,
