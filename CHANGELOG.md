@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### A+B scaling strategy adopted into training plan / A+B 规模解法纳入训练计划
+
+- Chose **A+B combination** as the official answer to the scale-vs-Axiom-1
+  conflict: B = Dreamer imagination training (already enabled in Stage 6 config,
+  gradient back to main model); A = bounded hierarchical external memory
+  (generalize Stage-4 LoRA skill library into GPU/CPU/SSD retrieval-injected
+  memory). Documented in `docs/path-to-northstar.md §1.6`.
+- Folded A+B into the **ROADMAP Stage 6 training plan** (not optional extras):
+  B is live via `imagination.enabled`; A is a Stage-6 deepening task. Rejected
+  fallbacks C (bounded MoE) / D (relax Axiom limit) kept on record only.
+
 ### Path-to-North-Star analysis / 通往北极星路径分析
 
 - Added `docs/path-to-northstar.md`: maps the five common AI routes to karbon's

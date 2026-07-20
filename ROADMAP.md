@@ -145,6 +145,23 @@ architecture break. Resumes from the Stage 5 ckpt (7-layer hybrid + SlotAttentio
   - merge/prune skill library
 - Health daemon (`scripts/home/health_daemon.sh`)
 
+**North-Star scaling strategy (A+B, see `docs/path-to-northstar.md §1.6`)**:
+The route to 8–15y physical intuition without violating Axiom 1 (bounded).
+Both pieces are part of the Stage 6 training plan, not optional extras:
+- **B · Dreamer-style imagination training** — `imagination.enabled: true` is
+  already set in `configs/stage6_consolidation.yaml`; the `ImaginationTrainer`
+  (train.py:2630) trains the actor-critic on RSSM-imagined rollouts, gradient
+  flowing back to the main model. *Use "think more" to substitute for "more
+  params"* — the core Dreamer insight.
+- **A · bounded hierarchical external memory** — generalize the Stage-4 LoRA
+  skill library into a general retrieval-injected memory (GPU-hot / CPU-warm /
+  SSD-cold tiers, all capacity-declared). Amplifies *effective* intelligence
+  volume without growing the single-model param count. Deepen this in Stage 6
+  alongside B (sketch: promote `skill_library.py` → general cognitive memory).
+- **Rejected fallbacks** (kept for record): C = bounded MoE (arch change),
+  D = relax Axiom-1 scale limit (needs explicit user approval to amend the
+  iron rules). Not used unless A+B is empirically insufficient.
+
 **Exit criterion (the "AGI-esque" bar)**:
 - **30 consecutive days** of uninterrupted training with no manual restarts.
 - Agent learns **≥10 distinct tasks** in sequence with ≤10% drop on the earliest tasks.
