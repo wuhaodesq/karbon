@@ -16,6 +16,10 @@ stage: 6
 name: "stage6_consolidation"
 
 model:
+  # MUST match Stage 5's hidden_size (128) so the Stage-5 ckpt weights load
+  # with the correct shape. The home_64g preset sets 768, which would both
+  # mismatch the ckpt AND break SlotAttention (assumes slot_dim == d_model).
+  hidden_size: 128
   use_hybrid_backbone: true
   hybrid_n_layers: 7
   hybrid_n_heads: 4

@@ -203,6 +203,15 @@ class HybridActorCritic(nn.Module):
         self.use_vision = use_vision_encoder
         self.use_slots = use_slot_attention
         if use_slot_attention:
+            # SlotAttention's residual path assumes slot_dim == d_model; a
+            # mismatch would only fail late (inside forward, at LayerNorm). Fail
+            # early with a clear message instead.
+            if slot_dim != d_model:
+                raise ValueError(
+                    f"SlotAttention requires slot_dim == d_model, got "
+                    f"slot_dim={slot_dim} d_model={d_model}. Set model.hidden_size "
+                    f"to match model.slot_dim."
+                )
             from src.models.slot_attention import SlotAttention
             self.encoder = SlotAttention(
                 d_model=d_model,
