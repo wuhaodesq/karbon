@@ -12,6 +12,37 @@ Build a **long-lived, developmental AI agent** whose learning happens *while it 
 以"发育式"（developmental）范式打造一个长期在线、边跑边学的智能体。它不像 LLM 那样一次性训练后冻结部署，而是像人类一样——**在有限空间内、无限时间地生长**。
 
 **Backbone**: TTT-Hybrid (TTT-Linear + Sliding-Window Attention + TTT-MLP)
+
+---
+
+## 1.5 The long-term goal & the path to it / 长期目标与通向它的路径
+
+> Revised after goal clarification. This section defines the North Star and
+> the developmental ladder that leads to it.
+> 目标澄清后修订。本节界定北极星终点与通往它的发育阶梯。
+
+**Long-term North Star / 长期北极星终点：**
+
+- 🌟 **Human 8–15-year-old level intelligence, reached *from scratch* through autonomous developmental growth.** 长期终点是**达到人类 8–15 岁少年的智力水平**——但**关键在路径**:必须像人一样**从零、自主、经验驱动地发育成长**到那里,而**不是**靠大规模预训练一次性堆出一个高分模型。
+- This is a **serious, honest attempt**, not a guarantee. No team has yet reached general human-child-level intelligence via from-scratch autonomous learning; we pursue it as a direction, measuring real progress by the ladder below. 这是一次**严肃而诚实的尝试**,不是承诺一定达到;我们以下方阶梯衡量真实进展。
+- The **method is the constraint**: growth must be developmental (grasp → crawl → recognize → use tools → transfer → compose), under the six bounded axioms. 方法本身即约束——成长必须是发育式的、在六条有界公理下进行。
+
+**The developmental ladder to the North Star / 通往北极星的发育阶梯：**
+
+These milestones are **steps toward** the 8–15 goal, not substitutes for it. 以下里程碑是**通往** 8–15 岁终点的台阶,而非终点本身。Each is independently verifiable so we never fool ourselves about progress.
+
+| # | Milestone / 里程碑 | Verifiable signal / 可验证信号 | Stage |
+|---|---|---|---|
+| M1 | **Bounded memory** 有界记忆 | GPU skill/replay count stays ≤ capacity under long runs | 1–4 ✅ |
+| M2 | **Skill reuse** 技能复用 | a learned skill is retrieved & re-applied later (`usage_count > 1`) | 4 ⛔ *(current gap)* |
+| M3 | **Cross-task transfer** 跨任务迁移 | skill learned in task A is invoked in task B ≥1× | 5 |
+| M4 | **Autonomous curriculum** 自主课程 | agent raises its own difficulty via learning-progress signal | 5 |
+| M5 | **Perpetual retention** 永续保持 | ≥10 tasks retained across many days without catastrophic forgetting | 6 |
+| M6 | **Compositional growth** 组合式成长 | new skills built by composing older skills (toward juvenile-level reasoning) | post-6 |
+
+**Honest current status / 当前诚实状态：** M1 达成;**M2 尚未达成**——技能库目前只"存"不"取"(`usage_count` 恒为 1)。M2 是通往终点的第一级真实台阶,在它闭合前后续里程碑无根基。这是回到主线后的第一优先级。
+
+**Analogy / 类比：** at its current frontier, a from-scratch autonomous learner like this is closer to *an insect / simple animal that keeps learning* than to a child. That is not failure — it is the honest research frontier. The value is the **learning paradigm** (grows without collapsing), not the intelligence altitude.
 **Learning driver**: Intrinsic motivation (RND → Learning Progress)
 **Memory**: Hierarchical, bounded, evicting (GPU/CPU/SSD/archive)
 **Long-term stability**: Online EWC + Generative Replay + Sleep Consolidation

@@ -17,6 +17,14 @@ minimum operating protocol for working inside this repo.
 
 ## 2. Cardinal Rules / 铁律
 
+0. **Goal-first direction rule / 以终为始的方向准则:** When choosing between
+   design/implementation directions, always pick the one that best serves the
+   **North Star** — *human 8–15-year-old intelligence reached from scratch via
+   autonomous developmental growth* (`PLAN.md §1.5`). **Never pick the cheaper
+   or lower-risk option merely to turn an exit-criterion number green** if it
+   does not genuinely advance the agent toward that goal (no self-deceiving
+   "count-only" shortcuts). Control risk with small-step verification, not by
+   lowering the target. 选方向时永远选最有利于最终目标的那条路,用小步验证控风险,而非降低目标。
 1. **Read `PLAN.md` and `DESIGN_PRINCIPLES.md` first** — the six bounded
    axioms are non-negotiable.
 2. **Never commit secrets, PATs, or `.env`.**

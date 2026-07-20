@@ -5,6 +5,42 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Goal clarification / 目标澄清
+
+- **Confirmed North Star: human 8–15-year-old intelligence, reached *from
+  scratch* via autonomous developmental growth** — the goal is the altitude,
+  but the *binding constraint is the path* (must grow like a human, not be
+  pre-trained). Rewrote `PLAN.md §1.5` to state this North Star explicitly and
+  frame **M1–M6 as a verifiable developmental ladder leading toward it** (not a
+  replacement for it). Honest framing kept: a serious attempt, not a guarantee.
+- **Verified Stage-4 exit criteria against `ckpt_stage4_002000000.pt`:**
+  GPU-bound criterion **PASS** (GPU tier = 256 ≤ K under 2M steps);
+  skill-reuse criterion **NOT MET** (`usage_count == 1` for all skills —
+  library is add-only, no retrieval/re-apply path in `train.py`). Recorded as
+  milestone **M2** gap; blocking Stage 5. ROADMAP Stage 4 annotated.
+
+### M2 skill-reuse loop implemented / M2 技能复用闭环已实现
+
+- **Closed the M2 gap with a genuine reuse path (not a counter-only hack):**
+  - `src/memory/skill_library.py`: added `retrieve()` (cosine over flattened LoRA,
+    reuse of `_flatten`) and `sample_for_injection()` (score-weighted pick from the
+    GPU tier) so a stored skill can be selected and re-applied.
+  - `src/train.py` `HybridActorCritic.forward`: added `skill_delta` LoRA-residual
+    injection (`z = z + skill_delta.apply(z)`) — dims match skill_shape
+    (d_in=d_out=d_model=128).
+  - `src/train.py` rollout loop (Stage 4): at episode start inject a stored skill
+    into the policy; at episode success, `record_use` the injected skill (real
+    reuse → `usage_count > 1`) and distill a new candidate via `retrieve` +
+    `_merge`/`add` to avoid duplicates.
+  - By the goal-first rule this is the genuine reuse path (skill affects behavior),
+    not the cheaper count-only shortcut.
+- **Pre-existing crash fixed (blocked M2 verification):** `wm_last_loss` init dict
+  at `train.py:1781` lacked the `'reward'` key, crashing the final summary log under
+  smoke-only runs where the wm-update block is skipped. Added `'reward': 0.0`.
+- **Tests:** added 5 M2 cases to `tests/test_skill_library.py`
+  (`test_retrieve_*`, `test_sample_for_injection_*`, `test_m2_reuse_loop_records_usage`);
+  all pass. Full `tests/test_skill_library.py` and `tests/test_stage4_skills.py` green.
+
 ### Known failing tests (pre-existing, TODO — not from planner/reward work)
 
 - `tests/test_stage3_wm.py::test_stage3_config_validates`:

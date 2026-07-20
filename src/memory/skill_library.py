@@ -225,6 +225,35 @@ class BoundedSkillLibrary:
             return self._gpu[best_idx]
         return None
 
+    def retrieve(
+        self, query: "SkillWeights | SkillEntry", min_similarity: float = 0.5
+    ) -> SkillEntry | None:
+        """Retrieve the most similar GPU-tier skill to ``query``.
+
+        Used by the M2 skill-reuse loop: given a freshly distilled skill
+        candidate (or a skill embedding derived from the current state), return
+        the closest existing library skill if cosine similarity ≥
+        ``min_similarity``. Returns ``None`` when nothing matches — caller then
+        creates a new skill instead.
+
+        检索最相似技能：给定查询（新技能或状态派生的技能表征），
+        返回 GPU 层中最接近的技能（cosine ≥ 阈值），否则 None。
+        """
+        if not self._gpu:
+            return None
+        if isinstance(query, SkillEntry):
+            q_flat = self._flatten(query)
+        else:
+            q_flat = torch.cat([query.A.flatten(), query.B.flatten()])
+        q_flat = q_flat.unsqueeze(0)
+        others = torch.stack([self._flatten(o) for o in self._gpu], dim=0)
+        cos = F.cosine_similarity(q_flat, others, dim=1)
+        best_idx = int(cos.argmax().item())
+        best_sim = float(cos[best_idx].item())
+        if best_sim >= min_similarity:
+            return self._gpu[best_idx]
+        return None
+
     def _merge(self, existing: SkillEntry, new: SkillEntry) -> None:
         """Fuse ``new`` into ``existing`` (weighted by usage counts).
 
@@ -362,6 +391,24 @@ class BoundedSkillLibrary:
     def top_k(self) -> list[SkillEntry]:
         """Return current GPU-tier skills (already the top-K)."""
         return list(self._gpu)
+
+    def sample_for_injection(self) -> "SkillEntry | None":
+        """Pick a GPU-tier skill to inject into the policy for an episode.
+
+        Score-weighted sampling (higher score ⇒ more likely chosen) so the
+        policy rehearses its most valuable skills, while still occasionally
+        rehearsing weaker ones. Returns ``None`` if the GPU tier is empty.
+        按评分加权抽样一个 GPU 层技能用于本 episode 注入（优先高价值技能，
+        偶尔也练弱势技能）。GPU 层为空时返回 None。
+        """
+        if not self._gpu:
+            return None
+        scores = torch.tensor(
+            [max(1e-3, self._score(s)) for s in self._gpu], dtype=torch.float32
+        )
+        probs = scores / scores.sum()
+        idx = int(torch.multinomial(probs, 1).item())
+        return self._gpu[idx]
 
     def iter_all_in_memory(self) -> Iterator[SkillEntry]:
         yield from self._gpu

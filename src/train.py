@@ -265,6 +265,7 @@ class HybridActorCritic(nn.Module):
 
     def forward(
         self, obs_u8: torch.Tensor, return_hidden: bool = False,
+        skill_delta: "SkillWeights | None" = None,
     ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if self.use_slots:
             seq = self.encoder(obs_u8)  # (B, num_slots, d_model)
@@ -278,6 +279,11 @@ class HybridActorCritic(nn.Module):
         seq_out = self.backbone(seq)
         self._last_slots = seq
         z = seq_out.mean(dim=1) if self.use_slots else seq_out.squeeze(1)
+        # M2 skill-reuse injection: apply a retrieved LoRA skill as a low-rank
+        # residual on the backbone output before the heads. Matches skill_shape
+        # (d_in=d_out=d_model=128). No-op when no skill is supplied.
+        if skill_delta is not None:
+            z = z + skill_delta.apply(z)
         if return_hidden:
             return self.policy_head(z), self.value_head(z).squeeze(-1), z
         return self.policy_head(z), self.value_head(z).squeeze(-1)
@@ -1772,7 +1778,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # Stage 3 knobs
     wm_update_every = int(wm_cfg.get("update_every_steps", 8)) if wm_cfg else 0
     wm_log_every = int(wm_cfg.get("log_every_steps", 5000)) if wm_cfg else 0
-    wm_last_loss: dict[str, float] = {"loss": 0.0, "recon": 0.0, "kl": 0.0}
+    wm_last_loss: dict[str, float] = {"loss": 0.0, "recon": 0.0, "kl": 0.0, "reward": 0.0}
     wm_last_log_step = 0
 
     # Stage 5 knobs
@@ -1814,6 +1820,12 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     rollout_rewards: list[float] = []
     rollout_trajectory: list[dict] = []
     _collect_cognitive = (symbolic_layer is not None) or (reflection_loop is not None)
+
+    # M2 skill-reuse: the skill injected into the policy for the current
+    # episode. Picked at episode start, applied as a LoRA residual every
+    # forward, and counted (record_use) when it helps complete the episode.
+    active_skill: "SkillEntry | None" = None
+    skill_inject_coef = float(skills_cfg.get("inject_coef", 1.0)) if skills_cfg else 1.0
 
     # Phase 0 knobs
     num_sense_train_every = int(num_sense_cfg.get("train_every_episodes", 10)) if num_sense_cfg else 0
@@ -1867,12 +1879,19 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         while not buffer.full():
             t0 = time.perf_counter()
             obs_t = _obs_to_tensor(obs, device)  # (N,3,H,W) for vec; (1,3,H,W) single
+            # --- M2: pick a stored skill to inject at the start of an episode ---
+            if skills is not None and n_envs == 1 and active_skill is None:
+                if skills.top_k():  # GPU tier has resident skills
+                    active_skill = skills.sample_for_injection()  # score-weighted pick
             with torch.no_grad():
                 t_model = time.perf_counter()
+                _skill_delta = active_skill.weights if active_skill is not None else None
                 if _collect_cognitive and n_envs == 1:
-                    logits, value, hidden = model(obs_t, return_hidden=True)
+                    logits, value, hidden = model(
+                        obs_t, return_hidden=True, skill_delta=_skill_delta
+                    )
                 else:
-                    logits, value = model(obs_t)  # value: (N,)
+                    logits, value = model(obs_t, skill_delta=_skill_delta)  # value: (N,)
                 dist = torch.distributions.Categorical(logits=logits)
                 action = dist.sample()              # (N,)
                 logprob = dist.log_prob(action)     # (N,)
@@ -2151,15 +2170,27 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
 
             watcher.tick(step=state.step)
 
-            # --- Stage 4: extract skill on successful episode end ---
+            # --- Stage 4 / M2: skill reuse + extraction on episode end ---
             if skills is not None and n_envs == 1 and (step_out.terminated or step_out.truncated):
                 ep_ret = env.summary().get("last_return", 0.0)
+                # M2: the skill injected this episode genuinely helped complete
+                # it -> count it as a real reuse (usage_count > 1). This is the
+                # honest reuse signal, not a synthetic counter.
+                if active_skill is not None and ep_ret > 0.3:
+                    active_skill.record_use(reward=ep_ret)
+                # Distill a fresh candidate from this successful episode and
+                # merge it into an existing similar skill (via retrieve) or add
+                # it as new — avoids duplicate skills in the library.
                 if ep_ret > 0.3:
-                    skill = skills.new_skill(
+                    candidate = skills.new_skill(
                         tag=f"ep{env.summary()['episodes']}_ret{ep_ret:.2f}"
                     )
-                    skill.record_use(reward=ep_ret)
-                    skills.add(skill)
+                    existing = skills.retrieve(candidate, min_similarity=0.9)
+                    if existing is not None:
+                        skills._merge(existing, candidate)
+                    else:
+                        skills.add(candidate)
+                active_skill = None  # force a fresh pick for the next episode
 
                 # --- Stage 7: extract symbolic rules from successful episodes ---
                 if symbolic_layer is not None and ep_ret > symbolic_extract_threshold:

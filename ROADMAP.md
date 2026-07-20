@@ -104,6 +104,8 @@ Six sequential stages. Each stage has a hard exit criterion that must pass befor
 - Observable **skill reuse** across tasks (a skill learned in task A is invoked ≥1× in task B).
 - Skill count on GPU strictly ≤ K under long runs.
 
+> **STATUS (project review):** GPU-bound criterion **PASS** (verified: GPU tier = 256 ≤ K under 2M-step run, `ckpt_stage4_002000000.pt`). Skill-reuse criterion **NOT MET** — training currently only *adds* skills to the library and never *retrieves/re-applies* them, so every `usage_count == 1`. Maps to milestone **M2** in `PLAN.md §1.5`; top priority before Stage 5. Do not tag `v0.4.0-stage4` until the reuse loop is closed.
+
 **Git tag**: `v0.4.0-stage4`.
 
 ---

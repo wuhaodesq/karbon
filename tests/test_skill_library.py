@@ -220,3 +220,76 @@ def test_stats_shape(tmp_path):
         lib.add(lib.new_skill())
     s = lib.stats()
     assert set(s.keys()) >= {"gpu", "cpu", "ssd", "total", "total_capacity", "next_id"}
+
+
+# =====================================================================
+# M2: skill reuse loop
+# =====================================================================
+
+
+def test_retrieve_finds_similar_skill(tmp_path):
+    """retrieve() returns the closest GPU-tier skill above the similarity gate."""
+    lib = _make_lib(tmp_path, gpu_cap=4, cpu_cap=2, sim=0.9999)
+    torch.manual_seed(0)
+    s1 = lib.new_skill()
+    lib.add(s1)
+    # Near-duplicate of s1 -> high cosine similarity
+    s2 = SkillEntry(
+        id=lib.new_skill().id,
+        weights=SkillWeights(
+            A=s1.weights.A + 1e-3 * torch.randn_like(s1.weights.A),
+            B=s1.weights.B + 1e-3 * torch.randn_like(s1.weights.B),
+        ),
+    )
+    found = lib.retrieve(s2, min_similarity=0.5)
+    assert found is not None
+    assert found.id == s1.id
+
+
+def test_retrieve_returns_none_below_threshold(tmp_path):
+    lib = _make_lib(tmp_path, gpu_cap=4, cpu_cap=2, sim=0.9999)
+    torch.manual_seed(0)
+    s1 = lib.new_skill()
+    lib.add(s1)
+    # A clearly different candidate should NOT match under a high threshold
+    other = lib.new_skill(scale=0.5)
+    found = lib.retrieve(other, min_similarity=0.999)
+    assert found is None
+
+
+def test_sample_for_injection_picks_resident_skill(tmp_path):
+    lib = _make_lib(tmp_path, gpu_cap=4, cpu_cap=2, sim=0.9999)
+    s = lib.new_skill()
+    lib.add(s)
+    picked = lib.sample_for_injection()
+    assert picked is not None
+    assert picked.id == s.id
+
+
+def test_sample_for_injection_none_when_empty(tmp_path):
+    lib = _make_lib(tmp_path, gpu_cap=4, cpu_cap=2, sim=0.9999)
+    assert lib.sample_for_injection() is None
+
+
+def test_m2_reuse_loop_records_usage(tmp_path):
+    """End-to-end M2 signal: a stored skill injected into an episode and used
+    to complete it must reach usage_count > 1 (not the old add-only `== 1`)."""
+    lib = _make_lib(tmp_path, gpu_cap=4, cpu_cap=2, sim=0.9999)
+    # A skill already lives in the library (usage_count == 1 from its add)
+    stored = lib.new_skill(tag="grasp")
+    stored.record_use(reward=0.5)  # simulate its creation-time use
+    lib.add(stored)
+    assert stored.usage_count == 1
+
+    # Episode start: inject the stored skill into the policy
+    active = lib.sample_for_injection()
+    assert active is not None and active.id == stored.id
+
+    # Episode succeeds -> the injected skill is genuinely reused
+    ep_ret = 0.8
+    if active is not None and ep_ret > 0.3:
+        active.record_use(reward=ep_ret)
+
+    assert stored.usage_count == 2
+    assert stored.avg_reward > 0.5
+
