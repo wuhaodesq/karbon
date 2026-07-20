@@ -5,6 +5,20 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### C#8 eval harness + Stage 6 launch fixes / 评测接入与启动修复
+- `scripts/eval/run_developmental_eval.py`: 加载 ckpt → 在 PhysicsSandbox 跑
+  rollout 收集发育信号 → `DevelopmentalEvaluator` 输出 `estimated_age`。用于
+  Stage 5/6 退出复验的 *认知能力* 维度(补现有 exit 标准只衡量系统韧性的盲点)。
+- `tests/test_run_developmental_eval.py`: 验证评测脚本的逐步收集→聚合→打分
+  数据契约(不需 torch,纯单测)。
+- Stage 6 启动连修三处卡点: (1) LLMFusion 改魔搭源 + 严格离线/不阻塞
+  (未缓存即 template 模式, 绝不触网); (2) stage6 `hidden_size:128` 对齐
+  Stage 5 ckpt; (3) stage6 `env.id: PhysicsSandbox` 对齐 Stage 5 obs 形状
+  (64×64×3), 否则 resume 维度冲突。现已 `HomeostaticDrives/EmotionSystem/
+  CoreKnowledgeAuxLoss/ImaginationTrainer` 全激活, 跨阶段 resume 成功。
+- 打 tag: `v0.5.0-stage5`(fc895cb) + `v0.6.0-stage6`(a59fa5a), 不碰现有
+  `-cloud` 占位 tag。
+
 ### A#1 hardened: public read_states() replaces private-attr access / 稳健化
 
 - `PhysicsSandbox.read_states()` public snapshot (agent/object pos+vel, world
