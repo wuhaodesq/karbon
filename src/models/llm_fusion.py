@@ -337,47 +337,44 @@ class LLMFusionBridge(nn.Module):
                 logger.warning("LLM Fusion: HuggingFace download failed (%s)", exc)
 
     def _resolve_local_path(self) -> str | None:
-        """Resolve a *real local path* for ``self._llm_model_name``.
+        """Resolve a *real local path* for ``self._llm_model_name`` — strictly
+        offline. Never touches the network.
 
-        Only resolves when the model is *already cached* locally — it never
-        triggers a download (that would block training on a 7B pull). When a
-        cache entry exists we resolve it to the concrete local directory via
-        ``snapshot_download`` (a no-op / instant when already cached), so that
-        ``from_pretrained`` receives a local path and does not fall back to a
-        blocking HuggingFace Hub download.
+        Returns a local path only if the model is *already cached* on disk
+        (a concrete cache directory exists). Otherwise returns ``None`` and the
+        caller falls back to template mode. We force ``*_OFFLINE`` env vars so
+        that even the resolution step cannot hang on a server round-trip.
         """
         self._maybe_download()
         model_name = self._llm_model_name
         # Already a local path?
         if os.path.isdir(model_name) or os.path.isfile(model_name):
             return model_name
-        # ModelScope cache directory present?
-        if LLM_FUSION_SOURCE == "modelscope":
-            ms_home = os.environ.get("MODELSCOPE_CACHE") or os.path.join(
-                os.path.expanduser("~"), ".cache", "modelscope"
-            )
-            ms_dir = os.path.join(ms_home, "hub", model_name.replace("/", "--"))
-            if os.path.isdir(ms_dir):
-                try:
-                    from modelscope import snapshot_download
-                    local_dir = snapshot_download(model_name, local_dir=None)
-                    if local_dir and os.path.isdir(local_dir):
-                        return local_dir
-                except Exception:
-                    pass
-        # HuggingFace local cache directory present?
+        ms_home = os.environ.get("MODELSCOPE_CACHE") or os.path.join(
+            os.path.expanduser("~"), ".cache", "modelscope"
+        )
+        ms_dir = os.path.join(ms_home, "hub", model_name.replace("/", "--"))
         hf_home = os.environ.get("HF_HOME") or os.path.join(
             os.path.expanduser("~"), ".cache", "huggingface"
         )
         hf_dir = os.path.join(hf_home, "hub", "models--" + model_name.replace("/", "--"))
-        if os.path.isdir(hf_dir):
-            try:
+        # No local cache at all -> do NOT import any network lib, just skip.
+        if not (os.path.isdir(ms_dir) or os.path.isdir(hf_dir)):
+            return None
+        # Cache dir exists: resolve offline only (no network, ever).
+        os.environ["MODELSCOPE_OFFLINE"] = "1"
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        try:
+            if os.path.isdir(ms_dir) and LLM_FUSION_SOURCE == "modelscope":
+                from modelscope import snapshot_download
+                local_dir = snapshot_download(model_name, local_dir=None)
+            else:
                 from huggingface_hub import snapshot_download as hf_snapshot
                 local_dir = hf_snapshot(model_name, local_dir=None)
-                if local_dir and os.path.isdir(local_dir):
-                    return local_dir
-            except Exception:
-                pass
+            if local_dir and os.path.isdir(local_dir):
+                return local_dir
+        except Exception:
+            pass
         return None
 
     def _try_load_llm(self) -> None:
