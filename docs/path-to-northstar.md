@@ -78,9 +78,45 @@
 - 更契合的升级是项目已搭好的 `src/envs/three_d_world.py` /
   `extended_3d_world.py`（仍是图像 obs），而非外部 MuJoCo。
 
-### 1.4 "NeuralSymbolicLayer 实现方式错（余弦匹配 ≠ 合一）" —— **判断准确**
-- `src/models/neuro_symbolic_bridge.py` 是余弦匹配，不是真 Prolog / miniKanren 合一。
-- 但真符号后端接进梯度闭环仍是 30 年未解问题，不能轻描淡写"换后端即走"。
+### 1.4 "NeuralSymbolicLayer 实现方式错（余弦匹配 ≠ 合一）" —— **判断准确，但有解法**
+
+原分析把两个问题混为一谈，需拆开：
+
+- **问题 Y · karbon 里真符号推理还没起步**（只有余弦匹配的
+  `neuro_symbolic_bridge.py`，没有真 Prolog / miniKanren 后端）。
+  这是**工程空白，不是科学难题**——真符号引擎（Prolog / miniKanren / Z3 /
+  定理证明器）是数十年成熟成品，缺的只是"在 karbon 里接一个真后端 + 喂数据"。
+- **问题 X · 神经↔符号接口（让梯度流过离散符号）仍是 30 年未解**。
+  这是开放科学难题，**无根治解**（离散符号无法严格可微且保真）。
+
+**问题 Y 的解法（可立即动手，不依赖 X）：**
+- **Y1 · 外部符号引擎 + 神经只做感知/翻译（推荐起步）**：神经网络负责从
+  slot/obs 抽谓词（`RuleInduction` 已在做）、把目标翻成逻辑查询；符号引擎
+  （外部，如 `kanren` / `clplog`）负责真合一、推理、证伪。**梯度不穿过符号
+  引擎**——神经部分用 REINFORCE / 行为克隆从符号结果学，绕开 X。
+  - 后端选型建议：**`kanren`（miniKanren 的 Python 实现）做关系推理 /
+    逻辑 unification；`clplog` 或 `swipl` 做规则证明；受限数值/约束域用
+    `Z3`**。优先 `kanren`——轻量、纯 Python、易嵌进训练进程。
+  - 首个验证域建议：**物理谜题（PhysicsSandbox 的因果/堆叠约束）或简单代数
+    方程求解**——域窄、符号后端小且稳，接口问题被域的狭窄性压住。
+- **Y2 · 可微符号（differentiable relaxation）**：用软合一 / 神经定理证明器
+  （GPT-f / Tree-of-Thoughts 风格）近似，梯度可微。近似丢严格性，但工程能跑、
+  能出 15 岁级受限域结果（AlphaGeometry 即此思路）。
+- **Y3 · 程序归纳（Program Synthesis，项目已有 `program_synthesis.py`）**：
+  把成功轨迹抽象成可复用"程序"，本身就是符号化且不要求经典逻辑后端
+  （Lake 2015 单样本学习即此路线）。
+
+**问题 X 的解法（无根治，但可工程绕开，业界实证有效）：**
+- X1：不强行让梯度过符号——用 Y1 的"神经翻译 + 外部引擎 + 强化学回"，X 根本不发生。
+- X2：放宽严格性换可微（Y2）。
+- X3：只在受限域做（Y3 + AlphaGeometry 式），符号后端够小够稳，接口问题被压制。
+- **关键认知**：业界 15 岁级成果（AlphaGeometry、AlphaProof）全都是**绕开 X**
+  做的，不是解决了 X。故"真符号推理在受限域达到 15 岁级"是**可及的**，不用
+  等 X 被解决。
+
+**落地建议**：Stage 6 后支线用 Y1 起步——接 `kanren` 真后端到现有
+`RuleInduction` / `CausalDiscovery` 输出，首个域选物理谜题或简单代数，验证
+"神经抽谓词 → 外部引擎推理 → 结果回训神经"闭环。不触碰 X 的硬科学。
 
 ### 1.5 LLMFusion 是**本地离线冻结 Qwen-7B**，非外部 API
 - 见 `ROADMAP.md` Post-Stage-6 段。延后激活，仅作语言锚点，不微调。

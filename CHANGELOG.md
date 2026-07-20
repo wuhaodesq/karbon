@@ -5,6 +5,16 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Neuro-symbolic interface has a workaround / 神经符号接口解法
+
+- Clarified in `docs/path-to-northstar.md §1.4`: the "unsolved 30-year problem"
+  is the neural↔symbol **gradient interface (X)**, NOT the lack of real symbolic
+  reasoning in karbon (Y). Y is pure engineering gap with mature backends
+  (Prolog/miniKanren/Z3). Adopted **Y1**: external symbol engine (recommend
+  `kanren`) + neural predicate extraction + reinforce/clone learning back —
+  sidesteps X entirely. First validation domain: physics puzzles or simple
+  algebra. Industry 15y-level results (AlphaGeometry/Proof) all sidestep X.
+
 ### A+B scaling strategy adopted into training plan / A+B 规模解法纳入训练计划
 
 - Chose **A+B combination** as the official answer to the scale-vs-Axiom-1
