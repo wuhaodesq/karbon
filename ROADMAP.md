@@ -185,7 +185,7 @@ Both pieces are part of the Stage 6 training plan, not optional extras:
 
 ---
 
-## Post-Stage-6 Cognitive Branch (ordered sub-steps 5–9)
+## Post-Stage-6 Cognitive Branch (ordered sub-steps 3–6)
 
 After the developmental backbone (M1–M5) closes on PhysicsSandbox and Stage 6
 exits, a **separate branch** validates the *upper* cognitive abilities the North
@@ -213,18 +213,38 @@ inductive bias should shape the *next* round of development, not be bolted on
 at the end. Spins off from the mature Stage-6 ckpt and runs one more
 developmental round with the priors active.
 
-- Add **Spelke's five core-knowledge modules** as inductive bias: object
-  permanence, intuitive physics, intuitive psychology (agentness), number sense,
-  causal cognition. Replace the current "fully blank" init (`DEV_PLAN §10.3 L`).
-- Implementation sketch: bootstrap the Stage-6 ckpt, freeze the developmental
-  backbone, attach lightweight core-knowledge heads that inject prior gradients
-  during the next training round; or pre-seed the replay/skill memory with
-  core-knowledge demonstrations.
-- Why before Y1/MiniGrid: a biased agent learns the upper cognitive tasks with
-  far fewer samples (Lake et al. 2015 single-shot evidence), and the symbol /
-  instruction modules have a more human-like prior to build on.
-- Status: **research-grade, no mature engineering recipe yet** — the first
-  open item to design once Stage 6 exits. Does NOT block sub-steps 4–6.
+**Adopted injection recipe: P1 + P2 combination** (no need to wait for an
+academic breakthrough — both are buildable from existing project mechanisms):
+
+- **P1 · core-knowledge demonstration replay (recommended start).** Procedurally
+  generate interaction trajectories that *embody* the priors and seed them into
+  the bounded replay buffer (`bounded_replay.py`): object permanence (occluded
+  object persists), intuitive physics (push→move direction), intuitive psychology
+  (agentness / goal-directed motion), number sense (discrete counts), causal
+  cognition (intervention→effect). The agent learns the priors from experienced
+  samples — consistent with the developmental stance (infants build priors from
+  experience, not hard-coded rules). Zero architecture change; reuses replay.
+- **P2 · core-knowledge auxiliary loss.** Add lightweight differentiable auxiliary
+  losses that penalize prior-violating behavior, wired into the PPO total loss
+  (same pattern as the B-plan modules):
+  - object permanence: predict continued existence when no causal event removed it;
+  - intuitive physics: gradient signal when motion direction ≠ applied-force direction;
+  - number sense / causal: reuse `number_sense.py` + `causal_disc` signals as losses.
+  Soft constraints, not hard rules — engineering-controllable, no symbol-interface
+  problem.
+- **P3 (free, do alongside):** lean on built-in architectural bias — `slot_attention.py`
+  already encodes *objectness*; `number_sense.py` already encodes discrete-quantity
+  prior. Strengthen rather than add.
+- **P4 (long-term, optional):** frozen multimodal foundation encoder (DINOv2 / CLAP
+  class, NOT an LLM) as a perception-init anchor. Listed as long-term only.
+
+**Why before Y1/MiniGrid:** a biased agent learns the upper cognitive tasks with
+far fewer samples (Lake et al. 2015 single-shot evidence), and the symbol /
+instruction modules have a more human-like prior to build on.
+
+**Order note:** Step 3 runs *after* Stage 6 (which emits the predicates Y1 needs)
+but *before* the cognitive sub-steps 4–6. It does NOT block them — P1/P2 can be
+iterated in parallel with early Y1 wiring if desired.
 
 ---
 

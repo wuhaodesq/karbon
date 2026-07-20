@@ -5,6 +5,15 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Core Knowledge P1+P2 adopted / 核心先验 P1+P2 解法落地
+
+- Adopted concrete Core-Knowledge injection recipe (no academic breakthrough
+  needed): **P1** procedurally-generated core-knowledge demo trajectories seeded
+  into `bounded_replay.py`; **P2** differentiable auxiliary losses (object
+  permanence / intuitive physics / number sense) wired into PPO total loss.
+  P3 strengthens existing slot/number-sense biases. Folded into ROADMAP Step 3
+  and `docs/path-to-northstar.md` §3/§4. Reordered priorities accordingly.
+
 ### Training-plan order optimized / 训练计划顺序优化
 
 - Reordered ROADMAP into a dependency-driven global roadmap:

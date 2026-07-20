@@ -150,8 +150,9 @@
   把 Dreamer 式想象 rollout 真接进 PPO 更新（代码已就绪） | 物理直觉、长程规划地基 |
 | **B 方案（已定）** | 路径 3 雏形 | 把 `CausalDiscovery` / `RuleInduction` / `ProgramSynthesis`
   **接进 loss 闭环**（代码已写，仅差接线与 `n_envs==1` 门控解除） | 因果、规则、程序（8–15 岁核心） |
-| **Stage 6 后支线** | 路径 4 雏形 | 加 Spelke 五大 Core Knowledge 模块作 inductive bias，
-  替代"完全白板"初始化 | 发育合理性、少样本学习 |
+| **Stage 6 后支线 (Step 3)** | 路径 4 · 核心先验 | **P1+P2 组合**：① 程序化生成核心知识演示轨迹灌入有界回放
+   (`bounded_replay.py`)，从经验学先验；② 加可微辅助 loss 惩罚违反客体永存 /
+   直觉物理 / 数感的行为，接进 PPO 总 loss。P3 强化 slot/数感头既有偏置，P4 留长线 | 发育合理性、少样本学习 |
 | **语言层（延后）** | 路径 2 + 冻结小模型 | `LLMFusion` 在 B 方案后期激活，仅作编码器锚点 | 语言涌现（非底座） |
 
 ---
@@ -162,13 +163,16 @@
    （此前误以为需重构世界模型，实际只需开开关。）
 2. **第二优先**：B 方案的 5 个轻量认知模块接 loss 闭环（HomeostaticDrives /
    Metacognition / LongRangePlanner / CausalDiscovery / CreativityOrchestrator）。
- 3. **第三优先**：神经符号接口从"余弦匹配"升级为轻量真符号后端（受限域验证）。
- 4. **长线**：Core Knowledge 先验注入 + 可能的冻结多模态基础模型初始化
-    （DINOv2 / CLAP 类，非 LLM）。
+ 3. **第三优先（Stage 6 后 Step 3）**：Core Knowledge 注入 **P1+P2 组合**——
+    P1 程序化演示灌有界回放、P2 可微辅助 loss 惩罚先验违反（客体永存 / 直觉物理 /
+    数感），均复用现有机制，无需等学界突破；P3 强化 slot/数感头既有偏置。
+ 4. **第四优先（Step 4）**：神经符号接口从"余弦匹配"升级为轻量真符号后端
+    （Y1：外部 kanren 引擎 + 神经抽谓词 + 强化学回），受限域验证。
  5. **A 解法深化（与 B 并行）**：把 Stage 4 的 LoRA 技能库推广为**通用有界
     分层外部记忆**（GPU 热 / CPU 温 / SSD 冷），用检索式注入放大有效智能体量，
     避免单模型参数触顶 Axiom 1。B（想象训练）已在 Stage 6 激活，A 作为后续
     配套深化。
+ 6. **长线**：冻结多模态基础模型初始化（DINOv2 / CLAP 类，非 LLM）。
 
 ---
 
