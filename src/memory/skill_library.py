@@ -472,3 +472,144 @@ class BoundedSkillLibrary:
             total_reward=float(d["total_reward"]),
             last_used_ts=float(d["last_used_ts"]),
         )
+
+
+# =====================================================================
+# Generic bounded external memory (open-gap A#2)
+# =====================================================================
+#
+# Promotion of the Stage-4 LoRA skill library into a *general* retrieval-
+# injected cognitive memory (Axiom 1: GPU-hot / CPU-warm / SSD-cold tiers,
+# all capacity-declared). Unlike BoundedSkillLibrary, the payload is an
+# arbitrary torch.Tensor (not a LoRA A/B pair), so it can store concept
+# embeddings, world-model latents, or any reusable representation. This is
+# the "A" half of the North-Star scaling strategy (docs/path-to-northstar.md
+# §1.6): amplify *effective* intelligence volume without growing the single
+# model's param count.
+#
+# Reuses SkillLibraryBudget (three-tier capacities) and the same scoring /
+# eviction rule. Similarity merge is optional and keyed on payload cosine.
+
+
+@dataclass
+class MemoryItem:
+    """A generic memory entry with an arbitrary tensor payload."""
+    id: int
+    payload: torch.Tensor          # any shape, lives on self._device
+    tag: str = ""
+    usage_count: int = 0
+    total_reward: float = 0.0
+    last_used_ts: float = 0.0
+
+    def record_use(self, reward: float = 0.0) -> None:
+        self.usage_count += 1
+        self.total_reward += reward
+        self.last_used_ts = time.time()
+
+    @property
+    def avg_reward(self) -> float:
+        return self.total_reward / max(1, self.usage_count)
+
+
+class BoundedExternalMemory:
+    """Generic three-tier bounded external memory (payload-agnostic).
+
+    Same eviction/scoring as BoundedSkillLibrary but the stored item is a
+    ``MemoryItem`` with an arbitrary tensor payload. Retrieval returns the
+    top-K payloads by score for injection into the model's forward pass.
+    """
+
+    _TIMESCALE_SECONDS = 3600.0
+
+    def __init__(
+        self,
+        budget: SkillLibraryBudget,
+        device: torch.device | str = "cpu",
+        merge_similarity_threshold: float = 1.0,  # >=1.0 disables merge
+        score_alpha: float = 1.0,
+        score_beta: float = 0.5,
+        score_gamma: float = 0.1,
+    ) -> None:
+        self._budget = budget
+        self._device = torch.device(device)
+        self._merge_thr = merge_similarity_threshold
+        self._alpha = score_alpha
+        self._beta = score_beta
+        self._gamma = score_gamma
+        self._gpu: list[MemoryItem] = []
+        self._cpu: list[MemoryItem] = []
+        self._ssd: list[MemoryItem] = []
+        self._next_id = 0
+
+    # -------------------------------------------------- bounded protocol
+
+    @property
+    def capacity(self) -> int:
+        return (
+            self._budget.gpu_capacity
+            + self._budget.cpu_capacity
+            + self._budget.ssd_max_shards * self._budget.ssd_shard_size
+        )
+
+    def __len__(self) -> int:
+        return len(self._gpu) + len(self._cpu) + len(self._ssd)
+
+    # ------------------------------------------------------- scoring
+
+    def _score(self, m: MemoryItem, now: float | None = None) -> float:
+        if now is None:
+            now = time.time()
+        recency = (now - m.last_used_ts) / self._TIMESCALE_SECONDS
+        return (
+            self._alpha * m.avg_reward
+            + self._beta * math.log1p(m.usage_count)
+            - self._gamma * recency
+        )
+
+    # ------------------------------------------------------- add / evict
+
+    def add(self, payload: torch.Tensor, tag: str = "", reward: float = 0.0) -> int:
+        """Insert a memory item; demote through tiers as needed. Returns id."""
+        item = MemoryItem(
+            id=self._next_id,
+            payload=payload.detach().to(self._device),
+            tag=tag,
+            total_reward=reward,
+            last_used_ts=time.time(),
+        )
+        self._next_id += 1
+        self._gpu.append(item)
+        self._evict()
+        return item.id
+
+    def _evict(self) -> None:
+        # GPU overflow -> CPU
+        while len(self._gpu) > self._budget.gpu_capacity and self._gpu:
+            s = min(self._gpu, key=self._score)
+            self._gpu.remove(s)
+            self._cpu.append(s)
+        # CPU overflow -> SSD
+        while len(self._cpu) > self._budget.cpu_capacity and self._cpu:
+            s = min(self._cpu, key=self._score)
+            self._cpu.remove(s)
+            self._ssd.append(s)
+            if len(self._ssd) > self._budget.ssd_max_shards * self._budget.ssd_shard_size:
+                # drop lowest-scored SSD item (oldest shard analog)
+                worst = min(self._ssd, key=self._score)
+                self._ssd.remove(worst)
+
+    # ------------------------------------------------------- retrieve
+
+    def retrieve(self, k: int = 8) -> list[torch.Tensor]:
+        """Return top-K payloads by score (for injection into the model)."""
+        pooled = self._gpu + self._cpu + self._ssd
+        if not pooled:
+            return []
+        ranked = sorted(pooled, key=self._score, reverse=True)[:k]
+        return [m.payload for m in ranked]
+
+    def record_use(self, item_id: int, reward: float = 0.0) -> None:
+        for m in self._gpu + self._cpu + self._ssd:
+            if m.id == item_id:
+                m.record_use(reward)
+                return
