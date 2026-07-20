@@ -2220,14 +2220,20 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 _pc = 1000.0 * _prof_cog / _n
                 _pb = 1000.0 * _prof_buf / _n
                 _po = _pt - _pe - _pm - _pc - _pb
+                # VRAM snapshot (cuda only) — folds memory into the PROF line so
+                # the A#11 Stage-6 memory/throughput measurement is one glance.
+                _vram_gb = 0.0
+                if device.type == "cuda":
+                    _vram_gb = torch.cuda.memory_allocated(device) / (1024.0 ** 3)
                 logger.info(
-                    "PROF per_step=%.1fms env=%.1f(%.0f%%) model=%.1f(%.0f%%) cog=%.1f(%.0f%%) buf=%.1f(%.0f%%) other=%.1f(%.0f%%)",
+                    "PROF per_step=%.1fms env=%.1f(%.0f%%) model=%.1f(%.0f%%) cog=%.1f(%.0f%%) buf=%.1f(%.0f%%) other=%.1f(%.0f%%) vram=%.2fGB",
                     _pt,
                     _pe, 100.0 * _pe / max(_pt, 1e-9),
                     _pm, 100.0 * _pm / max(_pt, 1e-9),
                     _pc, 100.0 * _pc / max(_pt, 1e-9),
                     _pb, 100.0 * _pb / max(_pt, 1e-9),
                     _po, 100.0 * _po / max(_pt, 1e-9),
+                    _vram_gb,
                 )
                 _prof_env = _prof_model = _prof_cog = _prof_buf = _prof_total = 0.0
                 _prof_n = 0
