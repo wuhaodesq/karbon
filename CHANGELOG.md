@@ -28,6 +28,20 @@ All notable changes to this project are documented here.
   a random policy reads ~0.25 intuitive-physics, correctly flagging the gap.
 - Added `tests/test_physics_sandbox_signals.py` (4 tests, all pass).
 
+### Cognitive-module activation timing locked / 认知模块激活时机已定
+
+- Per user decision (2026-07-20): enable the five lightweight cognitive modules
+  at their *developmentally appropriate* stage, not all at once. Batched plan
+  written into ROADMAP "Stage 6 认知模块分批激活时机":
+  - homeostatic_drives + emotion_system: open at Stage 6 start (most foundational,
+    infant-stage). Currently absent in stage6 config — to be added when Stage 6
+    is (re)launched (does not disturb the running Stage 5 process).
+  - causal_discovery / number_sense / rule_induction / core_knowledge_loss: already
+    enabled in Stage 6 (child-stage).
+  - creativity_orchestrator: defer to after Step 3 (needs mature backbone).
+  - llm_fusion: stay deferred to Step 6 end per ROADMAP:258.
+- open-gaps A#1 row updated to reflect the locked timing.
+
 ### B-class modules activated in Stage 6 / B类模块复核并激活
 
 - Re-audited open-gaps: B#5 (CrossDomainTransfer), B#6 (LLMFusionBridge), B#9

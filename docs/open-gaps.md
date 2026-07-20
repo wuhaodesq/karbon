@@ -15,7 +15,7 @@
 
 | 编号 | 内容 | 状态 | 落地 |
 |---|---|---|---|
-| A#1 | 五认知模块接 loss + 消除私有属性脆弱依赖 | **已完成(稳健化)** | P2 aux loss 已接 PPO(C#8/A#4)。本次把 ck_loss / homeostatic 三处从直接读 `env._agent`/`_objects` 私有属性改为公共 `env.read_states()`,消除脆弱硬依赖、为未来 VecPhysicsSandbox 铺路。**n_envs==1 门控保留**——2D 发育路径设计恒为单 env(多 env 仅 3D 路径支持),强行解门控无训练收益且违铁律#0,故记录原因而非盲目重构 |
+| A#1 | 五认知模块接 loss + 消除私有属性脆弱依赖 | **已完成(稳健化)+ 激活时机已定** | P2 aux loss 已接 PPO(C#8/A#4)。私有属性脆弱依赖已消除(`read_states()`)。**多 env 门控保留**(无场景)。五大模块的分批激活时机已写入 ROADMAP"Stage 6 认知模块分批激活时机"段:内驱力/情感在 Stage 6 起点补开,因果/数感/规则/核心知识已开,创造力留 Step 3 后,语言锚点延后 Step 6 末 |
 | A#2 | skill_library 推广为通用有界分层外部记忆 | **已完成** | `BoundedExternalMemory` + `MemoryItem`(payload 泛型,复用三层容量/评分/淘汰) |
 | A#3 | 程序化生成 Core Knowledge 演示轨迹 | **已完成** | `core_knowledge_demos.py` 生成三类演示; `BoundedReplayBuffer.prefill()` 注入 |
 | A#4 | P2 可微辅助 loss(客体永存/直觉物理/数感) | **已完成** | `core_knowledge_loss.py` + stage6 config 开关 `core_knowledge_loss.enabled` |

@@ -206,6 +206,32 @@ the accumulated developmental state.
 6. 支线③ 3D + LLMFusion   three_d_world + 延后激活 LLMFusion 语言锚点
 ```
 
+### Stage 6 认知模块分批激活时机(发育顺序驱动)
+
+五大轻量认知模块不等同于"一次性全开"。按婴儿→儿童发育顺序,在 **backbone
+稳定后分批接入 loss 循环**(参考 ROADMAP:268 的激活前置条件):
+
+| 批次 | 模块 | 发育对应 | 激活时机 | 当前状态 |
+|---|---|---|---|---|
+| ① | `homeostatic_drives`(内驱力) | 婴儿期动机 | **Stage 6 起即开**(最早、最基础) | ⏳ config 仍 absent,待补 |
+| ① | `emotion_system`(情感) | 婴儿→儿童情绪调制 | 同 ①,紧接内驱力 | ⏳ config 仍 absent,待补 |
+| ② | `core_knowledge_loss`(P2) | 核心物理直觉 | Stage 6(已开) | ✅ 已启用 |
+| ② | `causal_discovery`(因果干预) | 儿童期"为什么" | Stage 6(已开) | ✅ 已启用 |
+| ② | `number_sense` / `rule_induction` | 数感/规则 | Stage 6(已开) | ✅ 已启用 |
+| ③ | `creativity_orchestrator`(创造) | 儿童期发散 | Step 3 后 / backbone 稳 | ⏳ 待启 |
+| ④ | `llm_fusion`(语言锚点) | 少年期语言 | Step 6 末尾(ROADMAP:258 明确延后) | ✅ 已开但默认 skip |
+
+**决策(用户确认 2026-07-20):放在合适的时机启动,不提前硬塞。**
+- 内驱力/情感虽最基础,但属"发育早期该有"——在 Stage 6 主线起点补进 config
+  (不打扰正在跑的 Stage 5 进程,改动下次启 Stage 6 时生效)。
+- 因果/数感/规则/核心知识已在 Stage 6 激活,符合 ② 批次。
+- 创造力留到 Step 3 后(需 backbone + 符号前置更成熟)。
+- 语言锚点严格按 ROADMAP:258 延后到 Step 6 末尾。
+
+> A#1 的"多 env 门控解除"不在本表——属部署范围边角,当前架构(2D 恒单 env、
+> 3D 多 env 刻意跳过内心状态)无触发场景,保持 `n_envs==1` 门控(已消除私有属性
+> 脆弱依赖)。详见 open-gaps.md A#1 条。
+
 ### Step 3 · Core Knowledge (path 4) — 提前注入归纳偏置
 
 Injected **before** the cognitive sub-steps (MiniGrid / Y1 / 3D), because an
