@@ -5,6 +5,15 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Neuro-symbolic Y1 folded into training plan / 神经符号 Y1 纳入训练计划
+
+- Added ROADMAP "Neuro-symbolic path (Y1)" subsection under the Post-Stage-6
+  cognitive branch: external `kanren`/`clplog` engine + neural predicate
+  extraction + reinforce/clone learning back (sidesteps the unsolved gradient
+  interface X). First validation domain: physics puzzles / simple algebra.
+  Listed as the first cognitive engineering task after Stage 6, not blocked on
+  open research.
+
 ### Neuro-symbolic interface has a workaround / 神经符号接口解法
 
 - Clarified in `docs/path-to-northstar.md §1.4`: the "unsolved 30-year problem"

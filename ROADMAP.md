@@ -213,6 +213,38 @@ and defer it to the late B-plan "language emergence" phase.** Rationale:
   Metacognition / LongRangePlanner / CausalDiscovery / CreativityOrchestrator)
   are wired into the loss loop and the backbone is stable.
 
+### Neuro-symbolic path (Y1) / 神经符号落地路线
+
+Part of the Post-Stage-6 cognitive branch (path 3). Adopted solution to the
+"neuro-symbolic interface is unsolved" concern — see `docs/path-to-northstar.md §1.4`.
+
+The 30-year *unsolved* problem is the neural↔symbol **gradient interface (X)**,
+NOT the absence of real symbolic reasoning in karbon (Y). Y is a pure engineering
+gap with mature backends (Prolog / miniKanren / Z3). Adopted approach **Y1**:
+
+- **External symbol engine + neural predicate extraction + learning back.**
+  Neural net extracts predicates from slots/obs (`RuleInduction` / `CausalDiscovery`
+  already produce these); an **external engine does real unification/inference**
+  (recommend **`kanren`** — pure-Python miniKanren, easy to embed in the training
+  process; `clplog`/`swipl` for rule proving, `Z3` for numeric/constraint domains).
+  **Gradient does NOT flow through the symbol engine** — the neural part learns
+  back via REINFORCE / behavioral cloning from symbolic results. This sidesteps X
+  entirely; no need to wait for X to be solved (AlphaGeometry/AlphaProof did the
+  same).
+
+**Training-plan steps (Stage 6 后支线, first cognitive item):**
+1. Wire `kanren` (or `clplog`) as the real backend behind `RuleInduction` /
+   `CausalDiscovery` outputs — replace cosine-match in `neuro_symbolic_bridge.py`.
+2. First validation domain: **physics puzzles** (PhysicsSandbox causal/stacking
+   constraints) or **simple algebra equation solving** — narrow domain keeps the
+   symbol backend small/stable and suppresses the interface problem.
+3. Close the loop: neural predicates → external inference → results feed back to
+   train the neural extractor. Verify restricted-domain 15y-level symbolic behavior.
+4. Only after Y1 validates, consider Y2 (differentiable relaxation) / Y3 (program
+   synthesis already in `program_synthesis.py`) for broader coverage.
+
+This is a **planned engineering task**, not blocked on open research.
+
 ---
 
 ## Cross-Cutting Deliverables (every stage)
