@@ -337,34 +337,47 @@ class LLMFusionBridge(nn.Module):
                 logger.warning("LLM Fusion: HuggingFace download failed (%s)", exc)
 
     def _resolve_local_path(self) -> str | None:
-        """Resolve a local model dir for ``self._llm_model_name``.
+        """Resolve a *real local path* for ``self._llm_model_name``.
 
-        Tries ModelScope first (fast in CN), then HuggingFace Hub cache, then a
-        direct local path. Returns ``None`` if the model is not already present
-        locally — in which case we must NOT block training downloading a 7B model.
+        Only resolves when the model is *already cached* locally — it never
+        triggers a download (that would block training on a 7B pull). When a
+        cache entry exists we resolve it to the concrete local directory via
+        ``snapshot_download`` (a no-op / instant when already cached), so that
+        ``from_pretrained`` receives a local path and does not fall back to a
+        blocking HuggingFace Hub download.
         """
         self._maybe_download()
         model_name = self._llm_model_name
         # Already a local path?
         if os.path.isdir(model_name) or os.path.isfile(model_name):
             return model_name
-        # HuggingFace local cache?
-        hf_home = os.environ.get("HF_HOME") or os.path.join(
-            os.path.expanduser("~"), ".cache", "huggingface"
-        )
-        hf_dir = os.path.join(hf_home, "hub", "models--" + model_name.replace("/", "--"))
-        if os.path.isdir(hf_dir):
-            return model_name
-        # ModelScope local cache?
+        # ModelScope cache directory present?
         if LLM_FUSION_SOURCE == "modelscope":
             ms_home = os.environ.get("MODELSCOPE_CACHE") or os.path.join(
                 os.path.expanduser("~"), ".cache", "modelscope"
             )
             ms_dir = os.path.join(ms_home, "hub", model_name.replace("/", "--"))
             if os.path.isdir(ms_dir):
-                # snapshot_download dir keeps the resolved path under ./blobs; use
-                # the model id and let from_pretrained resolve via modelscope.
-                return model_name
+                try:
+                    from modelscope import snapshot_download
+                    local_dir = snapshot_download(model_name, local_dir=None)
+                    if local_dir and os.path.isdir(local_dir):
+                        return local_dir
+                except Exception:
+                    pass
+        # HuggingFace local cache directory present?
+        hf_home = os.environ.get("HF_HOME") or os.path.join(
+            os.path.expanduser("~"), ".cache", "huggingface"
+        )
+        hf_dir = os.path.join(hf_home, "hub", "models--" + model_name.replace("/", "--"))
+        if os.path.isdir(hf_dir):
+            try:
+                from huggingface_hub import snapshot_download as hf_snapshot
+                local_dir = hf_snapshot(model_name, local_dir=None)
+                if local_dir and os.path.isdir(local_dir):
+                    return local_dir
+            except Exception:
+                pass
         return None
 
     def _try_load_llm(self) -> None:
