@@ -458,6 +458,46 @@ class BoundedReplayBuffer:
         # Falls to cold; ColdShardTier handles its own capacity trimming.
         self.cold.add(demoted_warm)
 
+    # ----------------------------------------------------- demo prefill (P1)
+
+    def prefill(
+        self,
+        transitions: list[Transition],
+        demo_priority: float = 4.0,
+    ) -> int:
+        """Seed core-knowledge demonstration trajectories into the hot tier.
+
+        Used by the Core-Knowledge P1 injection recipe (ROADMAP Step 3):
+        procedurally-generated trajectories that *embody* a prior (object
+        permanence, intuitive physics, number sense, ...) are inserted with a
+        raised PER priority so the agent samples them more often while learning
+        the inductive bias from experience. Bounded: only fills the pre-allocated
+        hot tier; overflow demotes normally through warm → cold.
+
+        Args:
+            transitions: demo transitions to seed.
+            demo_priority: PER priority for seeded transitions (default 4.0,
+                higher than the 1.0 default so demos are sampled more often).
+
+        Returns:
+            number of transitions actually inserted into the hot tier.
+        """
+        inserted = 0
+        for tr in transitions:
+            base_meta = getattr(tr, "meta", None) or {}
+            tr = Transition(
+                obs=tr.obs,
+                action=tr.action,
+                reward=tr.reward,
+                next_obs=tr.next_obs,
+                done=tr.done,
+                priority=demo_priority,
+                meta={**base_meta, "demo": True},
+            )
+            self.hot.add(tr)
+            inserted += 1
+        return inserted
+
     # --------------------------------------------------------- sampling
 
     def sample(self, batch_size: int) -> dict[str, torch.Tensor]:
