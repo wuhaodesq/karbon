@@ -5,6 +5,21 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Path-to-North-Star analysis / 通往北极星路径分析
+
+- Added `docs/path-to-northstar.md`: maps the five common AI routes to karbon's
+  actual code state and derives a combined plan (World-Model + Neuro-Symbolic +
+  Core-Knowledge + frozen-LLM-anchor) that does **not** violate any PLAN Non-Goal.
+- **Code-fact correction**: Dreamer-style imagination training
+  (`src/training/imagination_trainer.py`, called at `train.py:2630` with gradient
+  flowing back into the main model) is **already wired in** — it is merely gated
+  by `imagination.enabled` in the yaml, currently off in Stage 5. So path-2
+  completion is near-zero-effort (flip the switch), not a rewrite. Corrects the
+  prior assumption that `imagine_step` was "unused".
+- Also documents: Axiom-1 conflict with 500M–1B naive scaling; MuJoCo swap would
+  break the developmental chain; neuro-symbolic bridge is cosine-match not real
+  unification (accurate prior critique).
+
 ### LLMFusion timing decision / LLM 融合激活时机
 
 - **Corrected a misstatement**: `src/models/llm_fusion.py` is a **local offline
