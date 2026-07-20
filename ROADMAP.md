@@ -162,6 +162,20 @@ Both pieces are part of the Stage 6 training plan, not optional extras:
   D = relax Axiom-1 scale limit (needs explicit user approval to amend the
   iron rules). Not used unless A+B is empirically insufficient.
 
+**Ordered Stage 6 steps (main-line, all required before exit)**:
+1. **Perpetual machinery** — Online EWC + generative-replay VAE + sleep
+   consolidation loop + health daemon (the 30-day-uninterrupted bar).
+2. **B · imagination training** — `imagination.enabled` already on; verify
+   imagined-rollout loss flows back to the main model.
+3. **A · bounded hierarchical memory** — promote `skill_library.py` toward a
+   general retrieval-injected cognitive memory (GPU/CPU/SSD tiers).
+4. **B-plan · 5 lightweight cognitive modules into the loss loop** (path 3 seed):
+   `HomeostaticDrives` / `Metacognition` / `LongRangePlanner` / `CausalDiscovery`
+   / `CreativityOrchestrator` — lift the `n_envs==1` gate, wire outputs into the
+   PPO loss (not just logs). `CausalDiscovery` + `RuleInduction` **emit predicates**
+   here; those predicates are the direct input to the Post-Stage-6 Y1 symbol
+   backend (no second loss-wiring needed).
+
 **Exit criterion (the "AGI-esque" bar)**:
 - **30 consecutive days** of uninterrupted training with no manual restarts.
 - Agent learns **≥10 distinct tasks** in sequence with ≤10% drop on the earliest tasks.
@@ -171,28 +185,50 @@ Both pieces are part of the Stage 6 training plan, not optional extras:
 
 ---
 
-## Post-Stage-6 Cognitive Branch (MiniGrid → 3D → language)
+## Post-Stage-6 Cognitive Branch (ordered sub-steps 5–9)
 
-After the developmental backbone (M1–M5) is closed on PhysicsSandbox, a
-**separate branch** validates the *upper* cognitive abilities the North Star
-(8–15-year-old intelligence) requires but PhysicsSandbox alone cannot:
-
-- **MiniGrid** (first step): instruction-following + sparse-reward multi-step
-  planning (DoorKey etc.). Spins off from the mature Stage-6 ckpt as its own
-  training line. NOTE: MiniGrid obs is a discrete grid encoding, **incompatible**
-  with the 64×64 vision encoder — the branch needs its own grid/observation
-  adapter (or `use_vision_encoder` reconfigured); it does **not** reuse the
-  Stage-5 CNN encoder weights. The hybrid backbone + skill library still transfer.
-- **3D world + real language** (Crafter / `three_d_world` + `social_teacher`):
-  the next rung toward juvenile-level grounded language and longer-horizon
-  planning. Already scaffolded in `src/envs/`; paused.
+After the developmental backbone (M1–M5) closes on PhysicsSandbox and Stage 6
+exits, a **separate branch** validates the *upper* cognitive abilities the North
+Star (8–15-year-old intelligence) requires but PhysicsSandbox alone cannot.
 
 This branch is **complementary, not on the critical path**: the PhysicsSandbox
 main line is the developmental foundation; the cognitive branch is the upper
 room built on top of it. Starting the branch before Stage 6 closes would waste
 the accumulated developmental state.
 
-### LLMFusion timing / LLM 融合激活时机
+**Global ordered roadmap (dependency-driven):**
+```
+1. Stage 5     发育主链 M1–M5 收尾            [进行中]
+2. Stage 6 主線 ①永续机制 ②B想象 ③A分层记忆 ④B方案5模块接loss(产出谓词)
+3. 路径4 Core Knowledge  注入 Spelke 五模块作归纳偏置,从 Stage6 ckpt 重启一轮
+4. 支线① Y1 神经符号     在 Stage6 已产出的谓词上直接接 kanren 后端(复用,不重复接loss)
+5. 支线② MiniGrid        指令遵循 + 稀疏规划(自建网格适配器)
+6. 支线③ 3D + LLMFusion   three_d_world + 延后激活 LLMFusion 语言锚点
+```
+
+### Step 3 · Core Knowledge (path 4) — 提前注入归纳偏置
+
+Injected **before** the cognitive sub-steps (MiniGrid / Y1 / 3D), because an
+inductive bias should shape the *next* round of development, not be bolted on
+at the end. Spins off from the mature Stage-6 ckpt and runs one more
+developmental round with the priors active.
+
+- Add **Spelke's five core-knowledge modules** as inductive bias: object
+  permanence, intuitive physics, intuitive psychology (agentness), number sense,
+  causal cognition. Replace the current "fully blank" init (`DEV_PLAN §10.3 L`).
+- Implementation sketch: bootstrap the Stage-6 ckpt, freeze the developmental
+  backbone, attach lightweight core-knowledge heads that inject prior gradients
+  during the next training round; or pre-seed the replay/skill memory with
+  core-knowledge demonstrations.
+- Why before Y1/MiniGrid: a biased agent learns the upper cognitive tasks with
+  far fewer samples (Lake et al. 2015 single-shot evidence), and the symbol /
+  instruction modules have a more human-like prior to build on.
+- Status: **research-grade, no mature engineering recipe yet** — the first
+  open item to design once Stage 6 exits. Does NOT block sub-steps 4–6.
+
+---
+
+### Step 2 (repeated context) · LLMFusion timing / LLM 融合激活时机
 
 `src/models/llm_fusion.py` is a **local, offline, frozen Qwen-7B** (4-bit,
 ~5 GB, zero network dependency; gracefully degrades to template mode if the
@@ -200,7 +236,7 @@ weights are absent). It is a *self-contained* capability, **not** an external
 API — confirmed by reading the code.
 
 Decision: **keep LLMFusion deactivated during Stage 5–6 main-line training,
-and defer it to the late B-plan "language emergence" phase.** Rationale:
+and defer it to the late B-plan "language emergence" phase (sub-step 6).** Rationale:
 - Current bottleneck is *sensorimotor* development, not language; earlier/higher
   LLM involvement (smaller `call_interval_steps`, larger model) only slows
   training (Qwen forward is the speed bottleneck) and destabilizes the
@@ -213,10 +249,12 @@ and defer it to the late B-plan "language emergence" phase.** Rationale:
   Metacognition / LongRangePlanner / CausalDiscovery / CreativityOrchestrator)
   are wired into the loss loop and the backbone is stable.
 
-### Neuro-symbolic path (Y1) / 神经符号落地路线
+### Step 4 · Neuro-symbolic path (Y1) / 神经符号落地路线
 
-Part of the Post-Stage-6 cognitive branch (path 3). Adopted solution to the
-"neuro-symbolic interface is unsolved" concern — see `docs/path-to-northstar.md §1.4`.
+Part of the Post-Stage-6 cognitive branch (path 3), **immediately after Stage 6
+step 4** which already emits predicates from `CausalDiscovery` / `RuleInduction`.
+Adopted solution to the "neuro-symbolic interface is unsolved" concern — see
+`docs/path-to-northstar.md §1.4`.
 
 The 30-year *unsolved* problem is the neural↔symbol **gradient interface (X)**,
 NOT the absence of real symbolic reasoning in karbon (Y). Y is a pure engineering
@@ -229,6 +267,36 @@ gap with mature backends (Prolog / miniKanren / Z3). Adopted approach **Y1**:
   process; `clplog`/`swipl` for rule proving, `Z3` for numeric/constraint domains).
   **Gradient does NOT flow through the symbol engine** — the neural part learns
   back via REINFORCE / behavioral cloning from symbolic results. This sidesteps X
+  entirely; no need to wait for X to be solved (AlphaGeometry/AlphaProof did the
+  same).
+
+**Training-plan steps (sub-step 4, reuses Stage 6 predicates — no 2nd loss-wiring):**
+1. Wire `kanren` (or `clplog`) as the real backend behind `RuleInduction` /
+   `CausalDiscovery` outputs — replace cosine-match in `neuro_symbolic_bridge.py`.
+2. First validation domain: **physics puzzles** (PhysicsSandbox causal/stacking
+   constraints) or **simple algebra equation solving** — narrow domain keeps the
+   symbol backend small/stable and suppresses the interface problem.
+3. Close the loop: neural predicates → external inference → results feed back to
+   train the neural extractor. Verify restricted-domain 15y-level symbolic behavior.
+4. Only after Y1 validates, consider Y2 (differentiable relaxation) / Y3 (program
+   synthesis already in `program_synthesis.py`) for broader coverage.
+
+This is a **planned engineering task**, not blocked on open research.
+
+### Step 5 · MiniGrid (instruction-following + sparse planning)
+
+Spins off from the mature Stage-6 ckpt as its own training line (after Y1 so
+planning/symbolic support exists). NOTE: MiniGrid obs is a discrete grid encoding,
+**incompatible** with the 64×64 vision encoder — the branch needs its own
+grid/observation adapter (or `use_vision_encoder` reconfigured); it does **not**
+reuse the Stage-5 CNN encoder weights. The hybrid backbone + skill library still
+transfer.
+
+### Step 6 · 3D world + real language (Crafter / `three_d_world` + `social_teacher`)
+
+The top rung toward juvenile-level grounded language and longer-horizon planning.
+Already scaffolded in `src/envs/`; paused. This is where **LLMFusion** (deferred
+per its timing section) activates as the language anchor.
   entirely; no need to wait for X to be solved (AlphaGeometry/AlphaProof did the
   same).
 

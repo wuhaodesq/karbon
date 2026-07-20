@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Training-plan order optimized / 训练计划顺序优化
+
+- Reordered ROADMAP into a dependency-driven global roadmap:
+  1) Stage 5 → 2) Stage 6 main (永续 + B想象 + A分层记忆 + **B方案5模块接loss并产出谓词**)
+  → 3) Core Knowledge 提前注入(Stage6后、支线前)→ 4) Y1 神经符号(复用Stage6谓词,不重复接loss)
+  → 5) MiniGrid → 6) 3D + LLMFusion。
+- Fixes prior issues: B-plan 5 modules now a first-class Stage 6 step (not buried
+  in LLMFusion preconditions); Core Knowledge moved from "last" to "before
+  cognitive sub-steps"; Y1 grafted directly onto Stage 6's predicate output to
+  avoid duplicate loss-wiring.
+
 ### Neuro-symbolic Y1 folded into training plan / 神经符号 Y1 纳入训练计划
 
 - Added ROADMAP "Neuro-symbolic path (Y1)" subsection under the Post-Stage-6
