@@ -25,6 +25,8 @@ Phase 9 LLM 融合：连接冻结 Qwen-7B 到 devagi 身体。
 from __future__ import annotations
 
 import logging
+import os
+import threading
 from collections import deque
 from typing import Any
 
@@ -33,6 +35,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
+
+# Model download source: "modelscope" (default, fast in CN/seetacloud) or
+# "huggingface". Set LLM_FUSION_SOURCE env to override.
+LLM_FUSION_SOURCE = os.environ.get("LLM_FUSION_SOURCE", "modelscope").lower()
+# Hard cap on model load time (seconds) so training never blocks on a 7B pull.
+LLM_FUSION_LOAD_TIMEOUT = float(os.environ.get("LLM_FUSION_LOAD_TIMEOUT", "120"))
 
 # Qwen dimension: Qwen2.5-7B-Instruct has hidden_size=3584
 QWEN_HIDDEN = 3584
@@ -304,10 +312,83 @@ class LLMFusionBridge(nn.Module):
         # Try to load Qwen
         self._try_load_llm()
 
+    def _maybe_download(self) -> None:
+        """Optionally pull the model into the local cache (blocking).
+
+        Only runs when ``LLM_FUSION_DOWNLOAD=1`` is set, so the default training
+        path never blocks on a 7B download. Uses ModelScope when configured.
+        """
+        if os.environ.get("LLM_FUSION_DOWNLOAD") != "1":
+            return
+        model_name = self._llm_model_name
+        if LLM_FUSION_SOURCE == "modelscope":
+            try:
+                from modelscope import snapshot_download
+                snapshot_download(model_name, local_dir=None)
+                logger.info("LLM Fusion: downloaded '%s' via ModelScope", model_name)
+            except Exception as exc:
+                logger.warning("LLM Fusion: ModelScope download failed (%s)", exc)
+        else:
+            try:
+                from huggingface_hub import snapshot_download
+                snapshot_download(model_name)
+                logger.info("LLM Fusion: downloaded '%s' via HuggingFace", model_name)
+            except Exception as exc:
+                logger.warning("LLM Fusion: HuggingFace download failed (%s)", exc)
+
+    def _resolve_local_path(self) -> str | None:
+        """Resolve a local model dir for ``self._llm_model_name``.
+
+        Tries ModelScope first (fast in CN), then HuggingFace Hub cache, then a
+        direct local path. Returns ``None`` if the model is not already present
+        locally — in which case we must NOT block training downloading a 7B model.
+        """
+        self._maybe_download()
+        model_name = self._llm_model_name
+        # Already a local path?
+        if os.path.isdir(model_name) or os.path.isfile(model_name):
+            return model_name
+        # HuggingFace local cache?
+        hf_home = os.environ.get("HF_HOME") or os.path.join(
+            os.path.expanduser("~"), ".cache", "huggingface"
+        )
+        hf_dir = os.path.join(hf_home, "hub", "models--" + model_name.replace("/", "--"))
+        if os.path.isdir(hf_dir):
+            return model_name
+        # ModelScope local cache?
+        if LLM_FUSION_SOURCE == "modelscope":
+            ms_home = os.environ.get("MODELSCOPE_CACHE") or os.path.join(
+                os.path.expanduser("~"), ".cache", "modelscope"
+            )
+            ms_dir = os.path.join(ms_home, "hub", model_name.replace("/", "--"))
+            if os.path.isdir(ms_dir):
+                # snapshot_download dir keeps the resolved path under ./blobs; use
+                # the model id and let from_pretrained resolve via modelscope.
+                return model_name
+        return None
+
     def _try_load_llm(self) -> None:
-        """Load Qwen-7B in 4-bit. Falls back gracefully if unavailable."""
-        try:
-            from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+        """Load Qwen-7B in 4-bit. Never blocks training: if the model is not
+        already cached locally we skip to template mode instead of downloading.
+        """
+        local = self._resolve_local_path()
+        if local is None:
+            logger.warning(
+                "LLM Fusion: model '%s' not in local cache (source=%s); "
+                "skipping download to avoid blocking training. Using template mode.",
+                self._llm_model_name, LLM_FUSION_SOURCE,
+            )
+            self._llm = None
+            self._tokenizer = None
+            self._llm_available = False
+            return
+
+        def _load() -> None:
+            from transformers import (
+                AutoModelForCausalLM,
+                AutoTokenizer,
+                BitsAndBytesConfig,
+            )
 
             bnb_config = BitsAndBytesConfig(
                 load_in_4bit=True,
@@ -315,18 +396,33 @@ class LLMFusionBridge(nn.Module):
                 bnb_4bit_use_double_quant=True,
             )
             self._tokenizer = AutoTokenizer.from_pretrained(
-                self._llm_model_name, trust_remote_code=True,
+                local, trust_remote_code=True,
             )
             self._llm = AutoModelForCausalLM.from_pretrained(
-                self._llm_model_name,
+                local,
                 quantization_config=bnb_config,
                 device_map="auto",
                 trust_remote_code=True,
             )
             for p in self._llm.parameters():
                 p.requires_grad_(False)
+
+        try:
+            worker = threading.Thread(target=_load, daemon=True)
+            worker.start()
+            worker.join(timeout=LLM_FUSION_LOAD_TIMEOUT)
+            if worker.is_alive():
+                logger.warning(
+                    "LLM Fusion: load exceeded %.0fs timeout; using template mode",
+                    LLM_FUSION_LOAD_TIMEOUT,
+                )
+                self._llm = None
+                self._tokenizer = None
+                self._llm_available = False
+                return
             self._llm_available = True
-            logger.info("LLM Fusion: Qwen-7B loaded (4-bit, frozen)")
+            logger.info("LLM Fusion: Qwen-7B loaded (4-bit, frozen, source=%s)",
+                        LLM_FUSION_SOURCE)
         except Exception as exc:
             logger.warning("LLM Fusion: Qwen load failed (%s), using template mode", exc)
             self._llm = None

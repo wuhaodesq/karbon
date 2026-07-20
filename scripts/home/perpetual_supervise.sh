@@ -28,8 +28,10 @@ if [[ $# -lt 1 ]]; then
 fi
 
 STAGE="$1"; shift
+# Only treat the next arg as preset if it is NOT a flag (e.g. --resume) and
+# matches a known preset name. Otherwise keep it in "$@" for train.py.
 PRESET="${1:-home_64g}"
-if [[ $# -gt 0 && "$1" == "$PRESET" ]]; then shift; fi
+if [[ $# -gt 0 && "$1" != -* && "$1" == "${PRESET}" ]]; then shift; fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"

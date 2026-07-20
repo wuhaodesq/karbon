@@ -54,6 +54,13 @@ if [[ -z "${LATEST}" ]]; then
     echo "$(date -u +%FT%TZ) ERROR: no stage5 ckpt found in ${CKPT_DIR}; aborting handoff."
     exit 1
 fi
+# Sanitize: strip any leading/trailing whitespace (incl. CR/LF from `ls | head`)
+LATEST="$(printf '%s' "${LATEST}" | tr -d '[:space:]')"
+if [[ -z "${LATEST}" || ! -f "${LATEST}" ]]; then
+    echo "$(date -u +%FT%TZ) ERROR: sanitized ckpt path invalid: '${LATEST}'; aborting."
+    rm -f "${MARKER}"
+    exit 1
+fi
 echo "$(date -u +%FT%TZ) latest ckpt: ${LATEST}"
 
 # Mark before launching so a crash-restart of THIS script won't relaunch stage6
