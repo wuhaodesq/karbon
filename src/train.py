@@ -2367,7 +2367,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
 
                 # --- Compositional generalization test ---
                 if (compositional_test is not None and concept_graph is not None
-                        and state.step % 50000 == 0):
+and state.step % 50000 < rollout_capacity):
                     try:
                         result = compositional_test.test(concept_graph)
                         if result["passed"]:
@@ -2565,7 +2565,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         adv_norm = _normalize_advantages(advantages)
 
         # --- DIAG (plateau investigation): log advantage/reward variance ---
-        if state.step % 5000 == 0:
+        if state.step % 5000 < rollout_capacity:
             with torch.no_grad():
                 _rew = buffer.rewards[:T].float()
                 _adv_std = float(advantages.std().item())
@@ -2627,7 +2627,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         if (
             replay is not None
             and len(replay) >= replay_min_size
-            and state.step % replay_sample_every == 0
+            and state.step % replay_sample_every < rollout_capacity
         ):
             try:
                 sample, indices, weights = replay.sample_prioritized(
@@ -2664,7 +2664,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             and replay is not None
             and len(replay) >= replay_min_size
             and wm_update_every > 0
-            and state.step % wm_update_every == 0
+            and state.step % wm_update_every < rollout_capacity
         ):
             try:
                 sample, _, _ = replay.sample_prioritized(
@@ -2708,7 +2708,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             and replay is not None
             and len(replay) >= replay_min_size
             and imagination_update_every > 0
-            and state.step % imagination_update_every == 0
+            and state.step % imagination_update_every < rollout_capacity
         ):
             try:
                 sample, _, _ = replay.sample_prioritized(
@@ -2745,7 +2745,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             and replay is not None
             and len(replay) >= replay_min_size
             and gr_update_every > 0
-            and state.step % gr_update_every == 0
+            and state.step % gr_update_every < rollout_capacity
         ):
             try:
                 sample = replay.sample(gr_batch_size)
@@ -2884,7 +2884,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 logger.debug("[visual] analyze skipped", exc_info=True)
 
         # --- Neuro-Symbolic Bridge: periodic connection ---
-        if state.step > 0 and state.step % 5000 == 0:
+        if state.step > 0 and state.step % 5000 < rollout_capacity:
             if causal2prolog is not None and causal_disc is not None and micro_math is not None:
                 try:
                     n = causal2prolog.feed_to_math(micro_math, causal_disc)
@@ -2932,7 +2932,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
 
         # --- Identity Narrative: periodic self-reflection ---
         if (identity_narrative is not None and memory_manager is not None
-                and state.step > 0 and state.step % 50000 == 0):
+                and state.step > 0 and state.step % 50000 < rollout_capacity):
             try:
                 events = memory_manager.autobiographical._events
                 if len(events) >= 20:
@@ -2944,7 +2944,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 pass
 
         # --- J-space monitoring: track reasoning subspace emergence ---
-        if state.step > 0 and state.step % 10000 == 0:
+        if state.step > 0 and state.step % 10000 < rollout_capacity:
             try:
                 with torch.no_grad():
                     sample_obs = _obs_to_tensor(obs, device)
@@ -2967,7 +2967,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
 
         # --- Long-range planning: periodic replan ---
         if (long_range_planner is not None and wm is not None
-                and state.step % max(1, planner_cfg.get("plan_every_steps", 500)) == 0):
+                and state.step % max(1, planner_cfg.get("plan_every_steps", 500)) < rollout_capacity):
             try:
                 obs_t = _obs_to_tensor(obs, device)
                 wm_obs = obs_t.float().reshape(1, -1) / 255.0
@@ -3010,7 +3010,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             except Exception:
                 pass  # never crash training for symbolic reasoning
 
-        if state.step % log_every == 0:
+        if (state.step // log_every) > (max(0, state.step - rollout_capacity) // log_every):
             summary = env.summary()
             mem = watcher.snapshot_summary()
             extras: list[str] = []
@@ -3116,7 +3116,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 curr_active_task = new_task
             last_curr_switch_step = state.step
 
-        if state.step % ckpt_every == 0:
+        if (state.step // ckpt_every) > (max(0, state.step - rollout_capacity) // ckpt_every):
             extra: dict[str, Any] = {"preset": config.get("preset"), "run_id": run_id}
             if rnd is not None:
                 extra["rnd_state"] = rnd.rnd_state_dict()
