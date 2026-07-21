@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Performance: fix 11x `% X < rollout_capacity` → `== 0` + double rollout window
+- **11 处 `state.step % X < rollout_capacity` 全改为 `state.step % X == 0`**
+  (ckpt 已于上版修复,此次修复 wm / imagination / GR / replay / planner /
+  diagnostic / logging / compositional / identity / j-space)。原条件因
+  `rollout_capacity=512` 对很多 `X < 512` 恒成立,导致这些模块几乎每步触发,
+  产生 5-8× 冗余开销(非质量相关,纯 "多算了")。
+- **`rollout_capacity` 512 → 2048**: 每批攒 4 倍经验再 PPO 更新,GPU 一次吃
+  更多 → 利用率上升。
+- 综合预期 **~2.5–3× 墙钟加速**(ETA 10 天 → 3–4 天),训练质量无损(各模块
+  语义本就是 "每 X 步触发一次",非 "脉冲触发")。
+
 ### C#8 eval harness + Stage 6 launch fixes / 评测接入与启动修复
 - `scripts/eval/run_developmental_eval.py`: 加载 ckpt → 在 PhysicsSandbox 跑
   rollout 收集发育信号 → `DevelopmentalEvaluator` 输出 `estimated_age`。用于
