@@ -6,6 +6,11 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### 编码纪律 / Coding discipline (2026-07-22)
+- **跨模块参数边界必须交叉校验**: NumberSense 默认 `max_count=10`,
+  curriculum 任务 `crowded-heavy-weak` 有 18 个物体——两者从未对齐。
+  因为 NumberSense 训练是死代码(未修的 Bug 2),冲突未暴露。修复后
+  NLL loss 的 `t >= 0 && t < n_classes` CUDA assert 立刻炸。教训:
+  **添加/修改模块时,回查它依赖和被依赖的上下游参数范围。**
 - **写代码前先读接口,不假设方法存在**: `IndependentEvaluator._measure_drive`
   假设 `HomeostaticDrives.update()` 和 `.all_satisfied()` 存在,实际接口是
   `tick(novelty, success, ...)` 和 `is_homeostatic()`。修改为按真实接口调用,
