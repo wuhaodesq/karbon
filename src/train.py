@@ -2578,8 +2578,10 @@ and state.step % 50000 < rollout_capacity):
                     current_ep = summary.get("episodes", 0)
                     if current_ep - num_sense_last_train >= num_sense_train_every:
                         slot_batch = model.encoder(obs_t)
-                        true_count = torch.tensor([len(env._objects) if hasattr(env, '_objects') else 3],
-                                                  dtype=torch.long, device=device)
+                        true_count = torch.tensor(
+                            [min(len(env._objects), number_sense._max_count)
+                             if hasattr(env, '_objects') else 3],
+                            dtype=torch.long, device=device)
                         n_loss = number_sense.loss(slot_batch, true_count)
                         num_sense_optimizer.zero_grad()
                         n_loss.backward()
