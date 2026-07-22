@@ -810,7 +810,9 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     logger.info("Model params: %d (trainable: %d)", total_params, trainable_params)
 
     # --- Bounded rollout buffer (declared capacity)
-    rollout_capacity = 128 if smoke_only else 2048
+    # Smoke capacity must be >= max_episode_steps (default 200) to avoid
+    # IndexError when a single episode fills the buffer.
+    rollout_capacity = 256 if smoke_only else 2048
     buffer = RolloutBuffer(rollout_capacity, obs_shape, device=device, n_envs=n_envs)
 
     # Growth LP signal refresh interval (steps). plateau_lp's windowed rmax spans
