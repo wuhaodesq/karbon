@@ -72,6 +72,7 @@ from src.models import HybridBackbone, RSSM, RSSMConfig
 from src.models.vision_encoder import CNNEncoder, VisionEncoder, build_encoder
 from src.sensory import AudioEncoder, AudioEncoderConfig
 from src.training import ImaginationConfig, ImaginationTrainer
+from src.eval import IndependentEvaluator
 from src.models.number_sense import NumberSense
 from src.models.rule_induction import RuleInductionEngine
 from src.models.causal_discovery import CausalDiscovery
@@ -1645,6 +1646,12 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                      imagination_cfg.get("imagination_horizon", 8),
                      imagination_cfg.get("imagination_batch", 32))
 
+    # --- Independent Evaluator (3-axis scoring: curiosity / drive / task) ---
+    # Evaluates the agent with zero intrinsic bonus and reports a weighted
+    # total score.  When task performance stagnates, the training loop
+    # applies adaptive pressure (reduce intrinsic coefficient).
+    independent_evaluator = IndependentEvaluator(config, device)
+
     # --- Phase 1+: Intention Achievement Curiosity ---
     intention_cfg = config.get("intention")
     intention_curiosity: IntentionCuriosity | None = None
@@ -3142,6 +3149,43 @@ and state.step % 50000 < rollout_capacity):
                 obs = env.reset()
                 curr_active_task = new_task
             last_curr_switch_step = state.step
+
+        # --- Independent evaluator: periodic 3D scoring ---
+        if independent_evaluator.should_evaluate(state.step):
+            try:
+                report = independent_evaluator.evaluate(
+                    model, homeostatic_drives, state.step,
+                )
+                w = independent_evaluator.weights
+                logger.info(
+                    "[eval] step=%d | curiosity=%.3f drive=%.3f task=%.3f "
+                    "(vs_random=%.2f) | total=%.3f (w=%s) %s",
+                    state.step, report.curiosity, report.drive, report.task,
+                    report.task_vs_random, report.total, w,
+                    f"ADVISORY={report.advisory}" if report.advisory else "",
+                )
+                independent_evaluator.save_report(
+                    str(Path(data_dir()) / "eval" / f"stage{stage}"),
+                )
+                # Adaptive feedback: if task score chronically low,
+                # halve intrinsic reward coef to increase task pressure.
+                if (
+                    report.advisory == "increase_task_pressure"
+                    and intrinsic_cfg is not None
+                ):
+                    old = float(intrinsic_cfg.get("reward_coef", 0.1))
+                    new = max(0.01, old * 0.5)
+                    intrinsic_cfg["reward_coef"] = new
+                    intrinsic_coef = new
+                    logger.warning(
+                        "[eval] adaptive: intrinsic reward_coef %.2f -> %.2f "
+                        "(task %.3f<floor %.2f, %d consecutive)",
+                        old, new, report.task,
+                        independent_evaluator._cfg.task_floor,
+                        independent_evaluator._cfg.task_pressure_threshold,
+                    )
+            except Exception:
+                logger.exception("[eval] independent evaluator failed")
 
         if (state.step // ckpt_every) > (max(0, state.step - rollout_capacity) // ckpt_every):
             extra: dict[str, Any] = {"preset": config.get("preset"), "run_id": run_id}
