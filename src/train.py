@@ -634,6 +634,7 @@ def _ckpt_layer_count(path) -> int:
                 _parts = _k.split(".")
                 if len(_parts) > 2 and _parts[2].isdigit():
                     _n = max(_n, int(_parts[2]) + 1)
+        del _ck
         return _n
     except Exception:  # noqa: BLE001
         return 0
@@ -1365,6 +1366,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             obs_dim=64 * 64 * 3,
             lang_dim=int(xmodal_cfg.get("lang_dim", 3584)),
         ).to(device)
+        xmodal_optimizer = torch.optim.Adam(xmodal_manager.parameters(), lr=1e-4)
         logger.info("CrossModalManager enabled")
 
     # --- Creativity orchestrator
@@ -2909,10 +2911,9 @@ and state.step % 50000 < rollout_capacity):
                 # Simple reconciliation loss: touch→lang→touch should return original
                 recon = xmodal_manager.touch_bridge.lang_to_touch(lang_emb)
                 t_loss = F.mse_loss(recon.squeeze(0), prop)
-                opt_xmodal = torch.optim.Adam(xmodal_manager.parameters(), lr=1e-4)
-                opt_xmodal.zero_grad()
+                xmodal_optimizer.zero_grad()
                 t_loss.backward()
-                opt_xmodal.step()
+                xmodal_optimizer.step()
                 xmodal_last_train = state.step
             except Exception:
                 pass
@@ -3345,7 +3346,7 @@ and state.step % 50000 < rollout_capacity):
     try:
         import shutil
         ckpt_path = stage_ckpt_path(stage, state.step)
-        backup_path = Path(f"/root/backup_stage{stage}_{state.step}.pt")
+        backup_path = ckpt_dir() / f"backup_stage{stage}_{state.step}.pt"
         shutil.copy2(ckpt_path, backup_path)
         logger.info("Checkpoint backed up: %s", backup_path)
     except Exception as exc:
