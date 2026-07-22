@@ -3153,7 +3153,7 @@ and state.step % 50000 < rollout_capacity):
         # --- Independent evaluator: periodic 3D scoring (observation only) ---
         # Scores curiosity / drive / task independently.
         # Does NOT modify training — milestone-passing triggers annealing later.
-        if independent_evaluator.should_evaluate(state.step):
+        if independent_evaluator.should_evaluate(state.step, rollout_capacity):
             try:
                 report = independent_evaluator.evaluate(
                     model, homeostatic_drives, state.step,

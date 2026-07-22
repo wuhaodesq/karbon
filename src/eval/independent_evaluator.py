@@ -82,8 +82,17 @@ class IndependentEvaluator:
 
     # ------------------------------------------------------------------ public
 
-    def should_evaluate(self, step: int) -> bool:
-        return step > 0 and step % self._cfg.eval_every_steps == 0
+    def should_evaluate(self, step: int, batch_size: int) -> bool:
+        """Return True when *step* crosses the next eval boundary.
+
+        Uses boundary-crossing logic because the training loop advances
+        ``step`` in jumps of *batch_size* (e.g. 2048), not 1.
+        """
+        if step <= 0:
+            return False
+        prev = max(0, step - batch_size)
+        every = self._cfg.eval_every_steps
+        return (step // every) > (prev // every)
 
     @property
     def weights(self) -> list[float]:

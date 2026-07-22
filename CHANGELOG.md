@@ -5,6 +5,24 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### 发育评估体系设计决策 (2026-07-22)
+- **里程碑触发,非步数触发**: 内驱力/好奇心系数的衰减不由 Stage 进度百分比决定,
+  而是由 agent 实际跨越的发育里程碑触发。当前 agent 六项里程碑(客体永存 1y /
+  直觉物理 2.5y / 数感 3.5y / 手段-目的 1.5y / 心智理论 4y / 系统推理 9y)
+  **全部未跨过**(estimated_age=0.0y),因此保持**婴儿期全额内驱力**,不做任何
+  衰减。里程碑达标(评分稳定 >0.7)→触发对应的系数衰减。
+- **独立评测(观察不干预)**: `IndependentEvaluator` 以好奇/内驱/任务三维度
+  评分,权重 2:1:2(可配置),完全关掉内驱力加分只看纯环境信号。评测按参考值跑,
+  只输出结果不修改训练参数。评测结果存 `eval_scores.jsonl` 供趋势分析。
+- **发育阶段映射(能力驱动,非步数驱动)**:
+  - ~3–4M 步 + 客体永存稳 → ≈1 岁幼儿
+  - ~4–6M 步 + 直觉物理稳 → ≈2.5 岁
+  - ~6–8M 步 + 数感稳 → ≈3.5 岁
+  - 8M+ + 进入 3D 环境 → 少年期
+- **6 轮发育评测结果总结**: Stage 5(2M 步)和 Stage 6(350k/500k/1.2M/1.35M/1.5M)
+  共 6 次,所有分数在 0.0–0.5 间随机振荡,无一次跨过 0.7 门槛。发育仍在早期
+  探索阶段,为正常发育过程,不标记为失败。
+
 ### Performance: fix 11x `% X < rollout_capacity` → `== 0` + double rollout window
 - **11 处 `state.step % X < rollout_capacity` 全改为 `state.step % X == 0`**
   (ckpt 已于上版修复,此次修复 wm / imagination / GR / replay / planner /
