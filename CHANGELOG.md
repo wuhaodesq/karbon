@@ -5,6 +5,15 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### 编码纪律 / Coding discipline (2026-07-22)
+- **写代码前先读接口,不假设方法存在**: `IndependentEvaluator._measure_drive`
+  假设 `HomeostaticDrives.update()` 和 `.all_satisfied()` 存在,实际接口是
+  `tick(novelty, success, ...)` 和 `is_homeostatic()`。修改为按真实接口调用,
+  参数从 `env.read_states()` 推导。
+- **周期性触发用边界穿越,不用取模**: `step` 以 `rollout_capacity` 批量跳跃,
+  `step % X == 0` 几乎永远不触发。所有周期检查(ckpt/log/eval/wm/…)必须用
+  `(step // X) > (prev_step // X)` 形式。本次 evaluator 触发即重复此错。
+
 ### 发育评估体系设计决策 (2026-07-22)
 - **里程碑触发,非步数触发**: 内驱力/好奇心系数的衰减不由 Stage 进度百分比决定,
   而是由 agent 实际跨越的发育里程碑触发。当前 agent 六项里程碑(客体永存 1y /

@@ -243,9 +243,13 @@ class IndependentEvaluator:
         return min(1.0, diversity)
 
     def _measure_drive(self, model: nn.Module, drives_module: object | None) -> float:
-        """Fraction of steps where homeostatic drives are satisfied."""
+        """Fraction of steps where homeostatic drives are satisfied.
+
+        Calls the real ``tick()`` interface with parameters estimated from
+        the env snapshot (``read_states()``).  Counts ``is_homeostatic()``
+        steps as "satisfied".
+        """
         if drives_module is None:
-            # No drives module → neutral score (neither good nor bad)
             return 1.0
         env = self._make_env(num_objects=10)
         satisfied_count = 0
@@ -261,15 +265,25 @@ class IndependentEvaluator:
                     step_out = env.step(a)
                     obs = step_out.obs
                     total_steps += 1
-                    # Check drives via read_states()
-                    try:
-                        states = env.read_states()
-                        drives_module.update(states)  # type: ignore[union-attr]
-                        if hasattr(drives_module, "all_satisfied"):
-                            if drives_module.all_satisfied():  # type: ignore[union-attr]
-                                satisfied_count += 1
-                    except Exception:
-                        pass
+                    # Build tick() args from env snapshot
+                    st = env.read_states()
+                    ax, ay = st["agent_pos"]
+                    world_half = st.get("world_half", 1.0)
+                    danger_level = max(
+                        0.0,
+                        1.0 - min(abs(ax), abs(ay)) / max(world_half, 0.01),
+                    )
+                    vx, vy = st["agent_vel"]
+                    movement_level = min(1.0, (vx**2 + vy**2) ** 0.5 / 5.0)
+                    drives_module.tick(  # type: ignore[union-attr]
+                        novelty=0.5,
+                        success=bool(step_out.reward > 0.0),
+                        caregiver_proximity=0.0,
+                        danger_level=danger_level,
+                        movement_level=movement_level,
+                    )
+                    if drives_module.is_homeostatic():  # type: ignore[union-attr]
+                        satisfied_count += 1
                     if step_out.terminated or step_out.truncated:
                         break
         except Exception:
