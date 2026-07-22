@@ -3150,7 +3150,9 @@ and state.step % 50000 < rollout_capacity):
                 curr_active_task = new_task
             last_curr_switch_step = state.step
 
-        # --- Independent evaluator: periodic 3D scoring ---
+        # --- Independent evaluator: periodic 3D scoring (observation only) ---
+        # Scores curiosity / drive / task independently.
+        # Does NOT modify training — milestone-passing triggers annealing later.
         if independent_evaluator.should_evaluate(state.step):
             try:
                 report = independent_evaluator.evaluate(
@@ -3168,37 +3170,6 @@ and state.step % 50000 < rollout_capacity):
                 )
             except Exception:
                 logger.exception("[eval] independent evaluator failed")
-
-        # --- Developmental reward annealing ---
-        # Intrinsic reward decays as the agent "grows older".
-        # 婴儿期(0-30%): full  |  幼儿期(30-60%): 0.7x
-        # 少年期(60-85%): 0.4x  |  成熟期(85-100%): 0.1x
-        def _developmental_intrinsic_coef(
-            step: int, total: int, base: float,
-        ) -> float:
-            if total <= 0:
-                return base
-            pct = step / total
-            if pct < 0.30:   return base * 1.0
-            if pct < 0.60:   return base * 0.7
-            if pct < 0.85:   return base * 0.4
-            return base * 0.1
-
-        intrinsic_coef = _developmental_intrinsic_coef(
-            state.step, total_steps,
-            float(intrinsic_cfg.get("reward_coef", 0.1)) if intrinsic_cfg else 0.0,
-        )
-        _pct = state.step / max(total_steps, 1)
-        _stage = (
-            "infant" if _pct < 0.30 else
-            "toddler" if _pct < 0.60 else
-            "child" if _pct < 0.85 else "adolescent"
-        )
-        if state.step % 50000 == 0:
-            logger.info(
-                "[devel] step=%d (%.0f%%) stage=%s intrinsic_coef=%.3f",
-                state.step, _pct * 100, _stage, intrinsic_coef,
-            )
 
         if (state.step // ckpt_every) > (max(0, state.step - rollout_capacity) // ckpt_every):
             extra: dict[str, Any] = {"preset": config.get("preset"), "run_id": run_id}
