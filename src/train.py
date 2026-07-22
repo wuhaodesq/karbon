@@ -112,13 +112,11 @@ logger = logging.getLogger(__name__)
 
 
 def _maybe_compile(module: nn.Module, device: torch.device, name: str = "") -> nn.Module:
-    """Wrap *module* with ``torch.compile`` when on CUDA + PyTorch >= 2.0.
+    """Compile the *forward* method of *module* with ``torch.compile``.
 
-    Falls back silently if compilation fails (e.g. unsupported op).
-    Uses the default ``mode="default"`` which balances compile-time and
-    speed-up; for small models the "reduce-overhead" setting may cause
-    CUDA-Graph re-capture on every dropout toggle and is left for later
-    tuning.
+    Unlike ``torch.compile(module)``, compiling only ``.forward`` leaves the
+    ``nn.Module`` wrapper untouched — ``state_dict()`` / ``load_state_dict()``
+    keys are unchanged and checkpoint save/restore works normally.
     """
     if not is_cuda() or device.type != "cuda":
         return module
@@ -127,13 +125,12 @@ def _maybe_compile(module: nn.Module, device: torch.device, name: str = "") -> n
         if packaging.version.parse(torch.__version__) < packaging.version.parse("2.0"):
             logger.info("JIT: torch.compile unavailable (torch %s < 2.0)", torch.__version__)
             return module
-        compiled = torch.compile(module)
-        logger.info("JIT: compiled %s", name or type(module).__name__)
-        return compiled
+        module.forward = torch.compile(module.forward)
+        logger.info("JIT: compiled %s.forward", name or type(module).__name__)
     except Exception as exc:
-        logger.warning("JIT: torch.compile failed for %s (%s), continuing eager",
+        logger.warning("JIT: torch.compile failed for %s.forward (%s), continuing eager",
                        name or type(module).__name__, exc)
-        return module
+    return module
 
 
 # =====================================================================
@@ -809,7 +806,6 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info("Model params: %d (trainable: %d)", total_params, trainable_params)
-    model = _maybe_compile(model, device, "HybridActorCritic")
 
     # --- Bounded rollout buffer (declared capacity)
     rollout_capacity = 128 if smoke_only else 2048
@@ -931,7 +927,6 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         )).to(device)
         wm_optimizer = torch.optim.Adam(wm.parameters(), lr=float(wm_cfg.get("lr", 3e-4)))
         logger.info("RSSM world model enabled (params=%d)", wm.num_parameters())
-    wm = _maybe_compile(wm, device, "WorldModel")
 
     # --- Stage 4+: Skill Library ---
     skills_cfg = config.get("skills")
@@ -1816,6 +1811,11 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 "its own total_steps=%d budget)",
                 resumed_stage, resumed_step, stage, total_steps,
             )
+
+    # --- JIT: compile hot paths after weights are loaded ---
+    model = _maybe_compile(model, device, "HybridActorCritic")
+    if wm is not None:
+        wm = _maybe_compile(wm, device, "WorldModel")
 
     # --- PPO hyperparams
     ppo_clip = float(train_cfg.get("ppo_clip", 0.2))
