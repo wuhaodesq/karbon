@@ -136,7 +136,7 @@ causal_discovery:
 
 number_sense:
   enabled: true
-  max_count: 10
+  max_count: 20
   hidden: 32
   lr: 3.0e-4
 
