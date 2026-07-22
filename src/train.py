@@ -1778,11 +1778,49 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 except (ValueError, RuntimeError, KeyError) as exc:
                     logger.warning(
                         "Skill library state mismatch on resume (%s); starting fresh.", exc)
-        # TODO(Phase5+): restore extra states (RND, EWC Fisher, coverage, skills,
-        # WM, imagination, symbolic, etc. — ~40 keys) for homogeneous resume.
-        # Currently ~40 extra keys are written (lines ~2680-2740) but never read
-        # back. This is safe for cross-stage resume (architecture changes → fresh
-        # modules) but needed for long-running homogeneous Phases (Phase 5+).
+        # --- Restore all extra module states from checkpoint ---
+        _extra = payload.get("extra") or {}
+        _restore_map: list[tuple[str, object | None, str | None]] = [
+            ("rnd_state",                rnd,                          None),
+            ("coverage_state",           coverage,                     None),
+            ("wm_state",                 wm,                           None),
+            ("wm_optim_state",           wm_optimizer,                 None),
+            ("curriculum_state",         curriculum,                   None),
+            ("ewc_state",                ewc,                          None),
+            ("gr_vae_state",             grep_vae,                     None),
+            ("sleep_loop_state",         sleep_loop,                   None),
+            ("number_sense_state",       number_sense,                 None),
+            ("rule_engine_state",        rule_engine,                  None),
+            ("causal_discovery_state",   causal_disc,                  None),
+            ("creativity_state",         creativity_orch,              None),
+            ("homeostatic_drives_state", homeostatic_drives,           None),
+            ("emotion_system_state",     emotion_system,               None),
+            ("imagination_trainer_state",imagination_trainer,          None),
+            ("intention_curiosity_state",intention_curiosity,          None),
+            ("knowledge_gap_state",      knowledge_gap,                None),
+            ("social_curiosity_state",   social_curiosity,             None),
+            ("memory_manager_state",     memory_manager,               None),
+            ("theory_of_mind_state",     theory_of_mind,               None),
+            ("long_range_planner_state", long_range_planner,           None),
+            ("concept_graph_state",      concept_graph,                None),
+            ("reflection_validator_state",reflection_validator,        None),
+            ("concept_clusterer_state",  concept_clusterer,            None),
+            ("audio_encoder_state",      audio_encoder,                None),
+            ("reflection_state",         reflection_loop,              None),
+            # Special: symbolic state lives inside symbolic_layer.rule_memory
+            ("symbolic_state",           symbolic_layer.rule_memory if symbolic_layer is not None else None, None),
+            ("self_model_state",         self_model,                   None),
+            ("logic_engine_state",       logic_engine,                 None),
+        ]
+        for key, module, _opt in _restore_map:
+            if module is not None and key in _extra:
+                try:
+                    if hasattr(module, "load_state_dict"):
+                        module.load_state_dict(_extra[key])
+                    logger.debug("Restored %s from ckpt", key)
+                except Exception as exc:
+                    logger.warning(
+                        "State mismatch on resume for %s (%s); starting fresh.", key, exc)
         resumed_stage = int(payload.get("stage", stage))
         resumed_step = int(payload.get("step", 0))
         # Enforce a growth cooldown from the resumed step so the transient
@@ -2289,6 +2327,13 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             # --- Stage 4 / M2: skill reuse + extraction on episode end ---
             if skills is not None and n_envs == 1 and (step_out.terminated or step_out.truncated):
                 ep_ret = env.summary().get("last_return", 0.0)
+
+                # Feed NumberSense the true object count from this episode.
+                try:
+                    true_count = int(env.read_states()["num_objects"])
+                    episode_true_counts.append(true_count)
+                except Exception:
+                    pass
                 # M2: the skill injected this episode genuinely helped complete
                 # it -> count it as a real reuse (usage_count > 1). This is the
                 # honest reuse signal, not a synthetic counter.
