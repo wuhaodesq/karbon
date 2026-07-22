@@ -2907,8 +2907,10 @@ and state.step % 50000 < rollout_capacity):
                 and n_envs == 1
                 and state.step - xmodal_last_train >= xmodal_train_every):
             try:
-                prop = torch.tensor(env._agent.proprio if hasattr(env._agent, 'proprio')
-                                    else [0.0]*6, device=device).float()
+                prop = torch.tensor(
+                    env._proprioceptive() if hasattr(env, '_proprioceptive')
+                    else getattr(env._agent, 'proprio', [0.0]*6),
+                    device=device).float()
                 lang_emb = xmodal_manager.touch_bridge.touch_to_lang(prop.unsqueeze(0))
                 # Simple reconciliation loss: touch→lang→touch should return original
                 recon = xmodal_manager.touch_bridge.lang_to_touch(lang_emb)
