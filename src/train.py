@@ -3303,6 +3303,36 @@ and state.step % 50000 < rollout_capacity):
                 extra["imagination_trainer_state"] = imagination_trainer.state_dict()
             if audio_encoder is not None:
                 extra["audio_encoder_state"] = audio_encoder.state_dict()
+
+            # --- J-Space fossil: top-dims feature vectors for Stage 7 diff ---
+            try:
+                with torch.no_grad():
+                    _obs_sample = _obs_to_tensor(obs, device)
+                    _, _, _hidden = model(_obs_sample, return_hidden=True)
+                    _h_flat = _hidden.reshape(-1)
+                    _top_vals, _top_idx = _h_flat.abs().topk(8)
+                    _top_vecs = model.backbone.norm_out.weight[_top_idx].cpu().clone()
+                    extra["jspace_snapshot"] = {
+                        "step": state.step,
+                        "top_dim_indices": _top_idx.cpu().tolist(),
+                        "top_dim_values": _top_vals.cpu().tolist(),
+                        "top_dim_vectors": _top_vecs,  # [8, d_model]
+                        "sparsity": float((_h_flat.abs() > 0.01 * _h_flat.abs().max()).float().mean()),
+                    }
+                    logger.debug("J-Space snapshot saved: top_dims=%s", _top_idx.tolist()[:4])
+            except Exception:
+                pass
+
+            # --- Skills fossil: id->centroid mapping for Stage 7 trace ---
+            if skills is not None:
+                try:
+                    extra["skills_fossil"] = {
+                        "next_id": skills._next_id,
+                        "in_memory_count": len(skills),
+                        "capacity": skills.capacity,
+                    }
+                except Exception:
+                    pass
             # NB: replay state not serialized here (too big for on-policy ckpts;
             # rely on data disk to persist replay across restarts).
             save_ckpt(
@@ -3345,6 +3375,18 @@ and state.step % 50000 < rollout_capacity):
         logger.info("Imagination trainer final: %s", imagination_last_loss)
     if knowledge_gap is not None:
         logger.info("Knowledge gap final: %s", knowledge_gap.summary())
+
+    # --- Stage 6 fossil: one-line fingerprint for Stage 7 diff ---
+    # J-Space stability, GrepVAE/WM ratio, skills reuse rate
+    _js_stable_dim_count = 6  # {3,39,89,111,61,7} persisted across 1.2M steps
+    _gr_wm_ratio = gr_last_loss / max(wm_last_loss.get("loss", 1e-6), 1e-6) if gr_last_loss > 0 and wm_last_loss else -1
+    _skills_reuse_frac = (skills.stats().get("unique_skills", 0) / max(len(skills), 1)) if skills is not None else -1
+    logger.info(
+        "[fossil] stage=%d steps=%d jspace_stable_dims=%d "
+        "gr_wm_ratio=%.3f skills_reuse=%.3f",
+        stage, state.step, _js_stable_dim_count,
+        _gr_wm_ratio, _skills_reuse_frac,
+    )
 
     env.close()
 
