@@ -3323,13 +3323,19 @@ and state.step % 50000 < rollout_capacity):
             except Exception:
                 pass
 
-            # --- Skills fossil: id->centroid mapping for Stage 7 trace ---
+            # --- Skills fossil: id->centroid + M2 reuse stats for Stage 7 trace ---
             if skills is not None:
                 try:
+                    _gpu_skills = skills.top_k()
+                    _usage_gt1 = sum(1 for s in _gpu_skills if getattr(s, 'usage_count', 0) > 1)
+                    _max_u = max((getattr(s, 'usage_count', 0) for s in _gpu_skills), default=0)
                     extra["skills_fossil"] = {
                         "next_id": skills._next_id,
                         "in_memory_count": len(skills),
                         "capacity": skills.capacity,
+                        "m2_usage_gt1": _usage_gt1,
+                        "m2_max_usage": _max_u,
+                        "m2_reuse_ratio": _usage_gt1 / max(len(_gpu_skills), 1),
                     }
                 except Exception:
                     pass
