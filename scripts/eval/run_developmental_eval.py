@@ -100,9 +100,9 @@ def build_number_sense(model_cfg: dict, num_sense_cfg: dict, device: torch.devic
     max_count = int(num_sense_cfg.get("max_count", 10))
     if state is not None:
         # Infer actual max_count from saved weight shape
-        for key, shape in state.items():
-            if "net.2" in key and len(shape) == 2:
-                max_count = shape[0] - 1  # output classes - 1
+        for key, tensor in state.items():
+            if "net.2" in key and tensor.dim() == 2:
+                max_count = tensor.shape[0] - 1  # output classes - 1
                 break
     ns = NumberSense(
         slot_dim=int(model_cfg.get("slot_dim", 128)),
