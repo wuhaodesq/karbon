@@ -6,6 +6,10 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### 编码纪律 / Coding discipline (2026-07-22)
+- **缩进对齐即编译安全**: J-Space timeline 代码中 `try:` 缩进 16 格
+  而 `except:` 缩进 12 格,Python 在 `import` 阶段即抛 `IndentationError`,
+  任何重启都会直接崩溃。教训:**编辑 Python 块后立即用 `py_compile`
+  或 `python -c "import ast"` 验证语法**(尤其缩进敏感的 try/except/with 链)。
 - **跨模块参数边界必须交叉校验**: NumberSense 默认 `max_count=10`,
   curriculum 任务 `crowded-heavy-weak` 有 18 个物体——两者从未对齐。
   因为 NumberSense 训练是死代码(未修的 Bug 2),冲突未暴露。修复后
