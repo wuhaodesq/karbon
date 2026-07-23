@@ -3305,20 +3305,21 @@ and state.step % 50000 < rollout_capacity):
                 extra["audio_encoder_state"] = audio_encoder.state_dict()
 
             # --- J-Space fossil: top-dims feature vectors for Stage 7 diff ---
-            try:
-                with torch.no_grad():
-                    _obs_sample = _obs_to_tensor(obs, device)
-                    _, _, _hidden = model(_obs_sample, return_hidden=True)
-                    _h_flat = _hidden.reshape(-1)
-                    _top_vals, _top_idx = _h_flat.abs().topk(8)
-                    _top_vecs = model.backbone.norm_out.weight[_top_idx].cpu().clone()
-                    extra["jspace_snapshot"] = {
-                        "step": state.step,
-                        "top_dim_indices": _top_idx.cpu().tolist(),
-                        "top_dim_values": _top_vals.cpu().tolist(),
-                        "top_dim_vectors": _top_vecs,  # [8, d_model]
-                        "sparsity": float((_h_flat.abs() > 0.01 * _h_flat.abs().max()).float().mean()),
-                    }
+                try:
+                    with torch.no_grad():
+                        _obs_sample = _obs_to_tensor(obs, device)
+                        _, _, _hidden = model(_obs_sample, return_hidden=True)
+                        # mean over batch dim for multi-env safety
+                        _dim_act = _hidden.abs().mean(dim=0)  # (d_model,)
+                        _top_vals, _top_idx = _dim_act.topk(8)
+                        _top_vecs = model.backbone.norm_out.weight[_top_idx].cpu().clone()
+                        extra["jspace_snapshot"] = {
+                            "step": state.step,
+                            "top_dim_indices": _top_idx.cpu().tolist(),
+                            "top_dim_values": _top_vals.cpu().tolist(),
+                            "top_dim_vectors": _top_vecs,  # [8, d_model]
+                            "sparsity": float((_dim_act > 0.01 * _dim_act.max()).float().mean()),
+                        }
                     logger.debug("J-Space snapshot saved: top_dims=%s", _top_idx.tolist()[:4])
             except Exception:
                 pass
