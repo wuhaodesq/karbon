@@ -5,10 +5,6 @@
 一个从零开始、边跑边学、内存有界、可无限期运行的智能体研究平台。
 A developmental AI research platform: learns while running, bounded memory, perpetually runnable.
 
-> **状态**：Stage 0 · Skeleton
-> **项目根**：`D:\karbon\`（无子目录 / no sub-directory）
-> **语言**：中文优先，英文并存 / Bilingual, Chinese-friendly
-
 ---
 
 ## Quick Start / 快速开始
