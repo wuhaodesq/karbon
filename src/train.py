@@ -1656,6 +1656,9 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # applies adaptive pressure (reduce intrinsic coefficient).
     independent_evaluator = IndependentEvaluator(config, device)
 
+    # --- J-Space timeline accumulator (appended each ckpt save) ---
+    _jspace_timeline: list[dict] = []
+
     # --- Phase 1+: Intention Achievement Curiosity ---
     intention_cfg = config.get("intention")
     intention_curiosity: IntentionCuriosity | None = None
@@ -3317,23 +3320,23 @@ and state.step % 50000 < rollout_capacity):
             if audio_encoder is not None:
                 extra["audio_encoder_state"] = audio_encoder.state_dict()
 
-            # --- J-Space fossil: top-dims feature vectors for Stage 7 diff ---
+            # --- J-Space fossil: timeline of top-dims + feature vectors ---
                 try:
                     with torch.no_grad():
                         _obs_sample = _obs_to_tensor(obs, device)
                         _, _, _hidden = model(_obs_sample, return_hidden=True)
-                        # mean over batch dim for multi-env safety
-                        _dim_act = _hidden.abs().mean(dim=0)  # (d_model,)
+                        _dim_act = _hidden.abs().mean(dim=0)
                         _top_vals, _top_idx = _dim_act.topk(8)
-                        _top_vecs = model.backbone.norm_out.weight[_top_idx].cpu().clone()
-                        extra["jspace_snapshot"] = {
+                        _sp = float((_dim_act > 0.01 * _dim_act.max()).float().mean())
+                        _snap = {
                             "step": state.step,
                             "top_dim_indices": _top_idx.cpu().tolist(),
                             "top_dim_values": _top_vals.cpu().tolist(),
-                            "top_dim_vectors": _top_vecs,  # [8, d_model]
-                            "sparsity": float((_dim_act > 0.01 * _dim_act.max()).float().mean()),
+                            "sparsity": _sp,
                         }
-                    logger.debug("J-Space snapshot saved: top_dims=%s", _top_idx.tolist()[:4])
+                        _jspace_timeline.append(_snap)
+                        extra["jspace_timeline"] = _jspace_timeline
+                    logger.debug("J-Space snapshot: top_dims=%s", _top_idx.tolist()[:4])
             except Exception:
                 pass
 
