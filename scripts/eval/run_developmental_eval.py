@@ -90,18 +90,28 @@ def build_model(
 
 def build_number_sense(model_cfg: dict, num_sense_cfg: dict, device: torch.device,
                        state: dict | None):
-    """Build NumberSense head; load weights if provided. Returns (module|None)."""
+    """Build NumberSense head; load weights if provided. Returns (module|None).
+
+    Infers max_count from the checkpoint weights when available (handles
+    the config change from max_count=10→20 across ckpt versions).
+    """
     if num_sense_cfg is None:
         return None
+    max_count = int(num_sense_cfg.get("max_count", 10))
+    if state is not None:
+        # Infer actual max_count from saved weight shape
+        for key, shape in state.items():
+            if "net.2" in key and len(shape) == 2:
+                max_count = shape[0] - 1  # output classes - 1
+                break
     ns = NumberSense(
         slot_dim=int(model_cfg.get("slot_dim", 128)),
-        max_count=int(num_sense_cfg.get("max_count", 10)),
+        max_count=max_count,
         hidden=int(num_sense_cfg.get("hidden", 32)),
     ).to(device)
     if state:
         ns.load_state_dict(state, strict=False)
         return ns
-    # No weights in ckpt -> return None so caller falls back to env proxy.
     return None
 
 
