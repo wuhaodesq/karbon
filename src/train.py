@@ -1869,6 +1869,20 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     if wm is not None:
         wm = _maybe_compile(wm, device, "WorldModel")
 
+    # --- Stage 7: warm-start GrepVAE latent expansion ---
+    if (stage == 7 and resume is not None and grep_vae is not None
+            and grep_vae.config.latent_dim < int(continual_cfg.get("gr_latent_dim", 32))):
+        _old_dim = grep_vae.config.latent_dim
+        _new_dim = int(continual_cfg.get("gr_latent_dim", 64))
+        logger.info(
+            "[expand] GrepVAE latent %d → %d (warm-start, noise=0.02)",
+            _old_dim, _new_dim,
+        )
+        try:
+            grep_vae = grep_vae.expand_latent(_new_dim, noise_scale=0.02)
+        except Exception:
+            logger.exception("[expand] GrepVAE expansion failed — keeping old VAE")
+
     # --- PPO hyperparams
     ppo_clip = float(train_cfg.get("ppo_clip", 0.2))
     ppo_epochs = int(train_cfg.get("ppo_epochs", 4))
@@ -3442,7 +3456,7 @@ _DEFAULT_STAGE_CONFIGS = {
     4: "stage4_skills.yaml",
     5: "stage5_curriculum.yaml",
     6: "stage6_consolidation.yaml",
-    7: "stage7_cognitive.yaml",
+    7: "stage7_3d_birth.yaml",
     8: "stage8_full_cognitive.yaml",
 }
 
