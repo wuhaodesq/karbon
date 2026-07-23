@@ -197,3 +197,7 @@ independent_eval:
   eval_every_steps: 100000
   eval_weights: [2.0, 1.0, 2.0]
   episodes_per_task: 20
+
+# Stage 7 visual monitoring: save rendered frames for live viewing
+viz:
+  frame_every_steps: 5000

@@ -1731,6 +1731,14 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
 
     state = TrainState(step=0, episode=0)
 
+    # --- Stage 7: periodic 3D frame dump for visual monitoring ---
+    _viz_dir = None
+    _viz_every = int(config.get("viz", {}).get("frame_every_steps", 0))
+    if _viz_every > 0:
+        _viz_dir = Path(data_dir()) / "frames"
+        _viz_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("Viz: saving frames every %d steps to %s", _viz_every, _viz_dir)
+
     if resume is not None:
         payload = load_ckpt(resume)
         try:
@@ -3381,6 +3389,17 @@ and state.step % 50000 < rollout_capacity):
                     ]
                 except Exception:
                     pass
+
+            # --- Stage 7: periodic 3D frame dump ---
+            if _viz_dir is not None and state.step % _viz_every < rollout_capacity:
+                try:
+                    from PIL import Image
+                    _img = env.render() if hasattr(env, 'render') else obs
+                    _path = _viz_dir / f"step_{state.step:09d}.png"
+                    Image.fromarray(_img).save(str(_path))
+                except Exception:
+                    pass
+
             # NB: replay state not serialized here
             # rely on data disk to persist replay across restarts).
             save_ckpt(
