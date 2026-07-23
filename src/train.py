@@ -1925,21 +1925,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     curr_active_task.tag, curr_active_task.id)
         try:
             env.close()
-                except Exception:
-                    pass
-
-            # --- Stage 6 fossil: evaluation trajectory snapshot ---
-            if independent_evaluator is not None:
-                try:
-                    _recent = independent_evaluator._history[-10:]
-                    extra["eval_trajectory"] = [
-                        {"step": r.step, "curiosity": round(r.curiosity, 4),
-                         "drive": round(r.drive, 4), "task": round(r.task, 4),
-                         "total": round(r.total, 4), "vs_random": round(r.task_vs_random, 4)}
-                        for r in _recent
-                    ]
-                except Exception:
-                    pass
+        except Exception:
+            pass
         env = _build_env_from_spec(curr_active_task.spec, env_cfg)
         obs = env.reset()
     last_curr_switch_step = 0
@@ -3381,7 +3368,20 @@ and state.step % 50000 < rollout_capacity):
                     }
                 except Exception:
                     pass
-            # NB: replay state not serialized here (too big for on-policy ckpts;
+
+            # --- Stage 6 fossil: evaluation trajectory snapshot ---
+            if independent_evaluator is not None:
+                try:
+                    _recent = independent_evaluator._history[-10:]
+                    extra["eval_trajectory"] = [
+                        {"step": r.step, "curiosity": round(r.curiosity, 4),
+                         "drive": round(r.drive, 4), "task": round(r.task, 4),
+                         "total": round(r.total, 4), "vs_random": round(r.task_vs_random, 4)}
+                        for r in _recent
+                    ]
+                except Exception:
+                    pass
+            # NB: replay state not serialized here
             # rely on data disk to persist replay across restarts).
             save_ckpt(
                 stage_ckpt_path(stage, state.step),
