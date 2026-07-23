@@ -3321,21 +3321,21 @@ and state.step % 50000 < rollout_capacity):
                 extra["audio_encoder_state"] = audio_encoder.state_dict()
 
             # --- J-Space fossil: timeline of top-dims + feature vectors ---
-                try:
-                    with torch.no_grad():
-                        _obs_sample = _obs_to_tensor(obs, device)
-                        _, _, _hidden = model(_obs_sample, return_hidden=True)
-                        _dim_act = _hidden.abs().mean(dim=0)
-                        _top_vals, _top_idx = _dim_act.topk(8)
-                        _sp = float((_dim_act > 0.01 * _dim_act.max()).float().mean())
-                        _snap = {
-                            "step": state.step,
-                            "top_dim_indices": _top_idx.cpu().tolist(),
-                            "top_dim_values": _top_vals.cpu().tolist(),
-                            "sparsity": _sp,
-                        }
-                        _jspace_timeline.append(_snap)
-                        extra["jspace_timeline"] = _jspace_timeline
+            try:
+                with torch.no_grad():
+                    _obs_sample = _obs_to_tensor(obs, device)
+                    _, _, _hidden = model(_obs_sample, return_hidden=True)
+                    _dim_act = _hidden.abs().mean(dim=0)
+                    _top_vals, _top_idx = _dim_act.topk(8)
+                    _sp = float((_dim_act > 0.01 * _dim_act.max()).float().mean())
+                    _snap = {
+                        "step": state.step,
+                        "top_dim_indices": _top_idx.cpu().tolist(),
+                        "top_dim_values": _top_vals.cpu().tolist(),
+                        "sparsity": _sp,
+                    }
+                    _jspace_timeline.append(_snap)
+                    extra["jspace_timeline"] = _jspace_timeline
                     logger.debug("J-Space snapshot: top_dims=%s", _top_idx.tolist()[:4])
             except Exception:
                 pass
