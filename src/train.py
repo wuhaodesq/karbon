@@ -3354,6 +3354,17 @@ and state.step % 50000 < rollout_capacity):
             except Exception:
                 pass
 
+            # --- GrepVAE fossil: continuous latent-space baseline ---
+            if grep_vae is not None:
+                try:
+                    extra["grepvae_fossil"] = {
+                        "latent_dim": grep_vae.config.latent_dim,
+                        "hidden": grep_vae.config.hidden,
+                        "kl_weight": grep_vae.config.kl_weight,
+                    }
+                except Exception:
+                    pass
+
             # --- Skills fossil: id->centroid + M2 reuse stats for Stage 7 trace ---
             if skills is not None:
                 try:
