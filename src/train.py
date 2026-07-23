@@ -3401,11 +3401,14 @@ and state.step % 50000 < rollout_capacity):
     _js_stable_dim_count = 6  # {3,39,89,111,61,7} persisted across 1.2M steps
     _gr_wm_ratio = gr_last_loss / max(wm_last_loss.get("loss", 1e-6), 1e-6) if gr_last_loss > 0 and wm_last_loss else -1
     _skills_reuse_frac = (skills.stats().get("unique_skills", 0) / max(len(skills), 1)) if skills is not None else -1
+    _eval_tail = []
+    if independent_evaluator is not None:
+        _eval_tail = [round(r.task, 2) for r in independent_evaluator._history[-10:]]
     logger.info(
-        "[fossil] stage=%d steps=%d jspace_stable_dims=%d "
-        "gr_wm_ratio=%.3f skills_reuse=%.3f",
-        stage, state.step, _js_stable_dim_count,
-        _gr_wm_ratio, _skills_reuse_frac,
+        "[fossil] Stage %d sealed. reuse=%.2f%% | eval_trail=%s",
+        stage,
+        _skills_reuse_frac * 100,
+        str(_eval_tail),
     )
 
     env.close()
