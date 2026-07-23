@@ -153,3 +153,61 @@ class GenerativeReplayVAE(nn.Module):
             "obs_dim": self.config.obs_dim,
             "latent_dim": self.config.latent_dim,
         }
+
+    # ---------------------------------------------------- expansion (Stage 7)
+    def expand_latent(self, new_dim: int, noise_scale: float = 0.02) -> GenerativeReplayVAE:
+        """Return a new VAE with *new_dim* latent space, warm-started from this one.
+
+        The first ``old_dim`` dimensions copy the trained encoder/decoder
+        weights.  Extra dimensions are initialised with small Gaussian noise
+        so that the first batch after expansion produces a gentle recon-loss
+        bump (~0.05–0.08) rather than a catastrophic spike.
+
+        Stage 7 uses this to go from 16 → 32 latent dims before injecting
+        3D observations.
+        """
+        old_dim = self.config.latent_dim
+        if new_dim <= old_dim:
+            raise ValueError(f"new_dim ({new_dim}) must be > old_dim ({old_dim})")
+
+        new_cfg = GenerativeReplayConfig(
+            obs_dim=self.config.obs_dim,
+            latent_dim=new_dim,
+            hidden=self.config.hidden,
+            lr=self.config.lr,
+            kl_weight=self.config.kl_weight,
+        )
+        new_vae = GenerativeReplayVAE(new_cfg).to(self._device())
+
+        # Copy encoder weights: first old_dim columns of mean/logvar
+        for dst_layer, src_layer in [
+            (new_vae.encoder.mean, self.encoder.mean),
+            (new_vae.encoder.logvar, self.encoder.logvar),
+        ]:
+            with torch.no_grad():
+                dst_layer.weight[:old_dim].copy_(src_layer.weight)
+                dst_layer.bias[:old_dim].copy_(src_layer.bias)
+
+        # Copy decoder weights: first old_dim rows of fc1
+        with torch.no_grad():
+            new_vae.decoder.net[0].weight[:, :old_dim].copy_(
+                self.decoder.net[0].weight)
+            new_vae.decoder.net[0].bias.copy_(self.decoder.net[0].bias)
+
+        # Hidden layers: copy in full (they are independent of latent_dim)
+        for dst, src in [
+            (new_vae.encoder.trunk, self.encoder.trunk),
+            (new_vae.decoder.net[2], self.decoder.net[2]),
+            (new_vae.decoder.net[4], self.decoder.net[4]),
+        ]:
+            dst.load_state_dict(src.state_dict())
+
+        # Seed new dimensions with small noise for a gentle start
+        with torch.no_grad():
+            nn.init.normal_(new_vae.encoder.mean.weight[old_dim:], std=noise_scale)
+            nn.init.normal_(new_vae.encoder.logvar.weight[old_dim:], std=noise_scale)
+            nn.init.zeros_(new_vae.encoder.mean.bias[old_dim:])
+            nn.init.zeros_(new_vae.encoder.logvar.bias[old_dim:])
+            nn.init.normal_(new_vae.decoder.net[0].weight[:, old_dim:], std=noise_scale)
+
+        return new_vae
