@@ -98,7 +98,7 @@ from src.models.counterfactual_planner import CounterfactualPlanner
 from src.models.marginal_gains import CompositionalTester, LearningProgressTracker
 from src.models.visual_analyzer import VisualAnalyzer
 from src.monitoring import HealthChecker, MemoryWatcher, WatcherConfig
-from src.platform import data_dir, get_device, get_device_info, is_cuda, stage_ckpt_path
+from src.platform import ckpt_dir, data_dir, get_device, get_device_info, is_cuda, stage_ckpt_path
 from src.utils import (
     load_ckpt,
     load_config,
@@ -3390,16 +3390,6 @@ and state.step % 50000 < rollout_capacity):
                 except Exception:
                     pass
 
-            # --- Stage 7: periodic 3D frame dump ---
-            if _viz_dir is not None and state.step % _viz_every < rollout_capacity:
-                try:
-                    from PIL import Image
-                    _img = env.render() if hasattr(env, 'render') else obs
-                    _path = _viz_dir / f"step_{state.step:09d}.png"
-                    Image.fromarray(_img).save(str(_path))
-                except Exception:
-                    pass
-
             # NB: replay state not serialized here
             # rely on data disk to persist replay across restarts).
             save_ckpt(
@@ -3410,6 +3400,17 @@ and state.step % 50000 < rollout_capacity):
                 optim_state=optimizer.state_dict(),
                 extra=extra,
             )
+
+        # --- Stage 7: periodic 3D frame dump (outside ckpt block) ---
+        if _viz_dir is not None and state.step % _viz_every < rollout_capacity:
+            try:
+                from PIL import Image
+                _img = env.render() if hasattr(env, 'render') else obs
+                _path = _viz_dir / f"step_{state.step:09d}.png"
+                Image.fromarray(_img).save(str(_path))
+                logger.info("[viz] frame saved: %s (%s)", _path.name, _img.shape)
+            except Exception as _exc:
+                logger.warning("[viz] frame save failed: %s", _exc)
 
     elapsed = time.time() - t0
     final_summary = env.summary()

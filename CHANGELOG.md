@@ -5,6 +5,13 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### 修复: Stage 6 退出段 `ckpt_dir` 未导入导致备份+化石封印失败 (2026-07-24)
+- `train.py:101` 补 `ckpt_dir` 导入, 原 `from src.platform import ...` 漏引,
+  导致退出段 auto-backup `shutil.copy2` 时抛 `NameError`, `[fossil]` 封印行
+  也未写入日志。Stage 6 5M 步训练正常结束, 但最终 ckpt 备份未生成。
+- `src/train.py`: 第 101 行 import 加入 `ckpt_dir`(与已有 `stage_ckpt_path`
+  同源 `src.platform.paths`)。
+
 ### 编码纪律 / Coding discipline (2026-07-22)
 - **缩进对齐即编译安全**: J-Space timeline 代码中 `try:` 缩进 16 格
   而 `except:` 缩进 12 格,Python 在 `import` 阶段即抛 `IndentationError`,
