@@ -1831,7 +1831,10 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             if module is not None and key in _extra:
                 try:
                     if hasattr(module, "load_state_dict"):
-                        module.load_state_dict(_extra[key])
+                        if key == "ewc_state":
+                            module.load_state_dict(_extra[key], device=device)
+                        else:
+                            module.load_state_dict(_extra[key])
                     logger.debug("Restored %s from ckpt", key)
                 except Exception as exc:
                     logger.warning(

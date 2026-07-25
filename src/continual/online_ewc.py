@@ -126,8 +126,10 @@ class OnlineEWC:
             F_i ≈ E_batch[ (∂L/∂θ_i)² ]
         """
         model.eval()
+        # Determine device from model's first parameter
+        _device = next(model.parameters()).device
         accum: dict[str, torch.Tensor] = {
-            name: torch.zeros_like(self._fisher[name]) for name in self._param_names
+            name: torch.zeros_like(self._fisher[name], device=_device) for name in self._param_names
         }
         count = 0
 
@@ -225,11 +227,11 @@ class OnlineEWC:
             "has_consolidated_once": self._has_consolidated_once,
         }
 
-    def load_state_dict(self, state: dict) -> None:
+    def load_state_dict(self, state: dict, device: str | torch.device = "cpu") -> None:
         # Config fields — validate names but accept updated values
         for k, v in state["config"].items():
             setattr(self.config, k, v)
-        self._fisher = {k: v.clone() for k, v in state["fisher"].items()}
-        self._anchor = {k: v.clone() for k, v in state["anchor"].items()}
+        self._fisher = {k: v.clone().to(device) for k, v in state["fisher"].items()}
+        self._anchor = {k: v.clone().to(device) for k, v in state["anchor"].items()}
         self._param_names = list(self._fisher.keys())
         self._has_consolidated_once = bool(state["has_consolidated_once"])
