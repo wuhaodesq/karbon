@@ -3152,6 +3152,9 @@ and state.step % 50000 < rollout_capacity):
                 if sym_info.get("override", False) or sym_info.get("biased", False):
                     logger.info("[symbolic] rule #%d matched (sim=%.2f), action biased",
                                 sym_info.get("rule_id", -1), sym_info.get("rule_sim", 0))
+                    # Stage 9 logic reward: set env bonus for matching rule's action
+                    if hasattr(env, '_logic_bonus_action'):
+                        env._logic_bonus_action = int(sym_info.get("rule_action", -1))
             except Exception as _se:
                 logger.warning("[symbolic] override check failed: %s", str(_se)[:120])
 

@@ -409,6 +409,7 @@ class NeuralSymbolicLayer(nn.Module):
             info["rule_matched"] = True
             info["rule_id"] = rule.id
             info["rule_sim"] = sim
+            info["rule_action"] = rule.action
             info["override"] = False  # soft bias, not hard override
             info["biased"] = True
             self._last_matched_rule_id = rule.id

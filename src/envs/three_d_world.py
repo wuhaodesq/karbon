@@ -373,6 +373,9 @@ class ThreeDWorld:
         self._contacted: set[int] = set()
         self._last_force_3d: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._active_occlusions_3d: dict[str, dict] = {}
+        # Logic task context (set by train.py for symbolic reward)
+        self._logic_bonus_action: int | None = None
+        self._logic_bonus_weight: float = 0.3
 
         # Initial reset
         self._build_scene()
@@ -461,7 +464,7 @@ class ThreeDWorld:
         mujoco.mj_step(self._model, self._data)
 
         # Reward
-        reward = self._compute_reward()
+        reward = self._compute_reward(action)
         self._current_return += reward
 
         done = self._step_count >= self._max_steps
@@ -691,7 +694,7 @@ class ThreeDWorld:
             except Exception:
                 continue
 
-    def _compute_reward(self) -> float:
+    def _compute_reward(self, action: int = -1) -> float:
         """Multi-component reward.
 
         - Object interaction: velocity of scene objects (learner caused movement)
@@ -734,7 +737,13 @@ class ThreeDWorld:
         except Exception:
             pass
 
-        return float(max(0.0, min(5.0, reward)))
+        reward += float(max(0.0, min(5.0, reward)))
+
+        # --- Logic bonus: reward agent for following symbolic rules ---
+        if self._logic_bonus_action is not None and action >= 0 and action % 8 == self._logic_bonus_action:
+            reward += self._logic_bonus_weight
+
+        return float(max(0.0, min(10.0, reward)))
 
     def _proprio(self) -> np.ndarray:
         """Return (12,) proprioceptive vector."""
