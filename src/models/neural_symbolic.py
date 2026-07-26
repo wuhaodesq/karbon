@@ -129,8 +129,10 @@ class RuleMemory:
         n = len(rules)
         if n == 0:
             return
+        # Determine device from first rule's embedding
+        _dev = rules[0].condition_embedding.device
         for i, r in enumerate(rules):
-            self._rule_matrix[i] = r.condition_embedding
+            self._rule_matrix[i] = r.condition_embedding.to(_dev)
             self._rule_actions[i] = r.action
             self._rule_confidences[i] = r.confidence
         self._dirty = False
@@ -143,20 +145,18 @@ class RuleMemory:
         confidence: float = 0.5,
         priority: float = 0.0,
     ) -> Rule:
-        """Add a new rule. Evicts lowest-scoring rule if full.
-
-        Before adding, checks if a similar rule already exists (cosine > 0.95).
-        If so, updates the existing rule instead of creating a duplicate.
-        """
+        """Add a new rule. Evicts lowest-scoring rule if full."""
         # Check for duplicate (cosine similarity)
         if len(self._rules) > 0:
             if self._dirty:
                 self._rebuild_matrices()
             existing_rules = list(self._rules.values())
             n = len(existing_rules)
+            # Ensure device consistency: move rule matrix to same device as input
+            _matrix = self._rule_matrix[:n].to(condition_embedding.device)
             cos = F.cosine_similarity(
                 condition_embedding.unsqueeze(0),
-                self._rule_matrix[:n],
+                _matrix,
                 dim=1,
             )
             best_idx = int(cos.argmax().item())
