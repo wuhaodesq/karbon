@@ -2417,18 +2417,22 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                             # Stage 9: populate logic engine from extracted symbolic rules
                             if logic_engine is not None and symbolic_layer.rule_memory is not None:
                                 try:
+                                    from src.models.logic_engine import Quantifier
                                     rules = list(symbolic_layer.rule_memory._rules.values())
-                                    for rule in rules[-4:]:  # latest rules
-                                        desc = getattr(rule, 'description', '') or f"rule_{rule.id}"
+                                    for rule in rules[-4:]:
+                                        var_name = f"state_var_{rule.id}"
+                                        logic_engine.define_variable(name=var_name)
                                         logic_engine.add_rule(
-                                            condition=f"symbolic_{rule.id}",
-                                            conclusion=f"action_{rule.action}",
+                                            quantifier=Quantifier.EXISTENTIAL,
+                                            variable_name=var_name,
+                                            condition=f"hidden_matches_rule_{rule.id}",
+                                            action=rule.action,
                                             confidence=rule.confidence,
                                         )
                                     if rules:
                                         logic_engine.forward_chain()
-                                except Exception:
-                                    pass
+                                except Exception as _le:
+                                    logger.warning("[logic] engine population failed: %s", _le)
                         else:
                             symbolic_layer.extract_rules(
                                 hidden_states=rollout_hidden_states or [torch.from_numpy(obs).to(device)],
