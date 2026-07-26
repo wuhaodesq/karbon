@@ -256,20 +256,20 @@ class SceneBuilder:
 
     <!-- Spread objects on floor, table, shelf -->
 """
-        # Place objects
+        # Place objects — each wrapped in its own body for physics tracking
         for i, obj_data in enumerate(self._objects):
             obj = obj_data["def"]
             px, py, pz = obj_data["pos"]
             sx, sy, sz = obj.size
             if obj.kind == "sphere":
-                geom = f'<geom name="obj_{i}" type="sphere" size="{sx}" pos="{px} {py} {pz}" mass="{obj.mass}" material="obj_{i}_mat"/>'
+                geom = f'<geom type="sphere" size="{sx}" pos="0 0 0" mass="{obj.mass}" material="obj_{i}_mat"/>'
             elif obj.kind == "cylinder":
-                geom = f'<geom name="obj_{i}" type="cylinder" size="{sx} {pz}" pos="{px} {py} {pz}" mass="{obj.mass}" material="obj_{i}_mat"/>'
+                geom = f'<geom type="cylinder" size="{sx} {pz}" pos="0 0 0" mass="{obj.mass}" material="obj_{i}_mat"/>'
             elif obj.kind == "capsule":
-                geom = f'<geom name="obj_{i}" type="capsule" size="{sx} {sz}" pos="{px} {py} {pz}" mass="{obj.mass}" material="obj_{i}_mat"/>'
+                geom = f'<geom type="capsule" size="{sx} {sz}" pos="0 0 0" mass="{obj.mass}" material="obj_{i}_mat"/>'
             else:
-                geom = f'<geom name="obj_{i}" type="box" size="{sx} {sy} {sz}" pos="{px} {py} {pz}" mass="{obj.mass}" material="obj_{i}_mat"/>'
-            xml += f"    {geom}\n"
+                geom = f'<geom type="box" size="{sx} {sy} {sz}" pos="0 0 0" mass="{obj.mass}" material="obj_{i}_mat"/>'
+            xml += f'    <body name="obj_{i}" pos="{px} {py} {pz}">\n      {geom}\n    </body>\n'
 
         # Agents (movable spheres)
         for agent in self._agents:
@@ -364,6 +364,16 @@ class ThreeDWorld:
         self._auto_reset: bool = True
         self._sun_angle: float = 0.0
 
+        # --- Developmental signal trackers (Stage 8+) ---
+        self._occlusion_events: list[dict] = []
+        self._force_motion_pairs: list[dict] = []
+        self._count_trials: list[dict] = []
+        self._actions: list[int] = []
+        self._object_contact_order: list[int] = []
+        self._contacted: set[int] = set()
+        self._last_force_3d: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._active_occlusions_3d: dict[str, dict] = {}
+
         # Initial reset
         self._build_scene()
 
@@ -456,6 +466,34 @@ class ThreeDWorld:
 
         done = self._step_count >= self._max_steps
 
+        # --- Developmental signal tracking (Stage 8+) ---
+        self._actions.append(action)
+        self._track_3d_developmental_signals(dx, dy)
+
+        if done:
+            # Finalize count trial: count objects within agent's awareness radius
+            try:
+                learner_id = self._model.body("learner").id if self._model else None
+                ax = float(self._data.xpos[learner_id, 0]) if learner_id is not None else 0.0
+                ay = float(self._data.xpos[learner_id, 1]) if learner_id is not None else 0.0
+                # Count objects within 3.0 distance (wider 3D awareness)
+                nearby = 0
+                for i in range(self._num_objects):
+                    try:
+                        body_id = self._model.body(f"obj_{i}").id
+                        ox = float(self._data.xpos[body_id, 0])
+                        oy = float(self._data.xpos[body_id, 1])
+                        if ((ax - ox)**2 + (ay - oy)**2) ** 0.5 < 3.0:
+                            nearby += 1
+                    except Exception:
+                        continue
+                self._count_trials.append({
+                    "true_count": self._num_objects,
+                    "estimated_count": max(nearby, len(self._contacted)),
+                })
+            except Exception:
+                pass
+
         if done:
             self._episode_returns.append(self._current_return)
             if len(self._episode_returns) > 1024:  # BOUNDS-OK: rolling window cap
@@ -470,7 +508,14 @@ class ThreeDWorld:
             reward=reward,
             terminated=done,
             truncated=done,
-            info={"step": self._step_count, "dev_age": self._dev_age, "sun_angle": self._sun_angle},
+            info={
+                "step": self._step_count, "dev_age": self._dev_age, "sun_angle": self._sun_angle,
+                "occlusion_events": self._occlusion_events,
+                "force_motion_pairs": self._force_motion_pairs,
+                "count_trials": self._count_trials,
+                "actions": self._actions,
+                "object_contact_order": self._object_contact_order,
+            },
             proprio=self._proprio(),
         )
 
@@ -537,6 +582,15 @@ class ThreeDWorld:
 
         mujoco.mj_forward(self._model, self._data)
 
+        # Reset developmental trackers on scene rebuild
+        self._occlusion_events = []
+        self._force_motion_pairs = []
+        self._count_trials = []
+        self._actions = []
+        self._object_contact_order = []
+        self._contacted = set()
+        self._active_occlusions_3d = {}
+
     def _rebuild_scene(self) -> None:
         self._build_scene()
 
@@ -555,6 +609,87 @@ class ThreeDWorld:
         pixels = self._renderer.render()
         # pixels is (H, W, 3) float32 in [0, 1] → uint8
         return (np.clip(pixels, 0, 1) * 255).astype(np.uint8)
+
+    # ------------------------------------------------------------------ dev signals
+
+    def _track_3d_developmental_signals(self, dx: float, dy: float) -> None:
+        """Accumulate per-step developmental signals for milestone evaluation.
+
+        3D equivalents of PhysicsSandbox's _track_developmental_signals.
+        """
+        if self._model is None or self._data is None:
+            return
+
+        # --- force_motion_pairs ---
+        if abs(dx) > 0.01 or abs(dy) > 0.01:
+            learner_id = self._model.body("learner").id
+            ax = float(self._data.xpos[learner_id, 0])
+            ay = float(self._data.xpos[learner_id, 1])
+            # Movement direction
+            mag = (dx**2 + dy**2) ** 0.5
+            ux, uy = dx / max(mag, 0.01), dy / max(mag, 0.01)
+
+            for i in range(self._num_objects):
+                try:
+                    body_id = self._model.body(f"obj_{i}").id
+                    ox = float(self._data.xpos[body_id, 0])
+                    oy = float(self._data.xpos[body_id, 1])
+                    rel_x, rel_y = ox - ax, oy - ay
+                    # Object in front and close enough to be pushed
+                    if ux * rel_x + uy * rel_y > 0 and (rel_x**2 + rel_y**2) ** 0.5 < 0.4:
+                        vx = float(self._data.qvel[body_id, 0])
+                        vy = float(self._data.qvel[body_id, 1])
+                        self._force_motion_pairs.append({
+                            "force": (dx, dy),
+                            "velocity_after": (vx, vy),
+                            "object_id": i,
+                        })
+                except Exception:
+                    continue
+
+        # --- occlusion_events (3D: far objects with multi-step agent trajectory) ---
+        learner_id = self._model.body("learner").id
+        ax = float(self._data.xpos[learner_id, 0])
+        ay = float(self._data.xpos[learner_id, 1])
+        for i in range(self._num_objects):
+            try:
+                body_id = self._model.body(f"obj_{i}").id
+                ox = float(self._data.xpos[body_id, 0])
+                oy = float(self._data.xpos[body_id, 1])
+                dist = ((ax - ox)**2 + (ay - oy)**2) ** 0.5
+                if dist > 0.8:  # object is not immediately reachable
+                    # Track per-object trajectory over multiple steps
+                    key = f"occ_{i}"
+                    if key not in self._active_occlusions_3d:
+                        self._active_occlusions_3d[key] = {
+                            "last_known": (ox, oy),
+                            "agent_traj_during_occ": [],
+                        }
+                    self._active_occlusions_3d[key]["agent_traj_during_occ"].append((ax, ay))
+                else:
+                    # Object became reachable — finalize and emit event
+                    key = f"occ_{i}"
+                    if key in self._active_occlusions_3d:
+                        ev = self._active_occlusions_3d.pop(key)
+                        if len(ev["agent_traj_during_occ"]) >= 3:
+                            self._occlusion_events.append(ev)
+            except Exception:
+                continue
+
+        # --- object contact tracking ---
+        for i in range(self._num_objects):
+            if i in self._contacted:
+                continue
+            try:
+                body_id = self._model.body(f"obj_{i}").id
+                ox = float(self._data.xpos[body_id, 0])
+                oy = float(self._data.xpos[body_id, 1])
+                d = ((ax - ox)**2 + (ay - oy)**2) ** 0.5
+                if d < 0.25:
+                    self._contacted.add(i)
+                    self._object_contact_order.append(i)
+            except Exception:
+                continue
 
     def _compute_reward(self) -> float:
         """Multi-component reward.

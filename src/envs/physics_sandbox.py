@@ -130,6 +130,8 @@ class PhysicsSandbox:
         self._occlusion_events: list[dict] = []
         self._force_motion_pairs: list[dict] = []
         self._count_trials: list[dict] = []
+        self._actions: list[int] = []  # Stage 8+: systematic reasoning
+        self._object_contact_order: list[int] = []  # Stage 8+: means-ends
         self._active_occlusions: dict[int, dict] = {}
         self._contacted_this_ep: set[int] = set()
         self._last_force: tuple[float, float] = (0.0, 0.0)
@@ -224,6 +226,8 @@ class PhysicsSandbox:
         self._occlusion_events = []
         self._force_motion_pairs = []
         self._count_trials = []
+        self._actions = []
+        self._object_contact_order = []
         self._active_occlusions = {}
         self._contacted_this_ep = set()
         self._last_force = (0.0, 0.0)
@@ -288,6 +292,7 @@ class PhysicsSandbox:
         done = self._step_count >= self._max_steps
 
         # --- Developmental signal tracking (C#8) ---
+        self._actions.append(action)  # Stage 8+: systematic reasoning
         self._track_developmental_signals()
 
         if done:
@@ -317,10 +322,13 @@ class PhysicsSandbox:
             info={
                 "step": self._step_count,
                 "max_steps": self._max_steps,
-                # C#8 milestone signals (empty lists until populated)
+                # C#8 milestone signals
                 "occlusion_events": self._occlusion_events,
                 "force_motion_pairs": self._force_motion_pairs,
                 "count_trials": self._count_trials,
+                # Stage 8+ extended signals
+                "actions": self._actions,
+                "object_contact_order": self._object_contact_order,
             },
             proprio=self._proprioceptive(),
         )
@@ -363,6 +371,8 @@ class PhysicsSandbox:
             if occ and i not in self._active_occlusions:
                 self._active_occlusions[i] = {
                     "last_known": (obj.x, obj.y),
+                    "velocity_before_occ": (obj.vx, obj.vy),
+                    "occlusion_start_step": self._step_count,
                     "agent_traj_during_occ": [(agent.x, agent.y)],
                 }
             elif occ and i in self._active_occlusions:
@@ -372,6 +382,8 @@ class PhysicsSandbox:
             elif not occ and i in self._active_occlusions:
                 ev = self._active_occlusions.pop(i)
                 if len(ev["agent_traj_during_occ"]) >= 2:
+                    ev["actual_position_after"] = (obj.x, obj.y)
+                    ev["occlusion_duration"] = max(1, self._step_count - ev.pop("occlusion_start_step", 0))
                     self._occlusion_events.append(ev)
 
         # --- contact tracking for number-sense probe ---
@@ -380,6 +392,7 @@ class PhysicsSandbox:
             dy = agent.y - obj.y
             if np.sqrt(dx * dx + dy * dy) < agent.radius + obj.radius + 0.02:
                 self._contacted_this_ep.add(i)
+                self._object_contact_order.append(i)  # Stage 8+: means-ends
 
     @staticmethod
     def _is_occluded(agent: "_Body", obj: "_Body") -> bool:

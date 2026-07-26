@@ -16,13 +16,18 @@ stage: 8
 name: "stage8_full_cognitive"
 
 model:
+  hidden_size: 128
   use_hybrid_backbone: true
-  hybrid_n_layers: 3
+  hybrid_n_layers: 7
   hybrid_n_heads: 4
   hybrid_swa_window: 16
   hybrid_ttt_mini_batch: 8
   hybrid_ffn_hidden_mult: 4
   hybrid_dropout: 0.0
+  use_slot_attention: true
+  slot_num_slots: 7
+  slot_dim: 128
+  slot_num_iterations: 3
   # Vision encoder (DINOv2) - falls back to CNN if unavailable
   use_vision_encoder: true
   vision_model: dinov2_vits14
@@ -108,7 +113,7 @@ continual:
   ewc_consolidate_num_batches: 32
   ewc_batch_size: 32
   gr_enabled: true
-  gr_latent_dim: 32
+  gr_latent_dim: 64
   gr_hidden: 128
   gr_lr: 1.0e-3
   gr_kl_weight: 1.0
