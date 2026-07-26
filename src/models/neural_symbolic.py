@@ -507,7 +507,9 @@ class NeuralSymbolicLayer(nn.Module):
         for t, h in enumerate(hidden_states):
             h_proj = self.rule_projection(h.squeeze(0) if h.dim() == 2 else h)
             for r in rules:
-                if torch.equal(h_proj, r.condition_embedding):
+                # Ensure same device for comparison
+                r_emb = r.condition_embedding.to(h_proj.device)
+                if torch.equal(h_proj, r_emb):
                     rule_by_step[t] = r
                     break
         sorted_steps = sorted(rule_by_step.keys())
