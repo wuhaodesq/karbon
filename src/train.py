@@ -2446,7 +2446,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                 rewards=rollout_rewards or [float(ep_ret)],
                             )
                     except Exception as _e:
-                        logger.warning("[symbolic] rule extraction failed (ep_ret=%.1f): %s", ep_ret, str(_e)[:120])
+                        logger.warning("[symbolic] rule extraction failed (ep_ret=%.1f): %s", ep_ret, str(_e))
 
                 # --- Stage 7: reflection after episode ---
                 if reflection_loop is not None:
