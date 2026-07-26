@@ -1134,7 +1134,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 max_variables=int(cognitive_cfg.get("logic_max_variables", 16)),
                 match_threshold=float(cognitive_cfg.get("logic_match_threshold", 0.7)),
                 use_trainable_unifier=True,
-            )
+            ).to(device)
             health.register("logic_engine", logic_engine)
             logger.info("LogicEngine enabled (variables + quantification + forward chaining)")
 
