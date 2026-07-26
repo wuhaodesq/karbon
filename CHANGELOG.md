@@ -5,6 +5,49 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### 踩坑记录: Stage 9 符号/逻辑引擎修复 (2026-07-26)
+
+#### 现象
+`rules=0 logic=0` 持续 200k 步。符号层和逻辑引擎虽已激活但从未产出。
+
+#### 根因 (5 个 bug)
+
+**Bug 1 — 符号层设备不匹配 (neural_symbolic.py + train.py)**
+- `train.py:2069` 将 hidden states 移到 CPU (`.cpu()`) 用于 episode 收集
+- `extract_rules()` 调用时未移回 GPU, 导致 `self.rule_projection(h)` 抛 RuntimeError
+- 异常被 `train.py:2414` 的 `except Exception: pass` 静默吞掉
+- **修复**: `extract_rules` 入口统一 `hidden_states = [h.to(_device) for h in hidden_states]`
+
+**Bug 2 — buffer.rewards 类型错误 (train.py)**
+- `buffer.rewards` 是 (T, N) 批次格式, `.tolist()` 得到 `[[r0],[r1],...]` 而非 `[r0,r1,...]`
+- `step_advantages = [r - mean_ret_val for r in buf_rewards]` 对嵌套列表报 `unsupported operand type(s)`
+- **修复**: 展平: `buf_rewards = [r[0] if isinstance(r, list) else r for r in buf_rewards]`
+
+**Bug 3 — _rule_matrix 设备不一致 (neural_symbolic.py)**
+- 修复 Bug 1 后新增规则存 GPU embedding, 旧规则仍为 CPU
+- `_rebuild_matrices` 用 `r.condition_embedding` 直接赋值, 混合 CPU/GPU
+- `F.cosine_similarity` 在不同设备张量间报错
+- **修复**: `_rebuild_matrices` 中统一 `.to(_dev)`, `add()` 中 `_matrix.to(embedding.device)`
+
+**Bug 4 — logic_engine.add_rule() 参数错误 (train.py)**
+- 实际签名: `add_rule(quantifier, variable_name, condition, action)`
+- 错误调用: `add_rule(condition=..., conclusion=...)`
+- **修复**: 传入正确的 `Quantifier.EXISTENTIAL` + `variable_name` + `action`
+
+**Bug 5 — logic_engine.define_variable() 参数错误 (train.py)**
+- 实际签名: `define_variable(name, var_type, category_embedding)`
+- 错误调用: `define_variable(name=...)` (缺 `var_type` 和 `category_embedding`)
+- **修复**: 传入 `VariableType.STATE` + `rule.condition_embedding`
+
+#### 教训
+1. **不要 `except Exception: pass` 静默吞错**——改为 `logger.warning` 至少能看见
+2. **跨模块调用先读签名**——不要假设参数名, 直接看源码
+3. **`except: pass` 是项目最大的藏 bug 窝点**——建议全量 grep 并替换为 `logger.warning`
+
+#### 相关 Bug (本日)
+- **EWC 设备不匹配**: `OnlineEWC.state_dict()` 存 CPU, `load_state_dict()` 只 clone 不移回 GPU → consolidate 时 CPU/GPU 张量混合。修复: `load_state_dict` 加 `device` 参数; `consolidate` 用 `model.parameters` 推断设备
+- **Stage 6 ckpt_dir 未导入**: train.py 退出段 `backup_stage` 调用 `ckpt_dir()` 但 import 漏引 → `NameError`, `[fossil]` 封印行丢失
+
 ### 修复: Stage 6 退出段 `ckpt_dir` 未导入导致备份+化石封印失败 (2026-07-24)
 - `train.py:101` 补 `ckpt_dir` 导入, 原 `from src.platform import ...` 漏引,
   导致退出段 auto-backup `shutil.copy2` 时抛 `NameError`, `[fossil]` 封印行
