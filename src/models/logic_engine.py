@@ -112,13 +112,11 @@ class Variable:
     bindings: list = field(default_factory=list)  # bounded by max_bindings
 
     def match(self, hidden_state: torch.Tensor, threshold: float = 0.7) -> float:
-        """Check if a hidden state belongs to this variable's category.
-
-        Returns cosine similarity (0-1). If >= threshold, it's a match.
-        """
+        """Check if a hidden state belongs to this variable's category."""
+        _emb = self.category_embedding.to(hidden_state.device)
         cos = F.cosine_similarity(
             hidden_state.unsqueeze(0),
-            self.category_embedding.unsqueeze(0),
+            _emb.unsqueeze(0),
             dim=1,
         )
         return float(cos.item())
@@ -266,8 +264,9 @@ class LogicEngine:
         if self._unifier is not None:
             # Trainable matcher
             for var in vars_list:
+                var_emb = var.category_embedding.to(hidden_state.device)
                 prob = float(self._unifier.unify(
-                    hidden_state.unsqueeze(0), var.category_embedding.unsqueeze(0),
+                    hidden_state.unsqueeze(0), var_emb.unsqueeze(0),
                 ).item())
                 if prob >= self._threshold:
                     matches.append((var, prob))
