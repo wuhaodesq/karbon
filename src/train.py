@@ -1121,6 +1121,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 match_threshold=float(cognitive_cfg.get("symbolic_match_threshold", 0.7)),
                 extraction_reward_threshold=float(cognitive_cfg.get("symbolic_extraction_reward_threshold", 0.3)),
                 override_confidence_threshold=float(cognitive_cfg.get("symbolic_override_confidence_threshold", 0.6)),
+                bias_weight=float(cognitive_cfg.get("symbolic_bias_weight", 0.5)),
             ).to(device)
             health.register("symbolic_rules", symbolic_layer.rule_memory)
             logger.info("NeuralSymbolicLayer enabled (max_rules=%d)", symbolic_layer.rule_memory.capacity)
@@ -3148,8 +3149,8 @@ and state.step % 50000 < rollout_capacity):
                     _, _, hidden = model(first_obs, return_hidden=True)
                     logits_check, _ = model(first_obs)
                 final_logits, sym_info = symbolic_layer(hidden, logits_check)
-                if sym_info.get("override", False):
-                    logger.info("[symbolic] rule #%d matched (sim=%.2f), action overridden",
+                if sym_info.get("override", False) or sym_info.get("biased", False):
+                    logger.info("[symbolic] rule #%d matched (sim=%.2f), action biased",
                                 sym_info.get("rule_id", -1), sym_info.get("rule_sim", 0))
             except Exception as _se:
                 logger.warning("[symbolic] override check failed: %s", str(_se)[:120])

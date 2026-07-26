@@ -342,12 +342,14 @@ class NeuralSymbolicLayer(nn.Module):
         match_threshold: float = 0.7,
         extraction_reward_threshold: float = 0.3,
         override_confidence_threshold: float = 0.6,
+        bias_weight: float = 0.5,
     ) -> None:
         super().__init__()
         self._d_model = d_model
         self._num_actions = num_actions
         self._match_threshold = match_threshold
         self._extraction_reward_threshold = extraction_reward_threshold
+        self._bias_weight = bias_weight
 
         # Contrastive head: learns to separate rule condition embeddings
         # so that cosine similarity becomes discriminative (not random).
@@ -402,21 +404,21 @@ class NeuralSymbolicLayer(nn.Module):
         rule, sim = self.rule_memory.match(h_projected, threshold=self._match_threshold)
 
         if rule is not None and rule.confidence >= self._override_threshold:
-            # Rule override: force the rule's action
+            # Soft bias injection: add preference to rule's action
+            # PPO policy network receives gradient and can learn from this bias
             info["rule_matched"] = True
             info["rule_id"] = rule.id
             info["rule_sim"] = sim
-            info["override"] = True
+            info["override"] = False  # soft bias, not hard override
+            info["biased"] = True
             self._last_matched_rule_id = rule.id
             rule.usage_count += 1
             rule.last_used_step += 1
 
-            # Create logits that strongly prefer the rule's action
-            override_logits = torch.full_like(neural_logits, -10.0)
-            override_logits[:, rule.action] = 10.0 * rule.confidence
-            # Blend: 70% rule + 30% neural (soft override)
-            alpha = 0.7 * rule.confidence
-            final_logits = alpha * override_logits + (1 - alpha) * neural_logits
+            # Add bias to rule's preferred action (PG still learns from env reward)
+            bias = self._bias_weight * rule.confidence
+            final_logits = neural_logits.clone()
+            final_logits[:, rule.action] += bias
             return final_logits, info
 
         if rule is not None:

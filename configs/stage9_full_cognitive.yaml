@@ -43,6 +43,7 @@ llm_fusion:
 cognitive:
   symbolic_enabled: true
   symbolic_max_rules: 64
+  symbolic_bias_weight: 0.5
   self_model_enabled: true
   self_model_d_model: 384
   self_model_hidden: 64
