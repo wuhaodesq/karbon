@@ -2417,11 +2417,16 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                             # Stage 9: populate logic engine from extracted symbolic rules
                             if logic_engine is not None and symbolic_layer.rule_memory is not None:
                                 try:
-                                    from src.models.logic_engine import Quantifier
+                                    from src.models.logic_engine import Quantifier, VariableType
                                     rules = list(symbolic_layer.rule_memory._rules.values())
                                     for rule in rules[-4:]:
                                         var_name = f"state_var_{rule.id}"
-                                        logic_engine.define_variable(name=var_name)
+                                        # Use rule's condition embedding as variable category
+                                        logic_engine.define_variable(
+                                            name=var_name,
+                                            var_type=VariableType.STATE,
+                                            category_embedding=rule.condition_embedding,
+                                        )
                                         logic_engine.add_rule(
                                             quantifier=Quantifier.EXISTENTIAL,
                                             variable_name=var_name,
