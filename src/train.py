@@ -3164,7 +3164,7 @@ and state.step % 50000 < rollout_capacity):
                     logger.info("[logic] rule '%s' fired (conf=%.2f)",
                                 best_rule.condition, best_rule.confidence)
             except Exception as _le:
-                logger.warning("[logic] reasoning failed: %s", str(_le)[:120])
+                logger.warning("[logic] reasoning failed: %s", _le)
 
         if (state.step // log_every) > (max(0, state.step - rollout_capacity) // log_every):
             summary = env.summary()
