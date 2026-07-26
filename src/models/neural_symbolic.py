@@ -222,13 +222,15 @@ class RuleMemory:
 
         rules = list(self._rules.values())
         n = len(rules)
+        # Ensure device consistency: match on the same device as input
+        _matrix = self._rule_matrix[:n].to(hidden_state.device)
+        _confs = self._rule_confidences[:n].to(hidden_state.device)
         cos = F.cosine_similarity(
             hidden_state.unsqueeze(0),
-            self._rule_matrix[:n],
+            _matrix,
             dim=1,
         )
-        # Weight by confidence
-        weighted = cos * self._rule_confidences[:n]
+        weighted = cos * _confs
         best_idx = int(weighted.argmax().item())
         best_sim = float(cos[best_idx].item())
 
