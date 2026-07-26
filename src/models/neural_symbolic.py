@@ -451,6 +451,9 @@ class NeuralSymbolicLayer(nn.Module):
             List of newly created/updated rules.
         """
         new_rules: list[Rule] = []
+        # Ensure all hidden states on model device
+        _device = self.rule_projection.weight.device
+        hidden_states = [h.to(_device) for h in hidden_states]
         for t in range(len(hidden_states)):
             # Prefer advantage (>0 means better than baseline), fall back to reward
             if advantages is not None and t < len(advantages):

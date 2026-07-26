@@ -2392,27 +2392,51 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         if len(rollout_hidden_states) > 0 and len(buffer.rewards) > 0:
                             n_rollout = min(len(rollout_hidden_states), len(buffer.rewards))
                             buf_rewards = buffer.rewards[:n_rollout].cpu().tolist()
+                            # Flatten from (T, N) → [r0, r1, ...]
+                            if isinstance(buf_rewards[0], list):
+                                buf_rewards = [r[0] if isinstance(r, list) else r for r in buf_rewards]
                             buf_vals = buffer.values[:n_rollout].cpu().tolist()
-                            # Simple advantage: reward - baseline for steps where baseline exists
-                            with torch.no_grad():
-                                # Use mean return as crude advantage proxy
-                                mean_ret_val = ep_ret / max(1, n_rollout)
-                                step_advantages = [r - mean_ret_val for r in buf_rewards]
+                            if isinstance(buf_vals[0], list):
+                                buf_vals = [v[0] if isinstance(v, list) else v for v in buf_vals]
+                            mean_ret_val = ep_ret / max(1, n_rollout)
+                            step_advantages = [r - mean_ret_val for r in buf_rewards]
+                            # Move ALL hidden states back to device for GPU model
+                            gpu_hidden = []
+                            for h in rollout_hidden_states:
+                                if isinstance(h, torch.Tensor):
+                                    gpu_hidden.append(h.to(device))
+                            if not gpu_hidden:
+                                continue  # skip if no valid tensors
                             symbolic_layer.extract_rules(
-                                hidden_states=rollout_hidden_states[:n_rollout],
-                                actions=rollout_actions[:n_rollout],
-                                rewards=rollout_rewards[:n_rollout],
+                                hidden_states=gpu_hidden,
+                                actions=rollout_actions,
+                                rewards=rollout_rewards,
                                 advantages=step_advantages,
                                 descriptions=[f"IF see {curr_active_task.tag if curr_active_task else 'env'} THEN act"],
                             )
+                            # Stage 9: populate logic engine from extracted symbolic rules
+                            if logic_engine is not None and symbolic_layer.rule_memory is not None:
+                                try:
+                                    rules = list(symbolic_layer.rule_memory._rules.values())
+                                    for rule in rules[-4:]:  # latest rules
+                                        desc = getattr(rule, 'description', '') or f"rule_{rule.id}"
+                                        logic_engine.add_rule(
+                                            condition=f"symbolic_{rule.id}",
+                                            conclusion=f"action_{rule.action}",
+                                            confidence=rule.confidence,
+                                        )
+                                    if rules:
+                                        logic_engine.forward_chain()
+                                except Exception:
+                                    pass
                         else:
                             symbolic_layer.extract_rules(
                                 hidden_states=rollout_hidden_states or [torch.from_numpy(obs).to(device)],
                                 actions=rollout_actions or [int(action.item())],
                                 rewards=rollout_rewards or [float(ep_ret)],
                             )
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        logger.warning("[symbolic] rule extraction failed (ep_ret=%.1f): %s", ep_ret, str(_e)[:120])
 
                 # --- Stage 7: reflection after episode ---
                 if reflection_loop is not None:
