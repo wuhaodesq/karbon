@@ -3141,21 +3141,30 @@ and state.step % 50000 < rollout_capacity):
                 pass
 
         # --- Stage 7: symbolic rule override on next batch ---
-        if symbolic_layer is not None:
+        if symbolic_layer is not None and len(symbolic_layer.rule_memory) > 0:
             try:
-                # Use the first obs in the batch for symbolic reasoning
                 first_obs = batch.obs[0:1]
                 with torch.no_grad():
+                    _, _, hidden = model(first_obs, return_hidden=True)
                     logits_check, _ = model(first_obs)
-                final_logits, sym_info = symbolic_layer(
-                    model(first_obs)[0],  # hidden state proxy = logits
-                    logits_check,
-                )
+                final_logits, sym_info = symbolic_layer(hidden, logits_check)
                 if sym_info.get("override", False):
-                    logger.debug("[symbolic] rule #%d matched (sim=%.2f), action overridden",
-                                 sym_info.get("rule_id", -1), sym_info.get("rule_sim", 0))
-            except Exception:
-                pass  # never crash training for symbolic reasoning
+                    logger.info("[symbolic] rule #%d matched (sim=%.2f), action overridden",
+                                sym_info.get("rule_id", -1), sym_info.get("rule_sim", 0))
+            except Exception as _se:
+                logger.warning("[symbolic] override check failed: %s", str(_se)[:120])
+
+        # --- Stage 9: logic engine reasoning ---
+        if logic_engine is not None and len(logic_engine) > 0:
+            try:
+                with torch.no_grad():
+                    _, _, hidden = model(batch.obs[0:1], return_hidden=True)
+                best_rule, info = logic_engine.reason(hidden.squeeze(0))
+                if best_rule is not None:
+                    logger.info("[logic] rule '%s' fired (conf=%.2f)",
+                                best_rule.condition, best_rule.confidence)
+            except Exception as _le:
+                logger.warning("[logic] reasoning failed: %s", str(_le)[:120])
 
         if (state.step // log_every) > (max(0, state.step - rollout_capacity) // log_every):
             summary = env.summary()
