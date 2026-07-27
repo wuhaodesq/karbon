@@ -745,8 +745,9 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             seed=42,
             max_episode_steps=env_cfg.get("max_episode_steps"),
             auto_reset=True,
+            render_size=int(env_cfg.get("render_size", 64)),
         )
-        logger.info("Env: %s (MiniGrid wrapper)", env_cfg["id"])
+        logger.info("Env: %s (MiniGrid wrapper, render=%d)", env_cfg["id"], env_cfg.get("render_size", 64))
 
     obs = env.reset()
     obs_shape = env.observation_shape
