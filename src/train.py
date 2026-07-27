@@ -1842,6 +1842,10 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 except Exception as exc:
                     logger.warning(
                         "State mismatch on resume for %s (%s); starting fresh.", key, exc)
+                    # Cross-environment resume: rebuild module if shape mismatch
+                    if key == "ewc_state" and ewc is not None:
+                        ewc = OnlineEWC(model, ewc.config)
+                        logger.info("EWC re-anchored to current model shape")
         resumed_stage = int(payload.get("stage", stage))
         resumed_step = int(payload.get("step", 0))
         # Enforce a growth cooldown from the resumed step so the transient
