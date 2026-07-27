@@ -106,25 +106,80 @@ class MiniGridWrapper:
         except Exception:
             return False
 
+    def _find_object(self, obj_type: str) -> tuple[int, int] | None:
+        """Find position of first object of given type in the grid."""
+        try:
+            raw = self._env.unwrapped
+            for i in range(raw.width):
+                for j in range(raw.height):
+                    obj = raw.grid.get(i, j)
+                    if obj is not None and obj.type == obj_type:
+                        return (i, j)
+        except Exception:
+            pass
+        return None
+
+    def _agent_pos(self) -> tuple[int, int] | None:
+        """Get agent grid position."""
+        try:
+            raw = self._env.unwrapped
+            return tuple(raw.agent.pos)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _manhattan(a, b) -> float:
+        return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
     def step(self, action: int) -> EnvStep:
         # Snapshot state before step for shaped reward
         prev_carrying = self._get_carrying()
         prev_doors = self._get_door_states()
+        prev_pos = self._agent_pos()
+        # Find target: key if not carrying, else door, else goal
+        if not prev_carrying:
+            target = self._find_object('key')
+        else:
+            # Find closed door or goal
+            target = None
+            try:
+                raw = self._env.unwrapped
+                for i in range(raw.width):
+                    for j in range(raw.height):
+                        obj = raw.grid.get(i, j)
+                        if obj is not None and obj.type == 'door' and not obj.is_open:
+                            target = (i, j)
+                            break
+                if target is None:
+                    target = self._find_object('goal')
+            except Exception:
+                pass
+        prev_dist = self._manhattan(prev_pos, target) if (prev_pos and target) else None
 
         obs, reward, terminated, truncated, info = self._env.step(int(action))
 
-        # --- Shaped reward: intermediate signals for doorkey tasks ---
+        # --- Shaped reward ---
         shaped = 0.0
         now_carrying = self._get_carrying()
-        if not prev_carrying and now_carrying:
-            shaped += 0.1  # picked up key
+        now_pos = self._agent_pos()
 
+        # +0.1 for picking up key
+        if not prev_carrying and now_carrying:
+            shaped += 0.1
+
+        # +0.5 for opening a door
         now_doors = self._get_door_states()
         for pos, was_open in prev_doors.items():
             is_open = now_doors.get(pos, was_open)
             if not was_open and is_open:
-                shaped += 0.5  # opened a door
+                shaped += 0.5
                 break
+
+        # +0.01 for moving closer to target (continuous gradient)
+        if prev_dist is not None and now_pos and target:
+            now_dist = self._manhattan(now_pos, target)
+            if now_dist < prev_dist:
+                shaped += 0.01 * (prev_dist - now_dist)
 
         reward = float(reward) + shaped
         obs_arr = self._maybe_resize(np.asarray(obs, dtype=np.uint8))
