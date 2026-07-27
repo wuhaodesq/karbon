@@ -1950,7 +1950,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     curr_active_task: TaskTemplate | None = None
     if curriculum is not None:
         # Start with the easiest task (id=0) for stable early training
-        curr_active_task = curriculum.tasks[0] if curriculum.tasks else curriculum.sample_task()
+        curr_active_task = curriculum._tasks[0] if curriculum._tasks else curriculum.sample_task()
         logger.info("Curriculum: initial task=%s (id=%d)",
                     curr_active_task.tag, curr_active_task.id)
         try:
