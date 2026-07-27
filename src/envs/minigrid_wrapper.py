@@ -40,6 +40,7 @@ class MiniGridWrapper:
         seed: int | None = None,
         max_episode_steps: int | None = None,
         auto_reset: bool = True,
+        render_size: int | None = None,
     ) -> None:
         try:
             import gymnasium as gym
@@ -56,23 +57,37 @@ class MiniGridWrapper:
 
         self._seed = seed
         self._auto_reset = auto_reset
+        self._render_size = render_size
         self._last_obs: np.ndarray | None = None
         self._episode_returns: list[float] = []
         self._current_return: float = 0.0
         self._episode_lengths: list[int] = []
         self._current_length: int = 0
 
+    def _maybe_resize(self, obs: np.ndarray) -> np.ndarray:
+        """Resize observation to render_size if specified."""
+        if self._render_size is None:
+            return obs
+        h, w = obs.shape[:2]
+        if h == self._render_size and w == self._render_size:
+            return obs
+        from PIL import Image
+        img = Image.fromarray(obs)
+        img = img.resize((self._render_size, self._render_size), Image.NEAREST)
+        return np.array(img, dtype=np.uint8)
+
     # ------------------------------------------------------------ Gym-like API
 
     def reset(self, seed: int | None = None) -> np.ndarray:
         obs, _info = self._env.reset(seed=seed if seed is not None else self._seed)
-        self._last_obs = np.asarray(obs, dtype=np.uint8)
+        self._last_obs = self._maybe_resize(np.asarray(obs, dtype=np.uint8))
         self._current_return = 0.0
         self._current_length = 0
         return self._last_obs
 
     def step(self, action: int) -> EnvStep:
         obs, reward, terminated, truncated, info = self._env.step(int(action))
+        obs_arr = self._maybe_resize(np.asarray(obs, dtype=np.uint8))
         self._current_return += float(reward)
         self._current_length += 1
         done = bool(terminated) or bool(truncated)
@@ -84,9 +99,10 @@ class MiniGridWrapper:
                 self._episode_lengths = self._episode_lengths[-1024:]
             if self._auto_reset:
                 obs, _info = self._env.reset()
+                obs_arr = self._maybe_resize(np.asarray(obs, dtype=np.uint8))
             self._current_return = 0.0
             self._current_length = 0
-        self._last_obs = np.asarray(obs, dtype=np.uint8)
+        self._last_obs = obs_arr
         return EnvStep(
             obs=self._last_obs,
             reward=float(reward),

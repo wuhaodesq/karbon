@@ -665,6 +665,7 @@ def _build_env_from_spec(spec: dict[str, Any], env_cfg: dict[str, Any]):
         seed=42,
         max_episode_steps=env_cfg.get("max_episode_steps"),
         auto_reset=True,
+        render_size=int(env_cfg.get("render_size", 64)),
     )
 
 
