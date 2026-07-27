@@ -1949,9 +1949,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     curr_report_every = int(curriculum_cfg.get("report_every_steps", 500)) if curriculum_cfg else 0
     curr_active_task: TaskTemplate | None = None
     if curriculum is not None:
-        # Start with the first task; rebuild env so training begins on the
-        # sampled curriculum task (not the fixed base env_cfg env).
-        curr_active_task = curriculum.sample_task()
+        # Start with the easiest task (id=0) for stable early training
+        curr_active_task = curriculum.tasks[0] if curriculum.tasks else curriculum.sample_task()
         logger.info("Curriculum: initial task=%s (id=%d)",
                     curr_active_task.tag, curr_active_task.id)
         try:
