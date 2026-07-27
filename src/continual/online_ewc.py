@@ -194,9 +194,12 @@ class OnlineEWC:
         for name, p in model.named_parameters():
             if name not in self._fisher:
                 continue
-            F = self._fisher[name]
             anchor = self._anchor[name].to(p.device)
-            loss = (F.to(p.device) * (p - anchor).pow(2)).sum()
+            F = self._fisher[name].to(p.device)
+            # Skip parameters with shape mismatch (e.g. cross-env resume)
+            if p.shape != anchor.shape or p.shape != F.shape:
+                continue
+            loss = (F * (p - anchor).pow(2)).sum()
             losses.append(loss)
         total = torch.stack(losses).sum() * (self.config.lambda_reg / 2.0)
         return total
