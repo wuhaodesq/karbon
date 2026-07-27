@@ -85,8 +85,48 @@ class MiniGridWrapper:
         self._current_length = 0
         return self._last_obs
 
+    def _get_door_states(self) -> dict:
+        """Snapshot door open/close states from underlying MiniGrid env."""
+        doors = {}
+        try:
+            raw = self._env.unwrapped
+            for i in range(raw.width):
+                for j in range(raw.height):
+                    obj = raw.grid.get(i, j)
+                    if obj is not None and hasattr(obj, 'is_open'):
+                        doors[(i, j)] = obj.is_open
+        except Exception:
+            pass
+        return doors
+
+    def _get_carrying(self) -> bool:
+        """Check if agent is carrying something."""
+        try:
+            return self._env.unwrapped.agent.carrying is not None
+        except Exception:
+            return False
+
     def step(self, action: int) -> EnvStep:
+        # Snapshot state before step for shaped reward
+        prev_carrying = self._get_carrying()
+        prev_doors = self._get_door_states()
+
         obs, reward, terminated, truncated, info = self._env.step(int(action))
+
+        # --- Shaped reward: intermediate signals for doorkey tasks ---
+        shaped = 0.0
+        now_carrying = self._get_carrying()
+        if not prev_carrying and now_carrying:
+            shaped += 0.1  # picked up key
+
+        now_doors = self._get_door_states()
+        for pos, was_open in prev_doors.items():
+            is_open = now_doors.get(pos, was_open)
+            if not was_open and is_open:
+                shaped += 0.5  # opened a door
+                break
+
+        reward = float(reward) + shaped
         obs_arr = self._maybe_resize(np.asarray(obs, dtype=np.uint8))
         self._current_return += float(reward)
         self._current_length += 1
