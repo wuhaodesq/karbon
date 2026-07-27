@@ -1744,16 +1744,26 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
 
     if resume is not None:
         payload = load_ckpt(resume)
+        _model_mismatch = False
         try:
             model.load_state_dict(payload["model_state"])
         except RuntimeError as exc:
-            # Cross-stage resume with different model shape: warn + skip.
+            _model_mismatch = True
             logger.warning("Model state mismatch on resume (%s); starting model fresh.", exc)
-        if payload.get("optim_state"):
+        if payload.get("optim_state") and not _model_mismatch:
             try:
                 optimizer.load_state_dict(payload["optim_state"])
             except (ValueError, RuntimeError) as exc:
                 logger.warning("Optimizer state mismatch on resume (%s); starting fresh.", exc)
+            # Verify loaded state is compatible with current model
+            try:
+                _dummy = torch.zeros(1, device=device, requires_grad=True)
+                _dummy.backward()
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+            except RuntimeError:
+                logger.warning("Optimizer state shape mismatch; reinitializing optimizer.")
+                optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         # Restore the autonomous grower's state so its layer count and growth
         # bookkeeping stay in sync with the (resumed) model. Without this the
         # grower is recreated as `initial_layers` (2) while the model may already
