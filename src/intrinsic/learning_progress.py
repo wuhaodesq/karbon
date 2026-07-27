@@ -128,16 +128,21 @@ class LearningProgressTracker:
         return raw_lp
 
     def priorities(self, tasks: Iterable[int] | None = None) -> dict[int, float]:
-        """Return per-task priority (max(|LP|, epsilon)) for curriculum sampling.
+        """Return per-task priority for curriculum sampling.
 
-        Uses ``|LP|`` because "still improving" and "getting worse (forgetting)"
-        are both signals worth attending to. Follows Oudeyer's ACL scheme.
+        Unexplored tasks get priority 1.0 (same as a actively-learning task)
+        to ensure they get sampled. Uses ``|LP|`` for known tasks.
         """
         if tasks is None:
             tasks = list(self._errors.keys())
         out: dict[int, float] = {}
         for t in tasks:
-            out[t] = abs(self.learning_progress(t)) + 1e-6
+            lp = self.learning_progress(t)
+            if lp == 0.0 and t not in self._errors:
+                # Unexplored task: give high priority to ensure exploration
+                out[t] = 1.0
+            else:
+                out[t] = abs(lp) + 1e-6
         return out
 
     def normalize_priorities(self, tasks: Iterable[int] | None = None) -> dict[int, float]:

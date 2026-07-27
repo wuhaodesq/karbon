@@ -64,7 +64,7 @@ curriculum:
   max_tasks: 5
   lp_window_size: 32
   lp_min_samples: 8
-  exploration_epsilon: 0.1
+  exploration_epsilon: 0.3
   smoothing: 0.5
   switch_every_steps: 50000
   report_every_steps: 500
