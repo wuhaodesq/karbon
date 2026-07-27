@@ -157,8 +157,16 @@ def main() -> None:
         action_force=float(env_cfg.get("action_force", 50.0)),
     )
     obs_shape = env.observation_shape
-    num_actions = env.action_space_n
-    print(f"[eval] Env: PhysicsSandbox obs_shape={obs_shape} actions={num_actions}")
+    # --- Infer num_actions from ckpt to handle cross-env resume ---
+    _ck = torch.load(args.ckpt, map_location="cpu")
+    _state = _ck.get("model_state") if isinstance(_ck, dict) else _ck
+    _num_actions = 8  # default
+    for key in _state:
+        if "policy_head.weight" in key:
+            _num_actions = _state[key].shape[0]
+            break
+    num_actions = _num_actions
+    print(f"[eval] num_actions={num_actions} (from ckpt)")
 
     # --- Build model with SAME layer count as ckpt, load weights ---
     n_layers = _ckpt_layer_count(args.ckpt)
