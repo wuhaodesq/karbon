@@ -109,7 +109,8 @@ def main():
                 with torch.no_grad():
                     out = model(obs_t)
                 logits = out[0] if isinstance(out, (tuple, list)) else out
-                action = int(torch.argmax(logits, dim=-1).item())
+                dist = torch.distributions.Categorical(logits=logits)
+                action = int(dist.sample().item())
                 step_out = env.step(action)
                 obs = step_out.obs
                 ep_ret += float(step_out.reward)
