@@ -148,6 +148,9 @@ class OnlineEWC:
             for name, p in model.named_parameters():
                 if name not in accum or p.grad is None:
                     continue
+                # Skip params with shape mismatch (cross-env resume)
+                if accum[name].shape != p.grad.shape:
+                    continue
                 accum[name] += p.grad.detach().pow(2)
             count += 1
 
@@ -156,7 +159,14 @@ class OnlineEWC:
             return
 
         for name in self._param_names:
+            if name not in accum:
+                continue
             new_fisher = accum[name] / count
+            # Skip if Fisher shape doesn't match stored shape
+            if self._fisher[name].shape != new_fisher.shape:
+                self._fisher[name] = new_fisher.clone()
+                self._anchor[name] = dict(model.named_parameters())[name].detach().clone()
+                continue
             # Exponential decay accumulation
             self._fisher[name] = self.config.gamma * self._fisher[name] + new_fisher
 
