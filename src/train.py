@@ -1808,12 +1808,15 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         "Skill library state mismatch on resume (%s); starting fresh.", exc)
         # --- Restore all extra module states from checkpoint ---
         _extra = payload.get("extra") or {}
+        _resumed_stage = int(payload.get("stage", stage))
+        _is_cross_stage = (_resumed_stage != stage)
         _restore_map: list[tuple[str, object | None, str | None]] = [
             ("rnd_state",                rnd,                          None),
             ("coverage_state",           coverage,                     None),
             ("wm_state",                 wm,                           None),
             ("wm_optim_state",           wm_optimizer,                 None),
-            ("curriculum_state",         curriculum,                   None),
+            # Skip curriculum restore on cross-stage: new stage has different env/tasks
+            ("curriculum_state",         None if _is_cross_stage else curriculum, None),
             ("ewc_state",                ewc,                          None),
             ("gr_vae_state",             grep_vae,                     None),
             ("sleep_loop_state",         sleep_loop,                   None),
