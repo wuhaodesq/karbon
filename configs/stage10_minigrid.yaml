@@ -69,9 +69,9 @@ curriculum:
   switch_every_steps: 50000
   report_every_steps: 500
   tasks:
-    - {id: 0, env_id: "MiniGrid-Empty-5x5-v0",  difficulty: 0.1, tag: "empty-5x5"}
-    - {id: 1, env_id: "MiniGrid-Empty-8x8-v0",  difficulty: 0.3, tag: "empty-8x8"}
-    - {id: 2, env_id: "MiniGrid-DoorKey-5x5-v0", difficulty: 0.5, tag: "doorkey-5x5"}
+    - {id: 0, env_id: "MiniGrid-Empty-5x5-v0",  difficulty: 0.1, tag: "empty-5x5",   switch_every: 25000}
+    - {id: 1, env_id: "MiniGrid-Empty-8x8-v0",  difficulty: 0.3, tag: "empty-8x8",   switch_every: 25000}
+    - {id: 2, env_id: "MiniGrid-DoorKey-5x5-v0", difficulty: 0.5, tag: "doorkey-5x5", switch_every: 80000}
 
 # --- Core modules (same as Stage 9) ---
 continual:

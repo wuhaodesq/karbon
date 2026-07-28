@@ -3269,10 +3269,16 @@ and state.step % 50000 < rollout_capacity):
             last_curr_report_step = state.step
 
         # --- Stage 5: periodically switch task via LP-driven sampling ---
+        # Use task-specific switch interval if available, else global
+        _curr_switch = curr_switch_every
+        if curr_active_task is not None:
+            _task_switch = curr_active_task.spec.get("switch_every")
+            if _task_switch:
+                _curr_switch = int(_task_switch)
         if (
             curriculum is not None
-            and curr_switch_every > 0
-            and state.step - last_curr_switch_step >= curr_switch_every
+            and _curr_switch > 0
+            and state.step - last_curr_switch_step >= _curr_switch
         ):
             new_task = curriculum.sample_task()
             if curr_active_task is None or new_task.id != curr_active_task.id:
