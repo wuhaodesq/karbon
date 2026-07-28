@@ -66,7 +66,7 @@ curriculum:
   lp_min_samples: 8
   exploration_epsilon: 0.3
   smoothing: 0.5
-  switch_every_steps: 50000
+  switch_every_steps: 80000
   report_every_steps: 500
   tasks:
     - {id: 0, env_id: "MiniGrid-Empty-5x5-v0",  difficulty: 0.1, tag: "empty-5x5",   switch_every: 25000}
