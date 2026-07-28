@@ -3273,7 +3273,7 @@ and state.step % 50000 < rollout_capacity):
         _curr_switch = curr_switch_every
         if curr_active_task is not None:
             _task_switch = curr_active_task.spec.get("switch_every")
-            if _task_switch:
+            if _task_switch is not None:
                 _curr_switch = int(_task_switch)
         if (
             curriculum is not None
