@@ -527,7 +527,7 @@ class LLMFusionBridge(nn.Module):
                 f"Scene: {scene_description}\n"
                 f"{trajectory_summary}\n"
                 f"Reflect: what happened? What did you learn? What will you do differently?\n"
-                f"Answer in 2-3 short sentences as the agent.\n"
+                f"Answer in 2-3 short sentences in Chinese as the agent.\n"
                 f"Reflection:"
             )
             inputs = self._tokenizer(prompt, return_tensors="pt").to(self._llm.device)
