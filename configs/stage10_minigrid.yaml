@@ -66,7 +66,7 @@ curriculum:
   lp_min_samples: 8
   exploration_epsilon: 0.3
   smoothing: 0.5
-  switch_every_steps: 100000
+  switch_every_steps: 50000
   report_every_steps: 500
   tasks:
     - {id: 0, env_id: "MiniGrid-Empty-5x5-v0",  difficulty: 0.1, tag: "empty-5x5"}
@@ -75,7 +75,7 @@ curriculum:
 
 # --- Core modules (same as Stage 9) ---
 continual:
-  ewc_lambda: 1.0
+  ewc_lambda: 3.0
   ewc_gamma: 0.95
   ewc_anchor_mode: "replace"
   ewc_anchor_ema_alpha: 0.9
