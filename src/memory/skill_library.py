@@ -160,6 +160,14 @@ class BoundedSkillLibrary:
         self._gpu: list[SkillEntry] = []
         self._cpu: list[SkillEntry] = []
         self._known_shards: list[int] = self._discover_shards()
+        # Trim excess shards to stay within ssd_max_shards (prevents old
+        # runs accumulating shards on disk across stage restarts).
+        while len(self._known_shards) > self._budget.ssd_max_shards:
+            oldest = self._known_shards.pop(0)
+            try:
+                self._shard_path(oldest).unlink()
+            except FileNotFoundError:
+                pass
 
         self._next_id = self._recover_next_id()
         self._alpha = score_alpha
