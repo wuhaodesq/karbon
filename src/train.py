@@ -2860,6 +2860,21 @@ and state.step % 50000 < rollout_capacity):
                     ck_parts = [ck_loss(r)["total"] for r in ck_records]
                     ck_total = torch.stack(ck_parts).mean()
                     loss = loss + ck_total
+                # Hierarchical: sub-goal auxiliary loss (predict future hidden)
+                if _is_hierarchical and n_envs == 1:
+                    try:
+                        T_buf = buffer._ptr
+                        sub_k = model._sub_goal_every
+                        if T_buf >= sub_k * 2:
+                            n_pairs = min(8, T_buf // sub_k - 1)
+                            step_idx = torch.randint(0, T_buf - sub_k, (n_pairs,), device=device)
+                            obs_curr = batch.obs[step_idx]
+                            obs_fut = batch.obs[step_idx + sub_k]
+                            sg_loss = model.compute_sub_goal_loss(obs_curr, obs_fut)
+                            if torch.isfinite(sg_loss):
+                                loss = loss + sg_loss * 0.1
+                    except (RuntimeError, ValueError, IndexError) as exc:
+                        logger.debug("sg aux skipped: %s", exc)
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
@@ -2870,27 +2885,6 @@ and state.step % 50000 < rollout_capacity):
                 ppo_losses["kl"].append(float(approx_kl.item()))
                 ppo_losses["clipfrac"].append(float(clipfrac.item()))
                 ppo_losses["total"].append(float(loss.item()))
-
-        # --- Hierarchical: sub-goal auxiliary loss (predict future hidden state) ---
-        if _is_hierarchical and n_envs == 1:
-            try:
-                T = buffer._ptr
-                sub_k = model._sub_goal_every
-                if T >= sub_k * 2:
-                    n_pairs = min(32, T // sub_k - 1)
-                    step_idx = torch.randint(0, T - sub_k, (n_pairs,), device=device)
-                    obs_curr = batch.obs[step_idx]
-                    obs_fut = batch.obs[step_idx + sub_k]
-                    sg_loss = model.compute_sub_goal_loss(obs_curr, obs_fut)
-                    if torch.isfinite(sg_loss):
-                        aux_loss = sg_loss * 0.1
-                        optimizer.zero_grad(set_to_none=True)
-                        aux_loss.backward()
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
-                        optimizer.step()
-                        ppo_losses.setdefault("aux_sg", []).append(float(sg_loss.item()))
-            except (RuntimeError, ValueError, IndexError) as exc:
-                logger.debug("sub-goal aux loss skipped: %s", exc)
 
         # --- Stage 1: off-policy value refresh from replay (small, extra grad) ---
         if (
