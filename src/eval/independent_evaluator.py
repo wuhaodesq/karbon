@@ -226,6 +226,8 @@ class IndependentEvaluator:
 
     def _measure_minigrid_sr(self, model: nn.Module, env_id: str) -> float:
         """Success rate on a simple MiniGrid env (fraction reaching goal)."""
+        import logging
+        _log = logging.getLogger(__name__)
         try:
             from ..envs.minigrid_wrapper import MiniGridWrapper
         except ImportError:
@@ -236,9 +238,11 @@ class IndependentEvaluator:
             auto_reset=False, render_size=self._render_size,
         )
         successes = 0
+        returns = []
         n_ep = min(self._cfg.episodes_per_task, 5)
         for ep in range(n_ep):
             obs = env.reset(seed=ep)
+            ep_ret = 0.0
             done = False
             while not done:
                 with torch.no_grad():
@@ -247,10 +251,13 @@ class IndependentEvaluator:
                 a = int(torch.argmax(logits, dim=-1).item())
                 step_out = env.step(a)
                 obs = step_out.obs
+                ep_ret += float(step_out.reward)
                 done = step_out.terminated or step_out.truncated
+            returns.append(ep_ret)
             if step_out.terminated:
                 successes += 1
         env.close()
+        _log.info("[eval-mg] %s returns=%s sr=%.2f", env_id, [f"{r:.3f}" for r in returns], successes / max(n_ep, 1))
         return successes / max(n_ep, 1)
 
     def _measure_minigrid_tool(self, model: nn.Module) -> tuple[float, float, float]:
