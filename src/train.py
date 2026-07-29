@@ -2830,7 +2830,7 @@ and state.step % 50000 < rollout_capacity):
                     float(returns.std().item()), _zero_var,
                 )
 
-        # Pre-compute sub-goal auxiliary loss ONCE (outside mini-batch loop)
+        # Pre-compute sub-goal auxiliary loss ONCE (add to 1st mini-batch only)
         _sg_loss_extra: torch.Tensor | None = None
         if _is_hierarchical and n_envs == 1:
             try:
@@ -2844,6 +2844,7 @@ and state.step % 50000 < rollout_capacity):
                     _sg_loss_extra = model.compute_sub_goal_loss(obs_curr, obs_fut)
             except (RuntimeError, ValueError, IndexError) as exc:
                 logger.debug("sg aux precomp skipped: %s", exc)
+        _sg_first_mb = True
 
         # P2: mini-batch PPO — split rollout into shuffled minibatches
         n = batch.obs.shape[0]
@@ -2875,9 +2876,11 @@ and state.step % 50000 < rollout_capacity):
                     ck_parts = [ck_loss(r)["total"] for r in ck_records]
                     ck_total = torch.stack(ck_parts).mean()
                     loss = loss + ck_total
-                # Hierarchical: sub-goal aux (precomputed once per rollout)
-                if _sg_loss_extra is not None and torch.isfinite(_sg_loss_extra):
+                # Hierarchical: sub-goal aux (precomputed, 1st mb only to avoid
+                # backward-through-graph-twice on _sg_loss_extra's graph)
+                if _sg_first_mb and _sg_loss_extra is not None and torch.isfinite(_sg_loss_extra):
                     loss = loss + _sg_loss_extra * 0.1
+                    _sg_first_mb = False
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
