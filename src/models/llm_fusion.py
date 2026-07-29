@@ -539,8 +539,13 @@ class LLMFusionBridge(nn.Module):
                 )
             text = self._tokenizer.decode(outputs[0], skip_special_tokens=True)
             generated = text[len(prompt):].strip()
-            return [s.strip() for s in generated.split(".") if s.strip()][:3]
+            result = [s.strip() for s in generated.split(".") if s.strip()][:3]
+            if not result:
+                return [f"Episode return: {episode_return:.2f}"]
+            return result
         except Exception:
+            import logging
+            logging.getLogger(__name__).warning("LLM reflect failed (fallback)", exc_info=True)
             return [f"Episode return: {episode_return:.2f}"]
 
     # ------------------------------------------------------------------ Properties
