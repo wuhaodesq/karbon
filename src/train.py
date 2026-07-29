@@ -2587,6 +2587,17 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                             )
                             for lesson in lessons[:2]:
                                 logger.info("[reflection] %s", lesson)
+                            # Qwen narrative — same frequency as ReflectionLoop
+                            if llm_fusion is not None and llm_fusion.is_available:
+                                try:
+                                    scene = llm_fusion.describe_scene(
+                                        model.encoder(obs_t) if model.use_slots else obs_t
+                                    )
+                                    llm_lessons = llm_fusion.reflect(ep_ret, scene)
+                                    for lesson in llm_lessons[:2]:
+                                        logger.info("[llm_refl] %s", lesson)
+                                except Exception:
+                                    pass
                     except Exception:
                         pass
 
