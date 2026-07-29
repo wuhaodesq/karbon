@@ -215,3 +215,29 @@ Before committing any change that touches the training loop or model forward:
 - [ ] Is any loss computed or backwarded more than once? Move outside loops or use a gate.
 - [ ] Does every tensor in the forward pass truly need gradients? Wrap unnecessary ones in `no_grad()`.
 - [ ] Is there any shared mutable state (buffers, class attrs) that a stale graph might reference?
+
+## 13. Debugging philosophy / 调试哲学 — 标本兼治
+
+### Bug D: Band-aid vs root-cause fix
+
+When `last_curr_switch_step` was updated even when the task didn't change,
+`sample_task()` was called and discarded once per cycle, causing
+`_next_seq_index` to drift and skip tasks in sequential curriculum mode.
+
+**Bad (band-aid):** reduce `switch_every` to 1 so the next cycle catches up.
+**Bad (band-aid):** add a `force_initial_task_id` config hack.
+**Bad (band-aid):** manually tweak the checkpoint's next_seq_index.
+
+**Good (root cause):** move `last_curr_switch_step = state.step` inside the
+`if new_task.id != curr_active_task.id:` block so the timer only resets
+when a task actually changes. One line moved, problem permanently solved.
+
+**Rule: when a state variable drifts out of sync, find the code that updates
+it incorrectly — don't add compensating hacks elsewhere.** Ask:
+- *"What is this variable supposed to track?"*
+- *"Where is it being updated when it shouldn't be?"*
+- *"Is there ONE place where the logic is wrong, or N places compensating?"*
+
+The same philosophy applies to all the Stage 11 bugs — each was solved by
+finding the exact line where the contract was violated, not by adding
+workarounds.
