@@ -218,8 +218,8 @@ independent_eval:
   eval_every_steps: 25000
   eval_weights: [2.0, 1.0, 2.0]
   episodes_per_task: 5
-  max_steps_per_ep: 100
-  max_steps_per_ep: 100
+  max_steps_per_ep: 200
+  max_steps_per_ep: 200
 
 viz:
   frame_every_steps: 0
