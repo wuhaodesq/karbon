@@ -241,7 +241,8 @@ class HierarchicalActorCritic(nn.Module):
         self.worker = GoalConditionedActionHead(d_model=d_model, num_actions=num_actions)
 
         # Cached sub-goal (regenerated every N steps)
-        # Note: plain tensor attr avoids copy_() inplace version conflicts
+        # Note: plain tensor attr avoids copy_() inplace version conflicts.
+        # Persisted via custom state_dict/load_state_dict overrides.
         self._cached_sub_goal = torch.zeros(d_model, dtype=torch.float32)
         self._step_in_goal = 0
 
@@ -370,3 +371,17 @@ class HierarchicalActorCritic(nn.Module):
             f"d_model={self.d_model}, sub_goal_every={self._sub_goal_every}, "
             f"use_slots={self.use_slots}"
         )
+
+    def state_dict(self, *args, **kwargs):
+        sd = super().state_dict(*args, **kwargs)
+        sd["_cached_sub_goal"] = self._cached_sub_goal
+        sd["_step_in_goal"] = torch.tensor(self._step_in_goal, dtype=torch.long)
+        return sd
+
+    def load_state_dict(self, state_dict, strict=True):
+        sd = dict(state_dict)
+        if "_cached_sub_goal" in sd:
+            self._cached_sub_goal = sd.pop("_cached_sub_goal")
+        if "_step_in_goal" in sd:
+            self._step_in_goal = int(sd.pop("_step_in_goal").item())
+        return super().load_state_dict(sd, strict=strict)
