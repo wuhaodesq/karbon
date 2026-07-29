@@ -1780,6 +1780,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         _viz_dir.mkdir(parents=True, exist_ok=True)
         logger.info("Viz: saving frames every %d steps to %s", _viz_every, _viz_dir)
 
+    _resume_extra: dict[str, Any] | None = None
     if resume is not None:
         payload = load_ckpt(resume)
         _model_mismatch = False
@@ -1846,6 +1847,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         "Skill library state mismatch on resume (%s); starting fresh.", exc)
         # --- Restore all extra module states from checkpoint ---
         _extra = payload.get("extra") or {}
+        _resume_extra = _extra
         _resumed_stage = int(payload.get("stage", stage))
         _is_cross_stage = (_resumed_stage != stage)
         _restore_map: list[tuple[str, object | None, str | None]] = [
@@ -1987,10 +1989,19 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     curr_report_every = int(curriculum_cfg.get("report_every_steps", 500)) if curriculum_cfg else 0
     curr_active_task: TaskTemplate | None = None
     if curriculum is not None:
-        # Start with the easiest task (id=0) for stable early training
-        curr_active_task = curriculum._tasks[0] if curriculum._tasks else curriculum.sample_task()
-        logger.info("Curriculum: initial task=%s (id=%d)",
-                    curr_active_task.tag, curr_active_task.id)
+        saved_task_id = resume is not None and _resume_extra is not None and int(
+            _resume_extra.get("curriculum_active_task_id", -1)
+        )
+        if saved_task_id and saved_task_id >= 0:
+            for t in curriculum._tasks:
+                if t.id == saved_task_id:
+                    curr_active_task = t
+                    break
+        if curr_active_task is None:
+            curr_active_task = curriculum._tasks[0] if curriculum._tasks else curriculum.sample_task()
+        logger.info("Curriculum: initial task=%s (id=%d)%s",
+                    curr_active_task.tag, curr_active_task.id,
+                    " (resumed)" if saved_task_id else "")
         try:
             env.close()
         except Exception:
