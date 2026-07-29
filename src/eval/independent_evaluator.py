@@ -227,8 +227,6 @@ class IndependentEvaluator:
 
     def _measure_minigrid_sr(self, model: nn.Module, env_id: str, skills: object | None = None) -> float:
         """Success rate on a simple MiniGrid env (fraction reaching goal)."""
-        import logging
-        _log = logging.getLogger(__name__)
         try:
             from ..envs.minigrid_wrapper import MiniGridWrapper
         except ImportError:
@@ -239,12 +237,22 @@ class IndependentEvaluator:
             auto_reset=False, render_size=self._render_size,
         )
         successes = 0
-        returns = []
         n_ep = min(self._cfg.episodes_per_task, 5)
         for ep in range(n_ep):
             if hasattr(model, "_step_in_goal"):
-                model._step_in_goal = 0  # force Manager to regenerate sub-goal for new task
+                model._step_in_goal = 0
             obs = env.reset(seed=ep)
+            ep_ret = 0.0
+            done = False
+            skill_delta = None
+            if skills is not None:
+                active = skills.sample_for_injection()
+                skill_delta = active.weights if active is not None else None
+            while not done:
+                with torch.no_grad():
+                    out = model(self._obs_to_tensor(obs, self._device), skill_delta=skill_delta)
+                logits = out[0] if isinstance(out, (tuple, list)) else out
+                a = int(torch.argmax(logits, dim=-1).item())
             ep_ret = 0.0
             done = False
             skill_delta = None
