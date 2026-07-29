@@ -35,6 +35,7 @@ import numpy as np
 import torch
 import torch._dynamo.config
 torch._dynamo.config.cache_size_limit = 64
+torch.set_float32_matmul_precision("high")
 import torch.nn as nn
 import torch.nn.functional as F
 
