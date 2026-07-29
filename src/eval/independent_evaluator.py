@@ -148,7 +148,6 @@ class IndependentEvaluator:
         step: int,
         number_sense: object | None = None,
         symbolic_layer: object | None = None,
-        skills: object | None = None,
     ) -> EvalReport:
         """Run full 6-dimension evaluation and return a structured report."""
         # 1. 3D Physics
@@ -157,14 +156,14 @@ class IndependentEvaluator:
         tsk, vs_random = self._measure_task(model)
 
         # 2. MiniGrid — navigation
-        nav5 = self._measure_minigrid_sr(model, "MiniGrid-Empty-5x5-v0", skills)
-        nav8 = self._measure_minigrid_sr(model, "MiniGrid-Empty-8x8-v0", skills)
+        nav5 = self._measure_minigrid_sr(model, "MiniGrid-Empty-5x5-v0")
+        nav8 = self._measure_minigrid_sr(model, "MiniGrid-Empty-8x8-v0")
 
         # 3. MiniGrid — tool use
-        t_key, t_door, t_sr = self._measure_minigrid_tool(model, skills)
+        t_key, t_door, t_sr = self._measure_minigrid_tool(model)
 
         # 4. MiniGrid — generalisation
-        gen6 = self._measure_minigrid_sr(model, "MiniGrid-Empty-6x6-v0", skills)
+        gen6 = self._measure_minigrid_sr(model, "MiniGrid-Empty-6x6-v0")
 
         # 5. Number sense
         num = self._measure_number_sense(model, number_sense)
@@ -225,7 +224,7 @@ class IndependentEvaluator:
 
     # --- MiniGrid scorers ---
 
-    def _measure_minigrid_sr(self, model: nn.Module, env_id: str, skills: object | None = None) -> float:
+    def _measure_minigrid_sr(self, model: nn.Module, env_id: str) -> float:
         """Success rate on a simple MiniGrid env (fraction reaching goal)."""
         try:
             from ..envs.minigrid_wrapper import MiniGridWrapper
@@ -237,48 +236,60 @@ class IndependentEvaluator:
             auto_reset=False, render_size=self._render_size,
         )
         successes = 0
-        n_ep = min(self._cfg.episodes_per_task, 5)
-        for ep in range(n_ep):
+        for _ in range(min(self._cfg.episodes_per_task, 5)):
             if hasattr(model, "_step_in_goal"):
                 model._step_in_goal = 0
-            obs = env.reset(seed=ep)
-            ep_ret = 0.0
+            obs = env.reset()
             done = False
-            skill_delta = None
-            if skills is not None:
-                active = skills.sample_for_injection()
-                skill_delta = active.weights if active is not None else None
             while not done:
                 with torch.no_grad():
-                    out = model(self._obs_to_tensor(obs, self._device), skill_delta=skill_delta)
+                    out = model(self._obs_to_tensor(obs, self._device))
                 logits = out[0] if isinstance(out, (tuple, list)) else out
                 a = int(torch.argmax(logits, dim=-1).item())
-            ep_ret = 0.0
-            done = False
-            skill_delta = None
-            if skills is not None:
-                active = skills.sample_for_injection()
-                skill_delta = active.weights if active is not None else None
-            actions_taken = []
-            while not done:
-                with torch.no_grad():
-                    out = model(self._obs_to_tensor(obs, self._device), return_hidden=True, skill_delta=skill_delta)
-                logits = out[0] if isinstance(out, (tuple, list)) else out
-                a = int(torch.argmax(logits, dim=-1).item())
-                actions_taken.append(a)
                 step_out = env.step(a)
                 obs = step_out.obs
-                ep_ret += float(step_out.reward)
                 done = step_out.terminated or step_out.truncated
-            returns.append(ep_ret)
             if step_out.terminated:
                 successes += 1
-            _log.info("[eval-mg] %s ep=%d ret=%.3f acts=%s", env_id, ep, ep_ret,
-                      str(actions_taken[:10]) if len(actions_taken) <= 10 else
-                      str(actions_taken[:5]) + "..." + str(len(actions_taken)) + "steps")
         env.close()
-        _log.info("[eval-mg] %s returns=%s sr=%.2f", env_id, [f"{r:.3f}" for r in returns], successes / max(n_ep, 1))
-        return successes / max(n_ep, 1)
+        return successes / max(min(self._cfg.episodes_per_task, 5), 1)
+
+    def _measure_minigrid_tool(self, model: nn.Module) -> tuple[float, float, float]:
+        """DoorKey-5x5 sub-metrics: (key_rate, door_rate, success_rate)."""
+        try:
+            from ..envs.minigrid_wrapper import MiniGridWrapper
+        except ImportError:
+            return 0.0, 0.0, 0.0
+        env = MiniGridWrapper(
+            env_id="MiniGrid-DoorKey-5x5-v0", seed=0,
+            max_episode_steps=self._cfg.max_steps_per_ep,
+            auto_reset=False, render_size=self._render_size,
+        )
+        got_key, opened_door, reached_goal = 0, 0, 0
+        for _ in range(min(self._cfg.episodes_per_task, 5)):
+            if hasattr(model, "_step_in_goal"):
+                model._step_in_goal = 0
+            obs = env.reset()
+            ep_return = 0.0
+            done = False
+            while not done:
+                with torch.no_grad():
+                    out = model(self._obs_to_tensor(obs, self._device))
+                logits = out[0] if isinstance(out, (tuple, list)) else out
+                a = int(torch.argmax(logits, dim=-1).item())
+                step_out = env.step(a)
+                obs = step_out.obs
+                ep_return += float(step_out.reward)
+                done = step_out.terminated or step_out.truncated
+            if ep_return >= 0.1:
+                got_key += 1
+            if ep_return >= 0.6:
+                opened_door += 1
+            if step_out.terminated:
+                reached_goal += 1
+        env.close()
+        n = max(min(self._cfg.episodes_per_task, 5), 1)
+        return got_key / n, opened_door / n, reached_goal / n
 
     def _measure_minigrid_tool(self, model: nn.Module, skills: object | None = None) -> tuple[float, float, float]:
         """DoorKey-5x5 sub-metrics: (key_rate, door_rate, success_rate)."""
