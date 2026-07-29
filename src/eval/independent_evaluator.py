@@ -252,7 +252,7 @@ class IndependentEvaluator:
             actions_taken = []
             while not done:
                 with torch.no_grad():
-                    out = model(self._obs_to_tensor(obs, self._device), skill_delta=skill_delta)
+                    out = model(self._obs_to_tensor(obs, self._device), return_hidden=True, skill_delta=skill_delta)
                 logits = out[0] if isinstance(out, (tuple, list)) else out
                 a = int(torch.argmax(logits, dim=-1).item())
                 actions_taken.append(a)
@@ -295,7 +295,7 @@ class IndependentEvaluator:
                 skill_delta = active.weights if active is not None else None
             while not done:
                 with torch.no_grad():
-                    out = model(self._obs_to_tensor(obs, self._device), skill_delta=skill_delta)
+                    out = model(self._obs_to_tensor(obs, self._device), return_hidden=True, skill_delta=skill_delta)
                 logits = out[0] if isinstance(out, (tuple, list)) else out
                 a = int(torch.argmax(logits, dim=-1).item())
                 step_out = env.step(a)
