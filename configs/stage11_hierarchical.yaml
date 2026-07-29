@@ -175,7 +175,7 @@ world_model:
   embed_dim: 64
   hidden: 128
   max_rollout_steps: 10
-  kl_free_nats: 1.0
+  kl_free_nats: 0.5
   update_every_steps: 8
   lr: 3.0e-4
   wm_loss_coef: 1.0
@@ -185,7 +185,7 @@ intrinsic:
   embed_dim: 128
   lr: 1.0e-4
   reward_clip: 5.0
-  reward_coef: 0.1
+  reward_coef: 0.5
   update_every_steps: 1
 
 replay:
