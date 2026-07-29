@@ -55,13 +55,14 @@ cognitive:
   logic_max_variables: 16
   reflection_enabled: true
   reflection_max: 256
-  reflection_every_episodes: 50
+  reflection_every_episodes: 200
 
 theory_of_mind:
   enabled: false
 
 creativity:
   enabled: true
+  trigger_every_steps: 20000
   divergent_generator_enabled: true
   transformational_enabled: true
   transformational_max: 32
