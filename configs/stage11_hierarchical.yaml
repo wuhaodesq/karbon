@@ -55,7 +55,7 @@ cognitive:
   logic_max_variables: 16
   reflection_enabled: true
   reflection_max: 256
-  reflection_every_episodes: 10
+  reflection_every_episodes: 50
 
 theory_of_mind:
   enabled: false

@@ -33,6 +33,8 @@ from typing import Any
 
 import numpy as np
 import torch
+import torch._dynamo.config
+torch._dynamo.config.cache_size_limit = 64
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -1886,7 +1888,9 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         for key, module, _opt in _restore_map:
             if module is not None and key in _extra:
                 try:
-                    if hasattr(module, "load_state_dict"):
+                    if key == "rnd_state":
+                        module.load_rnd_state_dict(_extra[key])
+                    elif hasattr(module, "load_state_dict"):
                         if key == "ewc_state":
                             module.load_state_dict(_extra[key], device=device)
                         else:
