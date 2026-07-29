@@ -290,7 +290,7 @@ class HierarchicalActorCritic(nn.Module):
         else:
             with torch.no_grad():
                 sg = self._cached_sub_goal.unsqueeze(0).expand(h.shape[0], -1)
-            _, mgr_v = self.manager(h)
+                _, mgr_v = self.manager(h)  # no grad needed outside period
             self._last_manager_value = mgr_v
             self._last_sub_goal = sg
 
