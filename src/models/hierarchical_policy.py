@@ -241,7 +241,8 @@ class HierarchicalActorCritic(nn.Module):
         self.worker = GoalConditionedActionHead(d_model=d_model, num_actions=num_actions)
 
         # Cached sub-goal (regenerated every N steps)
-        self.register_buffer("_cached_sub_goal", torch.zeros(d_model), persistent=False)
+        # Note: plain tensor attr avoids copy_() inplace version conflicts
+        self._cached_sub_goal = torch.zeros(d_model, dtype=torch.float32)
         self._step_in_goal = 0
 
         # Last outputs stored for access by training loop
@@ -280,8 +281,7 @@ class HierarchicalActorCritic(nn.Module):
         # Manager: regenerate sub-goal at period boundary
         if self._step_in_goal == 0:
             sg, mgr_v = self.manager(h)
-            with torch.no_grad():
-                self._cached_sub_goal.copy_(sg.mean(dim=0))
+            self._cached_sub_goal = sg.mean(dim=0).detach()  # new tensor, no inplace
             self._last_manager_value = mgr_v
             self._last_sub_goal = sg
         else:
