@@ -53,7 +53,9 @@ class EvalReport:
     task: float
     total: float
     task_vs_random: float  # ratio of agent mean reward / random mean reward
-    minigrid_sr: float = 0.0  # MiniGrid doorkey success rate
+    minigrid_sr: float = 0.0  # MiniGrid doorkey success rate (goal reached)
+    minigrid_key: float = 0.0  # key pickup rate (return >= 0.1)
+    minigrid_door: float = 0.0  # door open rate (return >= 0.6)
     advisory: str = ""
     timestamp: float = field(default_factory=time.time)
 
@@ -136,7 +138,7 @@ class IndependentEvaluator:
         tsk, vs_random = self._measure_task(model)
 
         # ---- minigrid success rate ----
-        mg_sr = self._measure_minigrid_sr(model)
+        mg_key, mg_door, mg_sr = self._measure_minigrid_sr(model)
 
         w = self._cfg.weights
         total = (cur * w[0] + drv * w[1] + tsk * w[2]) / sum(w)
@@ -158,6 +160,8 @@ class IndependentEvaluator:
             total=total,
             task_vs_random=vs_random,
             minigrid_sr=mg_sr,
+            minigrid_key=mg_key,
+            minigrid_door=mg_door,
             advisory=advisory,
         )
         self._history.append(report)
@@ -177,6 +181,8 @@ class IndependentEvaluator:
                 "total": round(rep.total, 4),
                 "task_vs_random": round(rep.task_vs_random, 4),
                 "minigrid_sr": round(rep.minigrid_sr, 4),
+                "minigrid_key": round(rep.minigrid_key, 4),
+                "minigrid_door": round(rep.minigrid_door, 4),
                 "advisory": rep.advisory,
                 "timestamp": rep.timestamp,
             }, ensure_ascii=False) + "\n")
@@ -184,12 +190,19 @@ class IndependentEvaluator:
 
     # ----------------------------------------------------------------- private
 
-    def _measure_minigrid_sr(self, model: nn.Module) -> float:
-        """MiniGrid DoorKey-5x5 success rate (fraction of episodes reaching goal)."""
+    def _measure_minigrid_sr(self, model: nn.Module) -> tuple[float, float, float]:
+        """MiniGrid DoorKey-5x5 sub-metrics.
+        
+        Returns:
+            (key_rate, door_rate, sr) where:
+            - key_rate: fraction of episodes picking up the key (return >= 0.1)
+            - door_rate: fraction opening the door (return >= 0.6)
+            - sr: fraction reaching the goal (terminated == True)
+        """
         try:
             from ..envs.minigrid_wrapper import MiniGridWrapper
         except ImportError:
-            return 0.0
+            return 0.0, 0.0, 0.0
         env = MiniGridWrapper(
             env_id="MiniGrid-DoorKey-5x5-v0",
             seed=0,
@@ -197,10 +210,13 @@ class IndependentEvaluator:
             auto_reset=False,
             render_size=self._render_size,
         )
-        successes = 0
+        got_key = 0
+        opened_door = 0
+        reached_goal = 0
         n_ep = min(self._cfg.episodes_per_task, 20)
         for ep in range(n_ep):
             obs = env.reset(seed=ep)
+            ep_return = 0.0
             done = False
             while not done:
                 with torch.no_grad():
@@ -209,11 +225,20 @@ class IndependentEvaluator:
                 a = int(torch.argmax(logits, dim=-1).item())
                 step_out = env.step(a)
                 obs = step_out.obs
+                ep_return += float(step_out.reward)
                 done = step_out.terminated or step_out.truncated
+            if ep_return >= 0.1:
+                got_key += 1
+            if ep_return >= 0.6:
+                opened_door += 1
             if step_out.terminated:
-                successes += 1
+                reached_goal += 1
         env.close()
-        return successes / max(n_ep, 1)
+        return (
+            got_key / max(n_ep, 1),
+            opened_door / max(n_ep, 1),
+            reached_goal / max(n_ep, 1),
+        )
 
     @staticmethod
     def _make_env(num_objects: int) -> PhysicsSandbox:
