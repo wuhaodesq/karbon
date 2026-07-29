@@ -130,3 +130,88 @@ For a Stage exit:
 - [ ] `docs/stageN_report.md` filled in.
 - [ ] Git tag pushed.
 - [ ] Longevity test (where applicable) recorded.
+
+## 12. Stage 11 lessons / Stage 11 教训 — PyTorch inplace + 图管理
+
+The three bugs that crashed Stage 11 training are now enshrined as rules
+so we never repeat them.
+
+### Bug A: Inplace `copy_()` causes version conflict even inside `no_grad()`
+
+**Bad:**
+```python
+# self._cached_sub_goal is a buffer (registered tensor)
+self._cached_sub_goal.copy_(sg.mean(dim=0))  # inplace → version increments
+```
+Even inside `torch.no_grad()`, `.copy_()` increments the tensor's version
+counter. If a previous forward pass still holds a reference to this buffer
+in the autograd graph, backward will crash with
+*"one of the variables needed for gradient computation has been modified by an inplace operation"*.
+
+**Good:**
+```python
+self._cached_sub_goal = sg.mean(dim=0).detach()  # new tensor, version untouched
+```
+
+**Rule: never use `copy_()`, `add_()`, `mul_()`, etc. on any tensor that
+may be referenced by a stale autograd graph.** Use plain assignment to
+create a fresh tensor. Also: prefer plain tensor attributes over
+`register_buffer` for cached state (buffers imply inplace semantics).
+
+### Bug B: Computing the same loss N times inside a nested loop
+
+**Bad:**
+```python
+for mb in mini_batches:
+    loss = ppo_loss
+    if sub_goal_loss is not None:
+        loss = loss + sub_goal_loss  # same graph built 32×
+    loss.backward()
+```
+Sub-goal auxiliary loss was recomputed inside the PPO mini-batch loop,
+causing it to be backwarded through 32 times. The second backward
+crashed with *"Trying to backward through the same graph a second time"*.
+
+**Good:** Pre-compute once outside the loop, attach to only the first
+mini-batch, and skip subsequent ones:
+```python
+_sg_loss_extra = model.compute_sub_goal_loss(curr_obs, future_obs)  # once
+_sg_first_mb = True
+for mb in mini_batches:
+    loss = ppo_loss
+    if _sg_first_mb and _sg_loss_extra is not None:
+        loss = loss + _sg_loss_extra * 0.1
+        _sg_first_mb = False
+    loss.backward()
+```
+
+### Bug C: Unnecessary gradient graph on every non-boundary step
+
+**Bad:**
+```python
+else:  # non-boundary step
+    with torch.no_grad():
+        sg = cached_sg.expand(...)
+    _, mgr_v = self.manager(h)  # creates a graph every step — wasted VRAM
+```
+
+**Good:** Wrap the entire manager call in `no_grad()` when we don't need gradients:
+```python
+else:
+    with torch.no_grad():
+        sg = cached_sg.expand(...)
+        _, mgr_v = self.manager(h)
+```
+
+**Rule:** Every forward pass must justify *each* tensor's need for gradients.
+If a value isn't part of any loss (or is always `.detach()`ed before use),
+compute it under `torch.no_grad()`. Ask: *"Does this need grad?"* for every
+intermediate tensor.
+
+### Summary checklist for new code / 新代码必问清单
+
+Before committing any change that touches the training loop or model forward:
+- [ ] Are there any inplace tensor ops (`copy_`, `add_`, etc.)? Replace with assignment.
+- [ ] Is any loss computed or backwarded more than once? Move outside loops or use a gate.
+- [ ] Does every tensor in the forward pass truly need gradients? Wrap unnecessary ones in `no_grad()`.
+- [ ] Is there any shared mutable state (buffers, class attrs) that a stale graph might reference?
