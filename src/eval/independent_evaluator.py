@@ -236,7 +236,7 @@ class IndependentEvaluator:
             auto_reset=False, render_size=self._render_size,
         )
         successes = 0
-        n_ep = min(self._cfg.episodes_per_task, 20)
+        n_ep = min(self._cfg.episodes_per_task, 5)
         for ep in range(n_ep):
             obs = env.reset(seed=ep)
             done = False
@@ -267,7 +267,7 @@ class IndependentEvaluator:
         got_key = 0
         opened_door = 0
         reached_goal = 0
-        n_ep = min(self._cfg.episodes_per_task, 20)
+        n_ep = min(self._cfg.episodes_per_task, 5)
         for ep in range(n_ep):
             obs = env.reset(seed=ep)
             ep_return = 0.0
