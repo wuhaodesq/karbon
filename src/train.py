@@ -1927,7 +1927,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         if resumed_stage == stage:
             # Same-stage resume: continue the step counter.
             state.step = resumed_step
-            last_curr_switch_step = state.step  # prevent immediate switch on resume
+            _saved_last_switch = int(_resume_extra.get("curriculum_last_switch_step", 0))
+            last_curr_switch_step = _saved_last_switch if _saved_last_switch > 0 else state.step
             logger.info("Resumed same-stage %d from %s at step %d",
                         stage, resume, state.step)
         else:
@@ -3465,6 +3466,7 @@ and state.step % 50000 < rollout_capacity):
                 extra["curriculum_active_task_id"] = (
                     curr_active_task.id if curr_active_task else -1
                 )
+                extra["curriculum_last_switch_step"] = last_curr_switch_step
             if ewc is not None:
                 extra["ewc_state"] = ewc.state_dict()
             if grep_vae is not None:
