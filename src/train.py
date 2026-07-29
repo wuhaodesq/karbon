@@ -2636,18 +2636,6 @@ and state.step % 50000 < rollout_capacity):
                     except Exception:
                         pass
 
-                # --- Phase 9: LLM reflection after episode ---
-                if llm_fusion is not None and llm_fusion.is_available:
-                    try:
-                        scene = llm_fusion.describe_scene(
-                            model.encoder(obs_t) if model.use_slots else obs_t
-                        )
-                        lessons = llm_fusion.reflect(ep_ret, scene)
-                        for lesson in lessons[:2]:
-                            logger.info("[llm_refl] %s", lesson)
-                    except Exception:
-                        pass
-
                 # --- Enhanced memory: promote significant events to life story ---
                 if memory_manager is not None and ep_ret > 0.5:
                     try:
