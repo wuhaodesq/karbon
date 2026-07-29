@@ -9,6 +9,7 @@ All notable changes to this project are documented here.
 
 #### 新增
 - **MiniGrid SR 评测** (`src/eval/independent_evaluator.py`): `_measure_minigrid_sr` 用 MiniGrid-DoorKey-5x5 评测通关率，写入 `EvalReport` 和 JSONL
+- **`_force_next` 强制评测**: Evaluator 构建后第一次检查立即触发评测（代码更新重启后不需等待边界）
 - **Catch-up 逻辑**: `should_evaluate` 在代码更新重启后自动补齐漏掉的评测
 - **配置**: `eval_every_steps` 从 50000 降至 25000，更细粒度监控
 - **`HierarchicalActorCritic`** (`src/models/hierarchical_policy.py`): 双层结构，Manager（高层）每 K=10 步生成子目标，Worker（底层）每步输出动作 + FiLM 子目标条件化

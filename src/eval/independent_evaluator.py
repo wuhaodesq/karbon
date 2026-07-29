@@ -81,6 +81,7 @@ class IndependentEvaluator:
         self._render_size = int(config.get("env", {}).get("render_size", 64))
         self._history: list[EvalReport] = []
         self._consecutive_below_floor = 0
+        self._force_next = True  # fire once on first check after construction
 
     # ------------------------------------------------------------------ public
 
@@ -97,6 +98,9 @@ class IndependentEvaluator:
             return False
         prev = max(0, step - batch_size)
         every = self._cfg.eval_every_steps
+        if self._force_next:
+            self._force_next = False
+            return True
         if (step // every) > (prev // every):
             return True
         if self._history and (step - self._history[-1].step) >= every:
