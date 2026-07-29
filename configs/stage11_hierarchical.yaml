@@ -213,7 +213,7 @@ train:
   ckpt_every_steps: 50000
 
 independent_eval:
-  eval_every_steps: 50000
+  eval_every_steps: 25000
   eval_weights: [2.0, 1.0, 2.0]
   episodes_per_task: 20
 

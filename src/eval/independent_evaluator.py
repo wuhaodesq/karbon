@@ -53,6 +53,7 @@ class EvalReport:
     task: float
     total: float
     task_vs_random: float  # ratio of agent mean reward / random mean reward
+    minigrid_sr: float = 0.0  # MiniGrid doorkey success rate
     advisory: str = ""
     timestamp: float = field(default_factory=time.time)
 
@@ -77,6 +78,7 @@ class IndependentEvaluator:
             report_path=str(ecfg.get("report_path", "eval_scores.jsonl")),
         )
         self._device = device
+        self._render_size = int(config.get("env", {}).get("render_size", 64))
         self._history: list[EvalReport] = []
         self._consecutive_below_floor = 0
 
@@ -87,12 +89,19 @@ class IndependentEvaluator:
 
         Uses boundary-crossing logic because the training loop advances
         ``step`` in jumps of *batch_size* (e.g. 2048), not 1.
+
+        Also catches up if the last eval is more than one full interval
+        behind (handles code-update restarts mid-interval).
         """
         if step <= 0:
             return False
         prev = max(0, step - batch_size)
         every = self._cfg.eval_every_steps
-        return (step // every) > (prev // every)
+        if (step // every) > (prev // every):
+            return True
+        if self._history and (step - self._history[-1].step) >= every:
+            return True
+        return False
 
     @property
     def weights(self) -> list[float]:
@@ -122,6 +131,9 @@ class IndependentEvaluator:
         # ---- task: pure env reward vs random ----
         tsk, vs_random = self._measure_task(model)
 
+        # ---- minigrid success rate ----
+        mg_sr = self._measure_minigrid_sr(model)
+
         w = self._cfg.weights
         total = (cur * w[0] + drv * w[1] + tsk * w[2]) / sum(w)
 
@@ -141,6 +153,7 @@ class IndependentEvaluator:
             task=tsk,
             total=total,
             task_vs_random=vs_random,
+            minigrid_sr=mg_sr,
             advisory=advisory,
         )
         self._history.append(report)
@@ -159,12 +172,44 @@ class IndependentEvaluator:
                 "task": round(rep.task, 4),
                 "total": round(rep.total, 4),
                 "task_vs_random": round(rep.task_vs_random, 4),
+                "minigrid_sr": round(rep.minigrid_sr, 4),
                 "advisory": rep.advisory,
                 "timestamp": rep.timestamp,
             }, ensure_ascii=False) + "\n")
         return path
 
     # ----------------------------------------------------------------- private
+
+    def _measure_minigrid_sr(self, model: nn.Module) -> float:
+        """MiniGrid DoorKey-5x5 success rate (fraction of episodes reaching goal)."""
+        try:
+            from ..envs.minigrid_wrapper import MiniGridWrapper
+        except ImportError:
+            return 0.0
+        env = MiniGridWrapper(
+            env_id="MiniGrid-DoorKey-5x5-v0",
+            seed=0,
+            max_episode_steps=self._cfg.max_steps_per_ep,
+            auto_reset=False,
+            render_size=self._render_size,
+        )
+        successes = 0
+        n_ep = min(self._cfg.episodes_per_task, 20)
+        for ep in range(n_ep):
+            obs = env.reset(seed=ep)
+            done = False
+            while not done:
+                with torch.no_grad():
+                    out = model(self._obs_to_tensor(obs, self._device))
+                logits = out[0] if isinstance(out, (tuple, list)) else out
+                a = int(torch.argmax(logits, dim=-1).item())
+                step_out = env.step(a)
+                obs = step_out.obs
+                done = step_out.terminated or step_out.truncated
+            if step_out.terminated:
+                successes += 1
+        env.close()
+        return successes / max(n_ep, 1)
 
     @staticmethod
     def _make_env(num_objects: int) -> PhysicsSandbox:

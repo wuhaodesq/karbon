@@ -3415,9 +3415,9 @@ and state.step % 50000 < rollout_capacity):
                 w = independent_evaluator.weights
                 logger.info(
                     "[eval] step=%d | curiosity=%.3f drive=%.3f task=%.3f "
-                    "(vs_random=%.2f) | total=%.3f (w=%s)",
+                    "(vs_random=%.2f) | total=%.3f mg_sr=%.2f (w=%s)",
                     state.step, report.curiosity, report.drive, report.task,
-                    report.task_vs_random, report.total, w,
+                    report.task_vs_random, report.total, report.minigrid_sr, w,
                 )
                 independent_evaluator.save_report(
                     str(Path(data_dir()) / "eval" / f"stage{stage}"),
