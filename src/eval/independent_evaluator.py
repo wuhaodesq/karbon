@@ -249,11 +249,13 @@ class IndependentEvaluator:
             if skills is not None:
                 active = skills.sample_for_injection()
                 skill_delta = active.weights if active is not None else None
+            actions_taken = []
             while not done:
                 with torch.no_grad():
                     out = model(self._obs_to_tensor(obs, self._device), skill_delta=skill_delta)
                 logits = out[0] if isinstance(out, (tuple, list)) else out
                 a = int(torch.argmax(logits, dim=-1).item())
+                actions_taken.append(a)
                 step_out = env.step(a)
                 obs = step_out.obs
                 ep_ret += float(step_out.reward)
@@ -261,6 +263,9 @@ class IndependentEvaluator:
             returns.append(ep_ret)
             if step_out.terminated:
                 successes += 1
+            _log.info("[eval-mg] %s ep=%d ret=%.3f acts=%s", env_id, ep, ep_ret,
+                      str(actions_taken[:10]) if len(actions_taken) <= 10 else
+                      str(actions_taken[:5]) + "..." + str(len(actions_taken)) + "steps")
         env.close()
         _log.info("[eval-mg] %s returns=%s sr=%.2f", env_id, [f"{r:.3f}" for r in returns], successes / max(n_ep, 1))
         return successes / max(n_ep, 1)
