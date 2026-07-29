@@ -517,7 +517,7 @@ class LLMFusionBridge(nn.Module):
         trajectory_summary: str = "",
     ) -> list[str]:
         """Generate post-episode reflection via LLM."""
-        if not self._llm_available:
+        if not self._llm_available or self._llm is None:
             status = "succeeded" if episode_return > 0 else "failed"
             return [f"Episode result: {status}, return={episode_return:.2f}. I saw: {scene_description}"]
 
