@@ -242,6 +242,8 @@ class IndependentEvaluator:
         returns = []
         n_ep = min(self._cfg.episodes_per_task, 5)
         for ep in range(n_ep):
+            if hasattr(model, "_step_in_goal"):
+                model._step_in_goal = 0  # force Manager to regenerate sub-goal for new task
             obs = env.reset(seed=ep)
             ep_ret = 0.0
             done = False
@@ -286,6 +288,8 @@ class IndependentEvaluator:
         reached_goal = 0
         n_ep = min(self._cfg.episodes_per_task, 5)
         for ep in range(n_ep):
+            if hasattr(model, "_step_in_goal"):
+                model._step_in_goal = 0
             obs = env.reset(seed=ep)
             ep_return = 0.0
             done = False
@@ -293,11 +297,13 @@ class IndependentEvaluator:
             if skills is not None:
                 active = skills.sample_for_injection()
                 skill_delta = active.weights if active is not None else None
+            actions_taken = []
             while not done:
                 with torch.no_grad():
-                    out = model(self._obs_to_tensor(obs, self._device), return_hidden=True, skill_delta=skill_delta)
+                    out = model(self._obs_to_tensor(obs, self._device), skill_delta=skill_delta)
                 logits = out[0] if isinstance(out, (tuple, list)) else out
                 a = int(torch.argmax(logits, dim=-1).item())
+                actions_taken.append(a)
                 step_out = env.step(a)
                 obs = step_out.obs
                 ep_return += float(step_out.reward)
