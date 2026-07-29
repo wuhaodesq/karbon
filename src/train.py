@@ -843,7 +843,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # Hierarchical manager buffer (smaller: every K steps)
     _is_hierarchical = use_hierarchical
     if _is_hierarchical:
-        mgr_capacity = rollout_capacity // model._sub_goal_every + 16
+        mgr_capacity = rollout_capacity // model._sub_goal_every + 64
         manager_buffer = RolloutBuffer(mgr_capacity, obs_shape, device=device, n_envs=n_envs)
         _mgr_period_step = 0
         _mgr_reward_acc = np.zeros(n_envs, dtype=np.float32)
@@ -2830,6 +2830,21 @@ and state.step % 50000 < rollout_capacity):
                     float(returns.std().item()), _zero_var,
                 )
 
+        # Pre-compute sub-goal auxiliary loss ONCE (outside mini-batch loop)
+        _sg_loss_extra: torch.Tensor | None = None
+        if _is_hierarchical and n_envs == 1:
+            try:
+                T_buf = buffer._ptr
+                sub_k = model._sub_goal_every
+                if T_buf >= sub_k * 2:
+                    n_pairs = min(8, T_buf // sub_k - 1)
+                    step_idx = torch.randint(0, T_buf - sub_k, (n_pairs,), device=device)
+                    obs_curr = batch.obs[step_idx]
+                    obs_fut = batch.obs[step_idx + sub_k]
+                    _sg_loss_extra = model.compute_sub_goal_loss(obs_curr, obs_fut)
+            except (RuntimeError, ValueError, IndexError) as exc:
+                logger.debug("sg aux precomp skipped: %s", exc)
+
         # P2: mini-batch PPO — split rollout into shuffled minibatches
         n = batch.obs.shape[0]
         indices = torch.randperm(n, device=device)
@@ -2860,21 +2875,9 @@ and state.step % 50000 < rollout_capacity):
                     ck_parts = [ck_loss(r)["total"] for r in ck_records]
                     ck_total = torch.stack(ck_parts).mean()
                     loss = loss + ck_total
-                # Hierarchical: sub-goal auxiliary loss (predict future hidden)
-                if _is_hierarchical and n_envs == 1:
-                    try:
-                        T_buf = buffer._ptr
-                        sub_k = model._sub_goal_every
-                        if T_buf >= sub_k * 2:
-                            n_pairs = min(8, T_buf // sub_k - 1)
-                            step_idx = torch.randint(0, T_buf - sub_k, (n_pairs,), device=device)
-                            obs_curr = batch.obs[step_idx]
-                            obs_fut = batch.obs[step_idx + sub_k]
-                            sg_loss = model.compute_sub_goal_loss(obs_curr, obs_fut)
-                            if torch.isfinite(sg_loss):
-                                loss = loss + sg_loss * 0.1
-                    except (RuntimeError, ValueError, IndexError) as exc:
-                        logger.debug("sg aux skipped: %s", exc)
+                # Hierarchical: sub-goal aux (precomputed once per rollout)
+                if _sg_loss_extra is not None and torch.isfinite(_sg_loss_extra):
+                    loss = loss + _sg_loss_extra * 0.1
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)

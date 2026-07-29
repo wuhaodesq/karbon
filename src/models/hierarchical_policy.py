@@ -279,6 +279,9 @@ class HierarchicalActorCritic(nn.Module):
         self._last_hidden = h
 
         # Manager: regenerate sub-goal at period boundary
+        # Device guard: ensure cached sub-goal is on the same device as h
+        if self._cached_sub_goal.device != h.device:
+            self._cached_sub_goal = self._cached_sub_goal.to(h.device)
         if self._step_in_goal == 0:
             sg, mgr_v = self.manager(h)
             self._cached_sub_goal = sg.mean(dim=0).detach()  # new tensor, no inplace
