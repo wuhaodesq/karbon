@@ -200,7 +200,7 @@ replay:
   archive_subdir: "replay"
 
 coverage:
-  num_buckets: 8192
+  num_buckets: 16384
   log_every_steps: 5000
 
 train:
@@ -216,7 +216,9 @@ train:
 independent_eval:
   eval_every_steps: 25000
   eval_weights: [2.0, 1.0, 2.0]
-  episodes_per_task: 20
+  episodes_per_task: 5
+  max_steps_per_ep: 100
+  max_steps_per_ep: 100
 
 viz:
   frame_every_steps: 0
