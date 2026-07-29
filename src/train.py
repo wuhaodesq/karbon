@@ -3416,7 +3416,8 @@ and state.step % 50000 < rollout_capacity):
                 env = _build_env_from_spec(new_task.spec, env_cfg)
                 obs = env.reset()
                 curr_active_task = new_task
-            last_curr_switch_step = state.step
+                last_curr_switch_step = state.step
+            # else: task unchanged → don't reset timer, don't waste sample_task call
 
         # --- Independent evaluator: periodic 3D scoring (observation only) ---
         # Scores curiosity / drive / task independently.
