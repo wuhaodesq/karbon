@@ -773,7 +773,30 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             logger.info(
                 "Resume ckpt has %d layers; building model+grower to match "
                 "(prevents random reinit on layer-count mismatch).", _n)
-    if bool(model_cfg.get("use_hybrid_backbone", False)):
+    use_hierarchical = bool(model_cfg.get("use_hierarchical", False))
+    if use_hierarchical:
+        from src.models import HierarchicalActorCritic
+        model = HierarchicalActorCritic(
+            obs_shape=obs_shape,
+            num_actions=num_actions,
+            d_model=int(model_cfg.get("hidden_size", 128)),
+            n_layers=model_n_layers,
+            n_heads=int(model_cfg.get("hybrid_n_heads", 4)),
+            swa_window=int(model_cfg.get("hybrid_swa_window", 16)),
+            ttt_mini_batch=int(model_cfg.get("hybrid_ttt_mini_batch", 8)),
+            ffn_hidden_mult=int(model_cfg.get("hybrid_ffn_hidden_mult", 4)),
+            dropout=float(model_cfg.get("hybrid_dropout", 0.0)),
+            use_vision_encoder=bool(model_cfg.get("use_vision_encoder", False)),
+            vision_model_name=str(model_cfg.get("vision_model", "dinov2_vits14")),
+            use_slot_attention=bool(model_cfg.get("use_slot_attention", False)),
+            slot_num_slots=int(model_cfg.get("slot_num_slots", 7)),
+            slot_dim=int(model_cfg.get("slot_dim", 128)),
+            slot_num_iterations=int(model_cfg.get("slot_num_iterations", 3)),
+            sub_goal_every=int(model_cfg.get("sub_goal_every", 10)),
+        ).to(device)
+        logger.info("Model: HierarchicalActorCritic (d_model=%d, layers=%d, sub_goal_every=%d)",
+                    model.d_model, model_n_layers, model._sub_goal_every)
+    elif bool(model_cfg.get("use_hybrid_backbone", False)):
         model = HybridActorCritic(
             obs_shape=obs_shape,
             num_actions=num_actions,
@@ -816,6 +839,21 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # IndexError when a single episode fills the buffer.
     rollout_capacity = 256 if smoke_only else 2048
     buffer = RolloutBuffer(rollout_capacity, obs_shape, device=device, n_envs=n_envs)
+
+    # Hierarchical manager buffer (smaller: every K steps)
+    _is_hierarchical = use_hierarchical
+    if _is_hierarchical:
+        mgr_capacity = rollout_capacity // model._sub_goal_every + 16
+        manager_buffer = RolloutBuffer(mgr_capacity, obs_shape, device=device, n_envs=n_envs)
+        _mgr_period_step = 0
+        _mgr_reward_acc = np.zeros(n_envs, dtype=np.float32)
+        _mgr_obs = np.zeros((n_envs, *obs_shape), dtype=np.uint8)
+        logger.info("Manager buffer: capacity=%d (sub_goal_every=%d)", mgr_capacity, model._sub_goal_every)
+    else:
+        manager_buffer = None
+        _mgr_period_step = 0
+        _mgr_reward_acc = np.zeros(1, dtype=np.float32)
+        _mgr_obs = None
 
     # Growth LP signal refresh interval (steps). plateau_lp's windowed rmax spans
     # this many steps per call; too small collapses rmax to the instantaneous value.
@@ -2039,6 +2077,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     CK_RECORD_CAP = 4096  # BOUNDS-OK: fixed cap on accumulated records
     while state.step < total_steps:
         buffer.clear()
+        if _is_hierarchical and manager_buffer is not None:
+            manager_buffer.clear()
 
         # Collect a rollout of exactly `rollout_capacity` steps
         while not buffer.full():
@@ -2258,6 +2298,36 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 total_r = total_r + eb
                 expl_bonus.update(obs_t)
 
+            # --- Hierarchical: worker intrinsic reward (goal-progress) ---
+            if _is_hierarchical:
+                try:
+                    with torch.no_grad():
+                        h_intrinsic = model._last_hidden
+                        sg_intrinsic = model._cached_sub_goal.unsqueeze(0).expand(h_intrinsic.shape[0], -1)
+                        w_intrinsic = -F.mse_loss(h_intrinsic, sg_intrinsic, reduction='none').mean(dim=-1)
+                    total_r = total_r + 0.1 * w_intrinsic.cpu().numpy()
+                except (AttributeError, RuntimeError):
+                    pass
+
+            # --- Hierarchical: manager period tracking ---
+            if _is_hierarchical:
+                if _mgr_period_step == 0:
+                    _mgr_obs[:] = obs
+                _mgr_reward_acc += extrinsic_r
+                _mgr_period_step += 1
+                _period_crossed = (_mgr_period_step >= model._sub_goal_every)
+                if _period_crossed:
+                    manager_buffer.add(
+                        obs=_mgr_obs,
+                        action=np.zeros(n_envs, dtype=np.int64),
+                        logprob=np.zeros(n_envs, dtype=np.float32),
+                        value=model.manager_value.cpu().numpy().reshape(n_envs),
+                        reward=_mgr_reward_acc.copy(),
+                        done=done_arr,
+                    )
+                    _mgr_period_step = 0
+                    _mgr_reward_acc.fill(0.0)
+
             t_cog_end = time.perf_counter()
             t_buf = time.perf_counter()
             buffer.add(
@@ -2374,6 +2444,19 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 _prof_n = 0
 
             watcher.tick(step=state.step)
+
+            # --- Hierarchical: finalize manager period on episode done ---
+            if _is_hierarchical and (step_out.terminated or step_out.truncated) and _mgr_period_step > 0:
+                manager_buffer.add(
+                    obs=_mgr_obs,
+                    action=np.zeros(n_envs, dtype=np.int64),
+                    logprob=np.zeros(n_envs, dtype=np.float32),
+                    value=model.manager_value.cpu().numpy().reshape(n_envs),
+                    reward=_mgr_reward_acc.copy(),
+                    done=np.ones(n_envs, dtype=np.float32),
+                )
+                _mgr_period_step = 0
+                _mgr_reward_acc.fill(0.0)
 
             # --- Stage 4 / M2: skill reuse + extraction on episode end ---
             if skills is not None and n_envs == 1 and (step_out.terminated or step_out.truncated):
@@ -2787,6 +2870,27 @@ and state.step % 50000 < rollout_capacity):
                 ppo_losses["kl"].append(float(approx_kl.item()))
                 ppo_losses["clipfrac"].append(float(clipfrac.item()))
                 ppo_losses["total"].append(float(loss.item()))
+
+        # --- Hierarchical: sub-goal auxiliary loss (predict future hidden state) ---
+        if _is_hierarchical and n_envs == 1:
+            try:
+                T = buffer._ptr
+                sub_k = model._sub_goal_every
+                if T >= sub_k * 2:
+                    n_pairs = min(32, T // sub_k - 1)
+                    step_idx = torch.randint(0, T - sub_k, (n_pairs,), device=device)
+                    obs_curr = batch.obs[step_idx]
+                    obs_fut = batch.obs[step_idx + sub_k]
+                    sg_loss = model.compute_sub_goal_loss(obs_curr, obs_fut)
+                    if torch.isfinite(sg_loss):
+                        aux_loss = sg_loss * 0.1
+                        optimizer.zero_grad(set_to_none=True)
+                        aux_loss.backward()
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+                        optimizer.step()
+                        ppo_losses.setdefault("aux_sg", []).append(float(sg_loss.item()))
+            except (RuntimeError, ValueError, IndexError) as exc:
+                logger.debug("sub-goal aux loss skipped: %s", exc)
 
         # --- Stage 1: off-policy value refresh from replay (small, extra grad) ---
         if (

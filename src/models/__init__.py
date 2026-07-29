@@ -12,9 +12,13 @@ from .ttt_linear import TTTLinear, ttt_linear_forward_pytorch
 from .ttt_mlp import TTTMLP, ttt_mlp_forward_pytorch
 from .world_model import RSSM, RSSMConfig, RSSMState
 from .visual_analyzer import VisualAnalyzer
+from .hierarchical_policy import HierarchicalActorCritic, SubGoalHead, GoalConditionedActionHead
 
 __all__ = [
     "BackendName",
+    "HierarchicalActorCritic",
+    "SubGoalHead",
+    "GoalConditionedActionHead",
     "VisualAnalyzer",
     "FFN",
     "HybridBackbone",

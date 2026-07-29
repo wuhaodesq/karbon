@@ -5,6 +5,25 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 11: 分层架构 (Hierarchical Actor-Critic) (2026-07-29)
+
+#### 新增
+- **`HierarchicalActorCritic`** (`src/models/hierarchical_policy.py`): 双层结构，Manager（高层）每 K=10 步生成子目标，Worker（底层）每步输出动作 + FiLM 子目标条件化
+- **`ManagerHead`**: 子目标生成 + Manager value head
+- **`compute_intrinsic_reward`**: Worker 内在奖励 = -||h_t - g||²（隐空间距离），用于训练导航能力
+- **`compute_sub_goal_loss`**: 自监督子目标预测损失（预测 K 步后的 hidden state）
+- **配置文件** `configs/stage11_hierarchical.yaml`: 启用 `use_hierarchical: true`，`sub_goal_every: 10`
+- **train.py**: 分层 rollout 跟踪（manager_buffer 存每周期转换）、子目标辅助损失、Worker 内在奖赏
+
+#### 动机
+解决 Stage 10 的"拉锯"问题（doorkey 上升 → 导航归零），通过结构上将规划（Manager，env reward）与导航（Worker，goal-progress reward）分离。
+
+#### 文件改动
+- `src/models/hierarchical_policy.py`: 重写，新增 ManagerHead + 完整双层 forward
+- `src/models/__init__.py`: 导出 HierarchicalActorCritic
+- `src/train.py`: 分层模型构造 + rollout 周期跟踪 + 子目标辅助损失
+- `configs/stage11_hierarchical.yaml`: 新配置
+
 ### 踩坑记录: Stage 9 符号/逻辑引擎修复 (2026-07-26)
 
 #### 现象
