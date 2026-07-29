@@ -212,7 +212,7 @@ train:
   gamma: 0.99
   gae_lambda: 0.95
   total_steps: 1000000
-  ckpt_every_steps: 50000
+  ckpt_every_steps: 25000
 
 independent_eval:
   eval_every_steps: 25000
