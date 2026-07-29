@@ -3421,14 +3421,20 @@ and state.step % 50000 < rollout_capacity):
             try:
                 report = independent_evaluator.evaluate(
                     model, homeostatic_drives, state.step,
+                    number_sense=number_sense,
+                    symbolic_layer=symbolic_layer,
                 )
                 w = independent_evaluator.weights
                 logger.info(
-                    "[eval] step=%d | curiosity=%.3f drive=%.3f task=%.3f "
-                    "(vs_random=%.2f) | total=%.3f mg(key=%.2f door=%.2f sr=%.2f) (w=%s)",
-                    state.step, report.curiosity, report.drive, report.task,
-                    report.task_vs_random, report.total,
-                    report.minigrid_key, report.minigrid_door, report.minigrid_sr, w,
+                    "[eval] step=%d | 3d(cur=%.2f drv=%.2f tsk=%.2f tot=%.2f) "
+                    "nav(5=%.2f 8=%.2f) tool(key=%.2f door=%.2f sr=%.2f) "
+                    "gen(6=%.2f) num=%.2f sym=%.2f",
+                    state.step, report.curiosity, report.drive,
+                    report.task, report.total,
+                    report.nav_5x5, report.nav_8x8,
+                    report.tool_key, report.tool_door, report.tool_sr,
+                    report.gen_6x6,
+                    report.number_sense, report.symbolic,
                 )
                 independent_evaluator.save_report(
                     str(Path(data_dir()) / "eval" / f"stage{stage}"),

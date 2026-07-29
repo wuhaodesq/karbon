@@ -146,24 +146,34 @@ class IndependentEvaluator:
         model: nn.Module,
         drives_module: object | None,
         step: int,
+        number_sense: object | None = None,
+        symbolic_layer: object | None = None,
     ) -> EvalReport:
-        """Run full evaluation and return a structured report."""
-        # ---- curiosity: state-visit diversity ----
+        """Run full 6-dimension evaluation and return a structured report."""
+        # 1. 3D Physics
         cur = self._measure_curiosity(model)
-
-        # ---- drive: homeostatic satisfaction ----
         drv = self._measure_drive(model, drives_module)
-
-        # ---- task: pure env reward vs random ----
         tsk, vs_random = self._measure_task(model)
 
-        # ---- minigrid success rate ----
-        mg_key, mg_door, mg_sr = self._measure_minigrid_sr(model)
+        # 2. MiniGrid — navigation
+        nav5 = self._measure_minigrid_sr(model, "MiniGrid-Empty-5x5-v0")
+        nav8 = self._measure_minigrid_sr(model, "MiniGrid-Empty-8x8-v0")
+
+        # 3. MiniGrid — tool use
+        t_key, t_door, t_sr = self._measure_minigrid_tool(model)
+
+        # 4. MiniGrid — generalisation
+        gen6 = self._measure_minigrid_sr(model, "MiniGrid-Empty-6x6-v0")
+
+        # 5. Number sense
+        num = self._measure_number_sense(model, number_sense)
+
+        # 6. Symbolic reasoning
+        sym = self._measure_symbolic(symbolic_layer)
 
         w = self._cfg.weights
         total = (cur * w[0] + drv * w[1] + tsk * w[2]) / sum(w)
 
-        # --- advisory ---
         advisory = ""
         if tsk < self._cfg.task_floor and tsk < max(cur, drv) * 0.5:
             self._consecutive_below_floor += 1
@@ -174,14 +184,12 @@ class IndependentEvaluator:
 
         report = EvalReport(
             step=step,
-            curiosity=cur,
-            drive=drv,
-            task=tsk,
-            total=total,
+            curiosity=cur, drive=drv, task=tsk, total=total,
             task_vs_random=vs_random,
-            minigrid_sr=mg_sr,
-            minigrid_key=mg_key,
-            minigrid_door=mg_door,
+            nav_5x5=nav5, nav_8x8=nav8,
+            tool_key=t_key, tool_door=t_door, tool_sr=t_sr,
+            gen_6x6=gen6,
+            number_sense=num, symbolic=sym,
             advisory=advisory,
         )
         self._history.append(report)
@@ -200,35 +208,61 @@ class IndependentEvaluator:
                 "task": round(rep.task, 4),
                 "total": round(rep.total, 4),
                 "task_vs_random": round(rep.task_vs_random, 4),
-                "minigrid_sr": round(rep.minigrid_sr, 4),
-                "minigrid_key": round(rep.minigrid_key, 4),
-                "minigrid_door": round(rep.minigrid_door, 4),
+                "nav_5x5": round(rep.nav_5x5, 4),
+                "nav_8x8": round(rep.nav_8x8, 4),
+                "tool_key": round(rep.tool_key, 4),
+                "tool_door": round(rep.tool_door, 4),
+                "tool_sr": round(rep.tool_sr, 4),
+                "gen_6x6": round(rep.gen_6x6, 4),
+                "number_sense": round(rep.number_sense, 4),
+                "symbolic": round(rep.symbolic, 4),
                 "advisory": rep.advisory,
-                "timestamp": rep.timestamp,
             }, ensure_ascii=False) + "\n")
         return path
 
     # ----------------------------------------------------------------- private
 
-    def _measure_minigrid_sr(self, model: nn.Module) -> tuple[float, float, float]:
-        """MiniGrid DoorKey-5x5 sub-metrics.
-        
-        Returns:
-            (key_rate, door_rate, sr) where:
-            - key_rate: fraction of episodes picking up the key (return >= 0.1)
-            - door_rate: fraction opening the door (return >= 0.6)
-            - sr: fraction reaching the goal (terminated == True)
-        """
+    # --- MiniGrid scorers ---
+
+    def _measure_minigrid_sr(self, model: nn.Module, env_id: str) -> float:
+        """Success rate on a simple MiniGrid env (fraction reaching goal)."""
+        try:
+            from ..envs.minigrid_wrapper import MiniGridWrapper
+        except ImportError:
+            return 0.0
+        env = MiniGridWrapper(
+            env_id=env_id, seed=0,
+            max_episode_steps=self._cfg.max_steps_per_ep,
+            auto_reset=False, render_size=self._render_size,
+        )
+        successes = 0
+        n_ep = min(self._cfg.episodes_per_task, 20)
+        for ep in range(n_ep):
+            obs = env.reset(seed=ep)
+            done = False
+            while not done:
+                with torch.no_grad():
+                    out = model(self._obs_to_tensor(obs, self._device))
+                logits = out[0] if isinstance(out, (tuple, list)) else out
+                a = int(torch.argmax(logits, dim=-1).item())
+                step_out = env.step(a)
+                obs = step_out.obs
+                done = step_out.terminated or step_out.truncated
+            if step_out.terminated:
+                successes += 1
+        env.close()
+        return successes / max(n_ep, 1)
+
+    def _measure_minigrid_tool(self, model: nn.Module) -> tuple[float, float, float]:
+        """DoorKey-5x5 sub-metrics: (key_rate, door_rate, success_rate)."""
         try:
             from ..envs.minigrid_wrapper import MiniGridWrapper
         except ImportError:
             return 0.0, 0.0, 0.0
         env = MiniGridWrapper(
-            env_id="MiniGrid-DoorKey-5x5-v0",
-            seed=0,
+            env_id="MiniGrid-DoorKey-5x5-v0", seed=0,
             max_episode_steps=self._cfg.max_steps_per_ep,
-            auto_reset=False,
-            render_size=self._render_size,
+            auto_reset=False, render_size=self._render_size,
         )
         got_key = 0
         opened_door = 0
@@ -254,11 +288,51 @@ class IndependentEvaluator:
             if step_out.terminated:
                 reached_goal += 1
         env.close()
-        return (
-            got_key / max(n_ep, 1),
-            opened_door / max(n_ep, 1),
-            reached_goal / max(n_ep, 1),
-        )
+        return got_key / max(n_ep, 1), opened_door / max(n_ep, 1), reached_goal / max(n_ep, 1)
+
+    # --- Number-sense scorer ---
+
+    def _measure_number_sense(
+        self, model: nn.Module, number_sense: object | None,
+    ) -> float:
+        """Accuracy of cardinality prediction on PhysicsSandbox with known counts."""
+        if number_sense is None:
+            return 0.0
+        counts = [2, 3, 5, 7, 10]
+        correct = 0
+        total = 0
+        for n_obj in counts:
+            env = PhysicsSandbox(
+                num_objects=n_obj, seed=42, max_episode_steps=1,
+                render_size=64, gravity=-9.8, action_force=50.0,
+            )
+            obs = env.reset()
+            with torch.no_grad():
+                _ = model(self._obs_to_tensor(obs, self._device))
+            slots = getattr(model, "_last_slots", None)
+            if slots is not None:
+                pred = number_sense(slots).argmax(dim=-1).item()
+                if pred == n_obj:
+                    correct += 1
+                total += 1
+            env.close()
+        return correct / max(total, 1)
+
+    # --- Symbolic scorer ---
+
+    @staticmethod
+    def _measure_symbolic(symbolic_layer: object | None) -> float:
+        """Rule match rate from symbolic layer."""
+        if symbolic_layer is None:
+            return 0.0
+        try:
+            rm = symbolic_layer.rule_memory
+            s = rm.summary()
+            matched = int(s.get("total_matches", s.get("n_matches", 0)))
+            total = int(s.get("total_queries", 1))
+            return min(1.0, matched / max(total, 1))
+        except Exception:
+            return 0.0
 
     @staticmethod
     def _make_env(num_objects: int) -> PhysicsSandbox:
