@@ -2,7 +2,7 @@
 
 Fuses Y = Q @ W^T and WK = K @ W^T into a single Triton kernel per segment,
 reducing launch overhead for small d_h (≤128). Gradient accumulation and
-W update stay in PyTorch for numerical stability.
+W update stay in PyTorch where ``torch.bmm`` is already optimal.
 
 Numerical parity: ≤1e-4 vs PyTorch reference on d_h ∈ {16,32,64,128}.
 """
@@ -35,30 +35,45 @@ def _ttt_fused_output_kernel(
     off_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     off_d = tl.arange(0, d_h)
 
-    m_mask = off_m[:, None] < seg_len
-    n_mask = off_n[None, :] < d_h
-    d_mask = off_d[None, :] < d_h
+    m_mask = off_m < seg_len
+    n_mask = off_n < d_h
 
     # Load W tile: (d_h, BLOCK_N)
-    w = tl.load(W_ptr + off_d[:, None] * d_h + off_n[None, :],
-                mask=d_mask & n_mask, other=0.0)
+    w = tl.load(
+        W_ptr + off_d[:, None] * d_h + off_n[None, :],
+        mask=(off_d[:, None] < d_h) & (off_n[None, :] < d_h),
+        other=0.0,
+    )
 
     # --- Y = Q @ W^T ---
-    q = tl.load(Q_ptr + off_m[:, None] * d_h + off_d[None, :],
-                mask=m_mask & d_mask, other=0.0)
+    q = tl.load(
+        Q_ptr + off_m[:, None] * d_h + off_d[None, :],
+        mask=m_mask[:, None] & (off_d[None, :] < d_h),
+        other=0.0,
+    )
     y = tl.dot(q, w)
-    tl.store(Y_ptr + off_m[:, None] * d_h + off_n[None, :], y,
-             mask=m_mask & n_mask)
+    tl.store(
+        Y_ptr + off_m[:, None] * d_h + off_n[None, :],
+        y, mask=m_mask[:, None] & n_mask[None, :],
+    )
 
     # --- WK = K @ W^T, residual = WK - V ---
-    k = tl.load(K_ptr + off_m[:, None] * d_h + off_d[None, :],
-                mask=m_mask & d_mask, other=0.0)
+    k = tl.load(
+        K_ptr + off_m[:, None] * d_h + off_d[None, :],
+        mask=m_mask[:, None] & (off_d[None, :] < d_h),
+        other=0.0,
+    )
     wk = tl.dot(k, w)
-    v = tl.load(V_ptr + off_m[:, None] * d_h + off_n[None, :],
-                mask=m_mask & n_mask, other=0.0)
+    v = tl.load(
+        V_ptr + off_m[:, None] * d_h + off_n[None, :],
+        mask=m_mask[:, None] & n_mask[None, :],
+        other=0.0,
+    )
     res = wk - v
-    tl.store(RES_ptr + off_m[:, None] * d_h + off_n[None, :], res,
-             mask=m_mask & n_mask)
+    tl.store(
+        RES_ptr + off_m[:, None] * d_h + off_n[None, :],
+        res, mask=m_mask[:, None] & n_mask[None, :],
+    )
 
 
 def ttt_linear_forward_triton(
@@ -72,10 +87,8 @@ def ttt_linear_forward_triton(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Triton-accelerated TTT-Linear forward.
 
-    Projects K/V/Q once with PyTorch matmuls, then runs each segment's
-    output computation in a fused Triton kernel. Gradient update stays
-    in PyTorch where ``torch.bmm`` is already optimal for batched (d_h,d_h)
-    outer products.
+    Projects K/V/Q once, then runs each segment's output computation in
+    a fused Triton kernel. Gradient update stays in PyTorch.
     """
     B, T, d_in = x.shape
     d_h = theta_K.shape[1]
@@ -94,7 +107,7 @@ def ttt_linear_forward_triton(
 
     num_segments = math.ceil(T / mini_batch)
     BLOCK_M = 32
-    BLOCK_N = min(32, max(1, triton.next_power_of_2(d_h)))
+    BLOCK_N = min(32, triton.next_power_of_2(d_h)) if d_h > 0 else 32
 
     for seg in range(num_segments):
         t0 = seg * mini_batch
@@ -116,7 +129,7 @@ def ttt_linear_forward_triton(
                 seg_len=seg_len, d_h=d_h, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
             )
 
-        # W update: grad = residual^T @ K_seg → (B, d_h, d_h)
+        # W update: grad = residual^T @ K_seg -> (B, d_h, d_h)
         grad = torch.bmm(residual.transpose(-1, -2), K_seg)
         W = W - eta_b * grad
 
