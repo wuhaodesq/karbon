@@ -1784,6 +1784,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         logger.info("Viz: saving frames every %d steps to %s", _viz_every, _viz_dir)
 
     _resume_extra: dict[str, Any] | None = None
+    last_curr_switch_step = 0
     if resume is not None:
         payload = load_ckpt(resume)
         _model_mismatch = False
@@ -1926,6 +1927,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         if resumed_stage == stage:
             # Same-stage resume: continue the step counter.
             state.step = resumed_step
+            last_curr_switch_step = state.step  # prevent immediate switch on resume
             logger.info("Resumed same-stage %d from %s at step %d",
                         stage, resume, state.step)
         else:
@@ -2012,7 +2014,6 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             pass
         env = _build_env_from_spec(curr_active_task.spec, env_cfg)
         obs = env.reset()
-    last_curr_switch_step = 0
     last_curr_report_step = 0
     last_curr_mean_ret: float = 0.0
 
