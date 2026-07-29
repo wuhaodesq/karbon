@@ -137,6 +137,16 @@ class AutoCurriculum:
 
     # --------------------------------------------------- sampling
 
+    def peek_next(self) -> TaskTemplate | None:
+        """Return the next task WITHOUT advancing ``_next_seq_index``.
+
+        Returns ``None`` in non-sequential modes.
+        """
+        if self.config.mode != "sequential" or not self._insertion_order:
+            return None
+        idx = self._next_seq_index % len(self._insertion_order)
+        return self._tasks[self._insertion_order[idx]]
+
     def sample_task(self) -> TaskTemplate:
         """Pick the next task to train on.
 

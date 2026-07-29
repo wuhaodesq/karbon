@@ -3400,8 +3400,19 @@ and state.step % 50000 < rollout_capacity):
             and _curr_switch > 0
             and state.step - last_curr_switch_step >= _curr_switch
         ):
-            new_task = curriculum.sample_task()
-            if curr_active_task is None or new_task.id != curr_active_task.id:
+            # In sequential mode, peek first — don't waste _next_seq_index on same-task
+            _peek_id = None
+            if curriculum.config.mode == "sequential" and curr_active_task is not None:
+                _peek = curriculum.peek_next()
+                if _peek is not None:
+                    _peek_id = _peek.id
+                if _peek_id == curr_active_task.id:
+                    last_curr_switch_step = state.step
+            if _peek_id != (curr_active_task.id if curr_active_task else None):
+                new_task = curriculum.sample_task()
+            else:
+                new_task = None
+            if new_task is not None and (curr_active_task is None or new_task.id != curr_active_task.id):
                 logger.info(
                     "Curriculum switch @ step=%d: task=%s (id=%d) → %s (id=%d)",
                     state.step,
