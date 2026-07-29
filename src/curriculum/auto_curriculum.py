@@ -43,6 +43,7 @@ class AutoCurriculumConfig:
     lp_min_samples: int = 8
     exploration_epsilon: float = 0.1     # prob of uniform sample regardless of LP
     smoothing: float = 0.5
+    mode: str = "lp"  # "lp" (auto-sampling) or "sequential" (added order)
 
 
 class AutoCurriculum:
@@ -82,6 +83,7 @@ class AutoCurriculum:
             smoothing=self.config.smoothing,
         ))
         self._rng = rng or random.Random(0)
+        self._next_seq_index: int = 0  # for sequential mode
 
     # ---------------------------------------------------- Bounded protocol
 
@@ -138,11 +140,19 @@ class AutoCurriculum:
     def sample_task(self) -> TaskTemplate:
         """Pick the next task to train on.
 
-        With probability ``exploration_epsilon`` sample uniformly;
-        otherwise sample proportional to normalized |LP|.
+        ``mode="sequential"``: returns tasks in insertion order, cycling
+        infinitely.  ``mode="lp"`` (default): LP-weighted sampling with
+        exploration epsilon.
         """
         if not self._tasks:
             raise RuntimeError("Curriculum has no tasks")
+
+        if self.config.mode == "sequential":
+            if not self._insertion_order:
+                raise RuntimeError("No tasks in insertion order")
+            idx = self._next_seq_index % len(self._insertion_order)
+            self._next_seq_index += 1
+            return self._tasks[self._insertion_order[idx]]
 
         # Exploration branch
         if self._rng.random() < self.config.exploration_epsilon:
@@ -151,7 +161,6 @@ class AutoCurriculum:
 
         # LP-weighted sampling
         probs = self._lp.normalize_priorities(self._tasks.keys())
-        # If everyone's LP≈0, this becomes uniform; still fine.
         tids = list(probs.keys())
         weights = [probs[t] for t in tids]
         chosen = self._rng.choices(tids, weights=weights, k=1)[0]
@@ -180,6 +189,7 @@ class AutoCurriculum:
             "tasks": {t: {"spec": tk.spec, "difficulty": tk.difficulty, "tag": tk.tag}
                       for t, tk in self._tasks.items()},
             "insertion_order": list(self._insertion_order),
+            "next_seq_index": self._next_seq_index,
             "lp": self._lp.state_dict(),
         }
 
@@ -190,4 +200,5 @@ class AutoCurriculum:
             for t, info in state["tasks"].items()
         }
         self._insertion_order = [int(t) for t in state["insertion_order"]]
+        self._next_seq_index = int(state.get("next_seq_index", 0))
         self._lp.load_state_dict(state["lp"])

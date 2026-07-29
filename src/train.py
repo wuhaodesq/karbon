@@ -1989,25 +1989,18 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     curr_report_every = int(curriculum_cfg.get("report_every_steps", 500)) if curriculum_cfg else 0
     curr_active_task: TaskTemplate | None = None
     if curriculum is not None:
-        saved_task_id = resume is not None and _resume_extra is not None and int(
-            _resume_extra.get("curriculum_active_task_id", -1)
-        )
-        force_id = int(curriculum_cfg.get("force_initial_task_id", -1))
-        if force_id >= 0:
-            saved_task_id = force_id
-        if saved_task_id and saved_task_id >= 0:
-            for t in curriculum._tasks:
-                if t.id == saved_task_id:
-                    curr_active_task = t
-                    break
+        saved_task_id = 0
+        if resume is not None and _resume_extra is not None:
+            saved_task_id = int(_resume_extra.get("curriculum_active_task_id", 0))
+        for tid in curriculum._tasks:
+            if tid == saved_task_id:
+                curr_active_task = curriculum._tasks[tid]
+                break
         if curr_active_task is None:
             curr_active_task = curriculum._tasks[0] if curriculum._tasks else curriculum.sample_task()
-        if force_id >= 0:
-            _last_curr_switch_step = 0  # prevent immediate switch away
         logger.info("Curriculum: initial task=%s (id=%d)%s",
                     curr_active_task.tag, curr_active_task.id,
-                    " (resumed)" if saved_task_id and not force_id else
-                    " (forced)" if force_id >= 0 else "")
+                    " (resumed)" if resume is not None else "")
         try:
             env.close()
         except Exception:

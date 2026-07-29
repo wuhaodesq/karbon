@@ -47,15 +47,35 @@ class EvalConfig:
 
 @dataclass
 class EvalReport:
+    """Six-dimension agent capability report.
+
+    nav:  empty-5x5 / empty-8x8 (basic navigation)
+    tool: doorkey key-pickup / door-open / goal-reach
+    gen:  empty-6x6 zero-shot (generalisation)
+    3d:   PhysicsSandbox task (curiosity / drive / task / total)
+    num:  number-sense accuracy
+    sym:  symbolic rule match rate
+    """
     step: int
+    # 3D Physics
     curiosity: float
     drive: float
     task: float
     total: float
-    task_vs_random: float  # ratio of agent mean reward / random mean reward
-    minigrid_sr: float = 0.0  # MiniGrid doorkey success rate (goal reached)
-    minigrid_key: float = 0.0  # key pickup rate (return >= 0.1)
-    minigrid_door: float = 0.0  # door open rate (return >= 0.6)
+    task_vs_random: float
+    # MiniGrid — navigation
+    nav_5x5: float = 0.0
+    nav_8x8: float = 0.0
+    # MiniGrid — tool use
+    tool_key: float = 0.0
+    tool_door: float = 0.0
+    tool_sr: float = 0.0
+    # MiniGrid — generalisation
+    gen_6x6: float = 0.0
+    # Number sense
+    number_sense: float = 0.0
+    # Symbolic reasoning
+    symbolic: float = 0.0
     advisory: str = ""
     timestamp: float = field(default_factory=time.time)
 
