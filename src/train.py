@@ -3428,6 +3428,7 @@ and state.step % 50000 < rollout_capacity):
                     model, homeostatic_drives, state.step,
                     number_sense=number_sense,
                     symbolic_layer=symbolic_layer,
+                    skills=skills,
                 )
                 w = independent_evaluator.weights
                 logger.info(

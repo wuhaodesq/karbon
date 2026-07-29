@@ -148,6 +148,7 @@ class IndependentEvaluator:
         step: int,
         number_sense: object | None = None,
         symbolic_layer: object | None = None,
+        skills: object | None = None,
     ) -> EvalReport:
         """Run full 6-dimension evaluation and return a structured report."""
         # 1. 3D Physics
@@ -156,14 +157,14 @@ class IndependentEvaluator:
         tsk, vs_random = self._measure_task(model)
 
         # 2. MiniGrid — navigation
-        nav5 = self._measure_minigrid_sr(model, "MiniGrid-Empty-5x5-v0")
-        nav8 = self._measure_minigrid_sr(model, "MiniGrid-Empty-8x8-v0")
+        nav5 = self._measure_minigrid_sr(model, "MiniGrid-Empty-5x5-v0", skills)
+        nav8 = self._measure_minigrid_sr(model, "MiniGrid-Empty-8x8-v0", skills)
 
         # 3. MiniGrid — tool use
-        t_key, t_door, t_sr = self._measure_minigrid_tool(model)
+        t_key, t_door, t_sr = self._measure_minigrid_tool(model, skills)
 
         # 4. MiniGrid — generalisation
-        gen6 = self._measure_minigrid_sr(model, "MiniGrid-Empty-6x6-v0")
+        gen6 = self._measure_minigrid_sr(model, "MiniGrid-Empty-6x6-v0", skills)
 
         # 5. Number sense
         num = self._measure_number_sense(model, number_sense)
@@ -224,7 +225,7 @@ class IndependentEvaluator:
 
     # --- MiniGrid scorers ---
 
-    def _measure_minigrid_sr(self, model: nn.Module, env_id: str) -> float:
+    def _measure_minigrid_sr(self, model: nn.Module, env_id: str, skills: object | None = None) -> float:
         """Success rate on a simple MiniGrid env (fraction reaching goal)."""
         import logging
         _log = logging.getLogger(__name__)
@@ -244,9 +245,13 @@ class IndependentEvaluator:
             obs = env.reset(seed=ep)
             ep_ret = 0.0
             done = False
+            skill_delta = None
+            if skills is not None:
+                active = skills.sample_for_injection()
+                skill_delta = active.weights if active is not None else None
             while not done:
                 with torch.no_grad():
-                    out = model(self._obs_to_tensor(obs, self._device))
+                    out = model(self._obs_to_tensor(obs, self._device), skill_delta=skill_delta)
                 logits = out[0] if isinstance(out, (tuple, list)) else out
                 a = int(torch.argmax(logits, dim=-1).item())
                 step_out = env.step(a)
@@ -260,7 +265,7 @@ class IndependentEvaluator:
         _log.info("[eval-mg] %s returns=%s sr=%.2f", env_id, [f"{r:.3f}" for r in returns], successes / max(n_ep, 1))
         return successes / max(n_ep, 1)
 
-    def _measure_minigrid_tool(self, model: nn.Module) -> tuple[float, float, float]:
+    def _measure_minigrid_tool(self, model: nn.Module, skills: object | None = None) -> tuple[float, float, float]:
         """DoorKey-5x5 sub-metrics: (key_rate, door_rate, success_rate)."""
         try:
             from ..envs.minigrid_wrapper import MiniGridWrapper
@@ -279,9 +284,13 @@ class IndependentEvaluator:
             obs = env.reset(seed=ep)
             ep_return = 0.0
             done = False
+            skill_delta = None
+            if skills is not None:
+                active = skills.sample_for_injection()
+                skill_delta = active.weights if active is not None else None
             while not done:
                 with torch.no_grad():
-                    out = model(self._obs_to_tensor(obs, self._device))
+                    out = model(self._obs_to_tensor(obs, self._device), skill_delta=skill_delta)
                 logits = out[0] if isinstance(out, (tuple, list)) else out
                 a = int(torch.argmax(logits, dim=-1).item())
                 step_out = env.step(a)
