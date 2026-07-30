@@ -5,6 +5,15 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 13 — External Memory (SurpriseDetector + EpisodicReplay) (2026-07-30)
+
+#### 新增
+- **SurpriseDetector** (`src/memory/surprise_detector.py`): 集合 4 个 surprise 信号（RND + RSSM reconstruction + Coverage novelty + TD error），用 running avg/std 自适应归一化
+- **EpisodicReplayMemory** (`src/memory/episodic_replay.py`): 在 `EpisodicMemory`（in-memory embedding）之上叠加 `ColdShardTier`（SSD 分片全量 Transition），支持 surprise-gated cold-tier 归档 + 基于 TD 损失的 replay 采样
+- **Config** (`configs/stage13_external_memory.yaml`): 三档预设 `local_smoke`/`home_64g`/`cloud_24g`，`developmental_memory.enabled=true`
+- **Train loop**: SurpriseDetector 集成到 `memory_manager.store_experience()`；EpisodicReplayMemory 冷层存储 + TD-loss 采样；extras 行 `episodic=N/capacity` 日志
+- **远端 RTX 3080 Ti 验证**: Stage 13 训练正常运行，`episodic=4096/276240` 已在 step=2048 的 extras 行出现
+
 ### M2 技能复用闭合 + Stage 11 训练验证 (2026-07-30)
 
 #### 新增

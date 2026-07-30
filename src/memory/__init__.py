@@ -8,6 +8,7 @@ from .bounded_replay import (
     Transition,
     WarmRingTier,
 )
+from .episodic_replay import EpisodicReplayMemory
 from .generative_replay import GenerativeReplayConfig, GenerativeReplayVAE
 from .skill_library import (
     BoundedSkillLibrary,
@@ -15,11 +16,13 @@ from .skill_library import (
     SkillLibraryBudget,
     SkillWeights,
 )
+from .surprise_detector import SurpriseDetector
 
 __all__ = [
     "BoundedReplayBuffer",
     "BoundedSkillLibrary",
     "ColdShardTier",
+    "EpisodicReplayMemory",
     "GenerativeReplayConfig",
     "GenerativeReplayVAE",
     "HotRingTier",
@@ -27,6 +30,7 @@ __all__ = [
     "SkillEntry",
     "SkillLibraryBudget",
     "SkillWeights",
+    "SurpriseDetector",
     "Transition",
     "WarmRingTier",
 ]

@@ -83,6 +83,7 @@ from src.models.cross_modal_bridges import CrossModalManager
 from src.models.creativity_orchestrator import CreativityOrchestrator
 from src.models.llm_fusion import LLMFusionBridge
 from src.models.developmental_memory import MemoryManager
+from src.memory import EpisodicReplayMemory, SurpriseDetector
 from src.models.theory_of_mind import TheoryOfMind
 from src.models.homeostatic_drives import HomeostaticDrives
 from src.models.long_range_planner import LongRangePlanner
@@ -890,6 +891,9 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     curiosity_cfg = config.get("curiosity")
     replay_cfg = config.get("replay")
     coverage_cfg = config.get("coverage")
+    extmem_cfg = config.get("external_memory", {})
+    er_batch_size = int(extmem_cfg.get("episodic_replay_batch_size", 64))
+    er_every_steps = int(extmem_cfg.get("episodic_replay_every_steps", 8))
 
     rnd: RND | None = None
     replay: BoundedReplayBuffer | None = None
@@ -1466,6 +1470,30 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                      mem_cfg.get("episodic_max", 10000),
                      mem_cfg.get("semantic_max", 1000))
 
+    # --- Stage 13: External Memory System (SurpriseDetector + EpisodicReplay) ---
+    extmem_cfg = config.get("external_memory", {})
+    em_enabled = bool(extmem_cfg.get("enabled", False))
+    surprise_detector: SurpriseDetector | None = None
+    episodic_replay: EpisodicReplayMemory | None = None
+    if em_enabled and memory_manager is not None:
+        sd_cfg = extmem_cfg.get("surprise_detector", {})
+        surprise_detector = SurpriseDetector(
+            rnd_weight=float(sd_cfg.get("rnd_weight", 0.3)),
+            rssm_weight=float(sd_cfg.get("rssm_weight", 0.3)),
+            coverage_weight=float(sd_cfg.get("coverage_weight", 0.2)),
+            td_weight=float(sd_cfg.get("td_weight", 0.2)),
+            smoothing=float(sd_cfg.get("smoothing", 0.9)),
+        )
+        er_cfg = extmem_cfg.get("episodic_replay", {})
+        episodic_replay = EpisodicReplayMemory(
+            episodic=memory_manager.episodic,
+            cold_dir=str(data_dir() / er_cfg.get("cold_archive_dir", "episodic_archive")),
+            cold_max_shards=int(er_cfg.get("cold_max_shards", 64)),
+            cold_shard_size=int(er_cfg.get("cold_shard_size", 4096)),
+            store_threshold=float(er_cfg.get("store_threshold", 1.5)),
+        )
+        logger.info("Stage 13 External Memory: SurpriseDetector + EpisodicReplayMemory")
+
     # --- Theory of Mind ---
     tom_cfg = config.get("theory_of_mind")
     theory_of_mind: TheoryOfMind | None = None
@@ -1877,6 +1905,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             ("knowledge_gap_state",      knowledge_gap,                None),
             ("social_curiosity_state",   social_curiosity,             None),
             ("memory_manager_state",     memory_manager,               None),
+            ("surprise_detector_state",  surprise_detector,            None),
             ("theory_of_mind_state",     theory_of_mind,               None),
             ("long_range_planner_state", long_range_planner,           None),
             ("concept_graph_state",      concept_graph,                None),
@@ -2261,7 +2290,6 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     pass
             if memory_manager is not None and n_envs == 1:
                 try:
-                    surprise_val = int_r if curiosity_mode != "none" else 0.0
                     current_ep = env.summary().get("episodes", 0)
                     tags = []
                     if extrinsic_r > 0.5:
@@ -2272,15 +2300,46 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                             hidden_for_mem = slot_out.squeeze(0).mean(dim=0)
                     else:
                         hidden_for_mem = torch.randn(model.d_model, device=device)
+                    # Stage 13: SurpriseDetector ensemble score
+                    surprise_val = float(np.asarray(int_r).mean()) if curiosity_mode != "none" else 0.0
+                    if surprise_detector is not None:
+                        rnd_val = float(rnd.intrinsic_reward(obs_t).item()) if (rnd is not None and curiosity_mode != "rssm") else surprise_val
+                        cov_novelty = 1.0 - coverage.coverage_ratio() if coverage is not None else 0.0
+                        surprise_val = surprise_detector.compute(
+                            rnd_reward=rnd_val,
+                            rssm_recon=surprise_val if curiosity_mode == "rssm" else 0.0,
+                            coverage_novelty=cov_novelty,
+                        )
                     memory_manager.store_experience(
                         hidden_state=hidden_for_mem,
                         action=int(action.item()),
                         reward=float(total_r),
-                        surprise=float(np.asarray(surprise_val).mean()),
+                        surprise=surprise_val,
                         global_step=state.step,
                         episode_id=int(current_ep),
                         tags=tags,
                     )
+                    # Stage 13: EpisodicReplayMemory cold-tier store
+                    if episodic_replay is not None:
+                        episodic_replay.store(
+                            obs=np.asarray(obs_t.cpu()),
+                            action=int(action.item()),
+                            reward=float(total_r),
+                            next_obs=np.asarray(step_out.obs),
+                            done=bool(done_arr[0]) if done_arr.ndim > 0 else bool(done_arr),
+                            obs_embedding=hidden_for_mem,
+                            surprise=surprise_val,
+                            global_step=state.step,
+                            episode_id=int(current_ep),
+                            tags=tags,
+                        )
+                    # Stage 13: per-slot SemanticMemory feeding
+                    if hasattr(model, 'use_slots') and model.use_slots and len(memory_manager.semantic) > 0:
+                        with torch.no_grad():
+                            all_slots = slot_out.squeeze(0)  # (num_slots, d_model)
+                            for s_idx in range(all_slots.size(0)):
+                                slot_key = f"slot_{s_idx}"
+                                memory_manager.semantic.store_fact(slot_key, all_slots[s_idx].cpu().numpy().tolist())
                 except Exception:
                     pass
 
@@ -2957,6 +3016,30 @@ and state.step % 50000 < rollout_capacity):
                 # e.g., hot tier still tiny; just skip this cycle
                 logger.debug("replay sample skipped: %s", exc)
 
+        # --- Stage 13: Episodic replay sampling from cold tier ---
+        if (
+            episodic_replay is not None
+            and len(episodic_replay) >= er_batch_size * 2
+            and state.step % er_every_steps < rollout_capacity
+        ):
+            try:
+                ep_batch = episodic_replay.sample(er_batch_size, device, obs_shape, num_actions)
+                if ep_batch is not None:
+                    _, ep_values = model(ep_batch["obs"])
+                    with torch.no_grad():
+                        _, ep_next_v = model(ep_batch["next_obs"])
+                        ep_next_v_raw = reward_ema.denormalize(ep_next_v)
+                        ep_td_raw = ep_batch["reward"] + gamma * ep_next_v_raw * (1.0 - ep_batch["done"])
+                        ep_td_target = reward_ema.normalize(ep_td_raw)
+                    ep_td_loss = F.mse_loss(ep_values, ep_td_target)
+                    optimizer.zero_grad(set_to_none=True)
+                    ep_td_loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+                    optimizer.step()
+                    _episodic_td = float(ep_td_loss.item())
+            except Exception as exc:
+                logger.debug("episodic replay sample skipped: %s", exc)
+
         # --- Stage 3: World Model update from replay ---
         if (
             wm is not None
@@ -3335,6 +3418,8 @@ and state.step % 50000 < rollout_capacity):
                 extras.append(f"wm={wm_last_loss['loss']:.3f}(r={wm_last_loss['recon']:.3f},kl={wm_last_loss['kl']:.3f},rew={wm_last_loss['reward']:.4f})")
             if imagination_trainer is not None and imagination_last_loss:
                 extras.append(f"img={imagination_last_loss.get('total_loss', 0):.4f}")
+            if episodic_replay is not None:
+                extras.append(f"episodic={len(episodic_replay)}/{episodic_replay.capacity}")
             if skills is not None:
                 extras.append(f"skills={len(skills)}/{skills.capacity}")
             if curriculum is not None and curr_active_task is not None:
@@ -3517,6 +3602,8 @@ and state.step % 50000 < rollout_capacity):
                 }
             if memory_manager is not None:
                 extra["memory_manager_state"] = memory_manager.state_dict()
+            if surprise_detector is not None:
+                extra["surprise_detector_state"] = surprise_detector.state_dict()
             if theory_of_mind is not None:
                 extra["theory_of_mind_state"] = theory_of_mind.state_dict()
             if homeostatic_drives is not None:
