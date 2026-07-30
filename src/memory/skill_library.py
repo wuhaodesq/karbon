@@ -89,6 +89,7 @@ class SkillEntry:
     usage_count: int = 0                     # how often invoked
     total_reward: float = 0.0                # sum of rewards when used
     last_used_ts: float = field(default_factory=time.time)
+    key_embedding: torch.Tensor | None = None  # retrieval key (hidden state at creation time)
 
     @property
     def avg_reward(self) -> float:
@@ -261,6 +262,37 @@ class BoundedSkillLibrary:
         if best_sim >= min_similarity:
             return self._gpu[best_idx]
         return None
+
+    def retrieve_by_embedding(
+        self, query: torch.Tensor, min_similarity: float = 0.6
+    ) -> tuple[SkillEntry | None, float]:
+        """Retrieve the most similar GPU-tier skill by key_embedding cosine similarity.
+
+        Args:
+            query: 1-D embedding tensor derived from current observation.
+            min_similarity: minimum cosine similarity to accept a match.
+
+        Returns:
+            (skill, similarity) or (None, 0.0) if no match.
+        """
+        if not self._gpu:
+            return None, 0.0
+        q_flat = query.flatten().unsqueeze(0)
+        keys: list[torch.Tensor] = []
+        valid: list[int] = []
+        for i, s in enumerate(self._gpu):
+            if s.key_embedding is not None:
+                keys.append(s.key_embedding.flatten())
+                valid.append(i)
+        if not keys:
+            return None, 0.0
+        others = torch.stack(keys, dim=0)
+        cos = F.cosine_similarity(q_flat, others, dim=1)
+        best_idx = int(cos.argmax().item())
+        best_sim = float(cos[best_idx].item())
+        if best_sim >= min_similarity:
+            return self._gpu[valid[best_idx]], best_sim
+        return None, 0.0
 
     def _merge(self, existing: SkillEntry, new: SkillEntry) -> None:
         """Fuse ``new`` into ``existing`` (weighted by usage counts).
@@ -458,7 +490,7 @@ class BoundedSkillLibrary:
 
     @staticmethod
     def _entry_to_dict(e: SkillEntry) -> dict:
-        return {
+        d: dict = {
             "id": e.id,
             "A": e.weights.A.detach().cpu().numpy(),
             "B": e.weights.B.detach().cpu().numpy(),
@@ -467,11 +499,17 @@ class BoundedSkillLibrary:
             "total_reward": e.total_reward,
             "last_used_ts": e.last_used_ts,
         }
+        if e.key_embedding is not None:
+            d["key_embedding"] = e.key_embedding.detach().cpu().numpy()
+        return d
 
     @staticmethod
     def _entry_from_dict(d: dict, device: torch.device) -> SkillEntry:
         A = torch.from_numpy(d["A"]).to(device)
         B = torch.from_numpy(d["B"]).to(device)
+        ke = None
+        if "key_embedding" in d:
+            ke = torch.from_numpy(d["key_embedding"])
         return SkillEntry(
             id=int(d["id"]),
             weights=SkillWeights(A=A, B=B),
@@ -479,6 +517,7 @@ class BoundedSkillLibrary:
             usage_count=int(d["usage_count"]),
             total_reward=float(d["total_reward"]),
             last_used_ts=float(d["last_used_ts"]),
+            key_embedding=ke,
         )
 
 

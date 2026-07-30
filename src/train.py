@@ -2047,6 +2047,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # episode. Picked at episode start, applied as a LoRA residual every
     # forward, and counted (record_use) when it helps complete the episode.
     active_skill: "SkillEntry | None" = None
+    _ep_first_key: torch.Tensor | None = None  # first-step hidden state for M2 key_embedding
     skill_inject_coef = float(skills_cfg.get("inject_coef", 1.0)) if skills_cfg else 1.0
 
     # Phase 0 knobs
@@ -2106,10 +2107,15 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         while not buffer.full():
             t0 = time.perf_counter()
             obs_t = _obs_to_tensor(obs, device)  # (N,3,H,W) for vec; (1,3,H,W) single
-            # --- M2: pick a stored skill to inject at the start of an episode ---
-            if skills is not None and n_envs == 1 and active_skill is None:
-                if skills.top_k():  # GPU tier has resident skills
-                    active_skill = skills.sample_for_injection()  # score-weighted pick
+            # --- M2: retrieve most relevant skill by observation embedding ---
+            if skills is not None and n_envs == 1 and active_skill is None and skills.top_k():
+                with torch.no_grad():
+                    _, _, h = model(obs_t, return_hidden=True, skill_delta=None)
+                _ep_first_key = h.detach().cpu()  # saved for skill creation at episode end
+                matched, sim = skills.retrieve_by_embedding(_ep_first_key)
+                if matched is not None:
+                    active_skill = matched
+                    logger.info("[skills] retrieved skill #%d (sim=%.3f)", matched.id, sim)
             with torch.no_grad():
                 t_model = time.perf_counter()
                 _skill_delta = active_skill.weights if active_skill is not None else None
@@ -2502,12 +2508,15 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     candidate = skills.new_skill(
                         tag=f"ep{env.summary()['episodes']}_ret{ep_ret:.2f}"
                     )
+                    if _ep_first_key is not None:
+                        candidate.key_embedding = _ep_first_key.detach().cpu()
                     existing = skills.retrieve(candidate, min_similarity=0.9)
                     if existing is not None:
                         skills._merge(existing, candidate)
                     else:
                         skills.add(candidate)
                 active_skill = None  # force a fresh pick for the next episode
+                _ep_first_key = None
 
                 # --- Stage 7: extract symbolic rules from successful episodes ---
                 if symbolic_layer is not None and ep_ret > symbolic_extract_threshold:
