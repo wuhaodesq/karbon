@@ -197,12 +197,14 @@ class LogicEngine:
         max_proof_depth: int = 5,
         match_threshold: float = 0.7,
         use_trainable_unifier: bool = False,
+        device: torch.device | None = None,
     ) -> None:
         self._d_model = d_model
         self._max_rules = int(max_rules)
         self._max_vars = int(max_variables)
         self._max_depth = int(max_proof_depth)
         self._threshold = float(match_threshold)
+        self._device = device or torch.device("cpu")
 
         self._rules: dict[int, QuantifiedRule] = {}
         self._variables: dict[str, Variable] = {}
@@ -239,7 +241,7 @@ class LogicEngine:
         var = Variable(
             name=name,
             var_type=var_type,
-            category_embedding=category_embedding.detach().clone(),
+            category_embedding=category_embedding.detach().clone().to(self._device),
         )
         self._variables[name] = var
         return var
@@ -306,7 +308,7 @@ class LogicEngine:
             # Auto-create a variable with a random embedding (to be refined later)
             var = self.define_variable(
                 variable_name, VariableType.ABSTRACT,
-                torch.randn(self._d_model),
+                torch.randn(self._d_model, device=self._device),
             )
 
         rule = QuantifiedRule(
