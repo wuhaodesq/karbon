@@ -19,15 +19,17 @@ def _rollout_like_states() -> list[dict]:
     states: list[dict] = []
     # Step 1: agent pushes an object to the right (force +x, vel +x)
     states.append({
-        "force_motion_pairs": [{"force": (1.0, 0.0), "velocity_after": (0.9, 0.05)}],
+        "force_motion_pairs": [{"force": (1.0, 0.0), "velocity_after": (0.9, 0.05), "object_id": 0}],
         "occlusion_events": [],
         "count_trials": [],
+        "object_contact_order": [0],
     })
     # Step 2: another correct push up
     states.append({
-        "force_motion_pairs": [{"force": (0.0, 1.0), "velocity_after": (0.0, 0.8)}],
+        "force_motion_pairs": [{"force": (0.0, 1.0), "velocity_after": (0.0, 0.8), "object_id": 1}],
         "occlusion_events": [],
         "count_trials": [],
+        "object_contact_order": [1],
     })
     # Step 3: occlusion begins, agent near last-known
     states.append({
@@ -38,11 +40,12 @@ def _rollout_like_states() -> list[dict]:
         }],
         "count_trials": [],
     })
-    # Step 4: episode ends, count trial recorded
+    # Step 4: episode ends, count trial recorded + means_ends_score for the whole episode
     states.append({
         "force_motion_pairs": [],
         "occlusion_events": [],
         "count_trials": [{"true_count": 4, "estimated_count": 4}],
+        "means_ends_score": 1.0,
     })
     return states
 
@@ -55,8 +58,8 @@ def test_rollout_aggregation_scores_across_steps():
     assert rep.passed["object_permanence"]
     # number sense: exact count -> pass
     assert rep.passed["number_sense"]
-    # all three real milestones passed -> estimated age = max(1.0, 2.5, 3.5)
-    assert rep.estimated_age == 3.5
+    # all milestones up to 4.0y passed -> estimated age = 4.0
+    assert rep.estimated_age == 4.0
 
 
 def test_rollout_with_no_signals_is_zero():

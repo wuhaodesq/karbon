@@ -16,12 +16,14 @@ def _states_with_physics_ok() -> list[dict]:
     """Agent applies force along +x and object moves along +x."""
     return [{
         "force_motion_pairs": [
-            {"force": (1.0, 0.0), "velocity_after": (0.8, 0.1)},
-            {"force": (0.0, 1.0), "velocity_after": (0.1, 0.7)},
-            {"force": (-1.0, 0.0), "velocity_after": (-0.9, 0.0)},
+            {"force": (1.0, 0.0), "velocity_after": (0.8, 0.1), "object_id": 0},
+            {"force": (0.0, 1.0), "velocity_after": (0.1, 0.7), "object_id": 1},
+            {"force": (-1.0, 0.0), "velocity_after": (-0.9, 0.0), "object_id": 2},
         ],
         "occlusion_events": [],
         "count_trials": [],
+        "object_contact_order": [0, 1, 2],
+        "means_ends_score": 1.0,
     }]
 
 
@@ -77,8 +79,8 @@ def test_estimated_age_is_max_passed():
         + _states_with_occlusion_ok()
         + _states_with_count_ok()
     )
-    # passed: 1y(obj), 2.5y(physics), 3.5y(count) -> max = 3.5
-    assert rep.estimated_age == 3.5
+    # passed: 1y(obj), 1.5y(means_ends), 2.5y(physics), 3.5y(count), 4.0y(tom) -> max = 4.0
+    assert rep.estimated_age == 4.0
 
 
 def test_empty_states_gives_zero_age():

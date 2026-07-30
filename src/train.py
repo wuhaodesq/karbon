@@ -122,7 +122,7 @@ def _maybe_compile(module: nn.Module, device: torch.device, name: str = "") -> n
     ``nn.Module`` wrapper untouched — ``state_dict()`` / ``load_state_dict()``
     keys are unchanged and checkpoint save/restore works normally.
     """
-    if not is_cuda() or device.type != "cuda":
+    if not is_cuda():
         return module
     try:
         import packaging.version
@@ -3404,19 +3404,13 @@ and state.step % 50000 < rollout_capacity):
             and _curr_switch > 0
             and state.step - last_curr_switch_step >= _curr_switch
         ):
-            # DEBUG: dump curriculum state before sample_task
-            logger.info("[curriculum-debug] _next_seq_index=%d _insertion_order=%s resume=%s",
-                        curriculum._next_seq_index,
-                        curriculum._insertion_order,
-                        resume)
-            new_task = curriculum.sample_task()
-            # Advance the timer every cycle — _next_seq_index advances in
-            # sample_task() so sequential mode naturally cycles.
-            last_curr_switch_step = state.step
-            if curr_active_task is not None and new_task.id == curr_active_task.id:
-                # Same task: skip env rebuild, continue with current env.
-                pass
-            else:
+            # Peek next task WITHOUT advancing _next_seq_index.
+            # Only call sample_task() (which advances index) if we actually switch.
+            next_task = curriculum.peek_next()
+            if next_task is not None and (curr_active_task is None or next_task.id != curr_active_task.id):
+                # Actually advance and switch
+                new_task = curriculum.sample_task()
+                last_curr_switch_step = state.step
                 logger.info(
                     "Curriculum switch @ step=%d: task=%s (id=%d) → %s (id=%d)",
                     state.step,
@@ -3431,6 +3425,9 @@ and state.step % 50000 < rollout_capacity):
                 env = _build_env_from_spec(new_task.spec, env_cfg)
                 obs = env.reset()
                 curr_active_task = new_task
+            else:
+                # Same task — just reset the timer so we don't re-check every step.
+                last_curr_switch_step = state.step
 
         # --- Independent evaluator: periodic 3D scoring (observation only) ---
         # Scores curiosity / drive / task independently.

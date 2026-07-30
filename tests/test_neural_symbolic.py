@@ -174,7 +174,7 @@ def test_symbolic_layer_forward_no_rules():
 
 
 def test_symbolic_layer_forward_with_matching_rule():
-    """When a matching rule exists, should override the action."""
+    """When a matching rule exists with high confidence, should apply soft bias."""
     layer = NeuralSymbolicLayer(
         d_model=D_MODEL, num_actions=NUM_ACTIONS,
         match_threshold=0.5, override_confidence_threshold=0.5,
@@ -191,7 +191,7 @@ def test_symbolic_layer_forward_with_matching_rule():
     neural_logits = torch.zeros(1, NUM_ACTIONS)
     out, info = layer(h.unsqueeze(0), neural_logits)
     assert info["rule_matched"] is True
-    assert info["override"] is True
+    assert info["biased"] is True  # soft bias injection, not hard override
     # The rule's action (5) should be strongly preferred
     assert out[0, 5] > out[0, 0]
 

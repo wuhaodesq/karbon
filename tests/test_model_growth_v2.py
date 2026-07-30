@@ -125,27 +125,35 @@ class TestGrowerV2PlateauLP:
         """Regression for the resume-spike bug: a one-off inflated return on
         the first step after a checkpoint resume (e.g. 113 after the model's
         sustained plateau is ~101) must NOT pin ``rmax`` forever. With the
-        decaying running max, the spike fades over a handful of growth-check
-        calls and the trigger line (0.95 × rmax) drops back to the sustained
-        level, so a future 3→4 layer growth can still fire.
+        windowed 80th-percentile running max, the spike falls out of the
+        window after enough sustained plateau calls, and the trigger line
+        (0.95 × rmax) drops back to the sustained level, so a future 3→4
+        layer growth can still fire.
 
-        Without the decay (raw running max), rmax would stay 113 and growth
+        Without the window (raw running max), rmax would stay 113 and growth
         would require mean_return ≥ 0.95×113 ≈ 107.5 — unreachable at a 101
         plateau, permanently blocking further growth.
         """
-        cfg = GrowthConfigV2(rmax_decay=0.98)
+        # Use a small window so the test runs fast; 80th percentile of 8 = index 5
+        cfg = GrowthConfigV2(rmax_window=8, min_steps_between_growths=0)
         grower = ModelGrowerV2(config=cfg)
-        grower.plateau_lp(101.0)        # sustained plateau seeds rmax = 101
-        grower.plateau_lp(113.0)        # transient resume spike -> rmax = 113
-        assert grower._rmax == 113.0
-        # Sustained plateau returns; spike must decay back toward 101.
-        rmax_after = None
+        # Fill window with sustained plateau
         for _ in range(8):
-            rmax_after = grower.plateau_lp(101.0)
-        assert rmax_after < 107.5, "spike not forgotten; growth would be blocked"
-        # Once back at the sustained level, plateau_lp ≈ 0 -> grower fires.
+            grower.plateau_lp(101.0)
+        assert grower._rmax == 101.0
+        # Transient resume spike
+        grower.plateau_lp(113.0)
+        # Spike is in window but 80th percentile of [101*7, 113] is still 101
+        assert grower._rmax == 101.0
+        # Now add more sustained values to push spike out
+        for _ in range(8):
+            grower.plateau_lp(101.0)
+        # Spike has fallen out of window; rmax returns to 101
+        assert grower._rmax == 101.0
+        # plateau_lp ≈ 0 -> grower fires
         lp = grower.plateau_lp(101.0)
         assert lp <= 0.05
+        assert grower.should_grow(step=1_000_000, learning_progress=lp, coverage_ratio=1.0)
 
     def test_grower_fires_on_plateau_with_coverage(self) -> None:
         """Real-breakthrough fix: corrected LP lets the grower trigger on a
