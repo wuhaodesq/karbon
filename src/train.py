@@ -1021,6 +1021,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             lp_min_samples=int(curriculum_cfg.get("lp_min_samples", 8)),
             exploration_epsilon=float(curriculum_cfg.get("exploration_epsilon", 0.1)),
             smoothing=float(curriculum_cfg.get("smoothing", 0.5)),
+            mode=str(curriculum_cfg.get("mode", "lp")),
         ))
         curriculum_tasks = list(curriculum_cfg.get("tasks", []))
         for task_spec in curriculum_tasks:
