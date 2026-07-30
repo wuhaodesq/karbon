@@ -3404,6 +3404,11 @@ and state.step % 50000 < rollout_capacity):
             and _curr_switch > 0
             and state.step - last_curr_switch_step >= _curr_switch
         ):
+            # DEBUG: dump curriculum state before sample_task
+            logger.info("[curriculum-debug] _next_seq_index=%d _insertion_order=%s resume=%s",
+                        curriculum._next_seq_index,
+                        curriculum._insertion_order,
+                        resume)
             new_task = curriculum.sample_task()
             # Advance the timer every cycle — _next_seq_index advances in
             # sample_task() so sequential mode naturally cycles.
