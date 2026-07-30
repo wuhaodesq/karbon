@@ -2006,6 +2006,10 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 break
         if curr_active_task is None:
             curr_active_task = curriculum.sample_task()
+        # For sequential mode on fresh start, advance _next_seq_index past
+        # the initial task so peek_next/sample_task returns the next one.
+        if resume is None and curriculum.config.mode == "sequential":
+            curriculum._next_seq_index += 1
         logger.info("Curriculum: initial task=%s (id=%d)%s",
                     curr_active_task.tag, curr_active_task.id,
                     " (resumed)" if resume is not None else "")
