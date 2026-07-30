@@ -130,15 +130,16 @@ external_memory:
     cold_shard_size: 4096
     store_threshold: 1.5          # surprise z-score threshold for cold archival
 
-  # Developmental Memory (embedding-level, existing MemoryManager)
-  developmental_memory:
-    d_model: 128
-    episodic_max: 10000
-    semantic_max: 1000
-    autobiographical_max: 100
-    surprise_threshold: 0.01
-    consolidation_every_steps: 50000
-    consolidation_batch_size: 256
+# Developmental Memory (embedding-level, existing MemoryManager)
+developmental_memory:
+  enabled: true
+  d_model: 128
+  episodic_max: 10000
+  semantic_max: 1000
+  autobiographical_max: 100
+  surprise_threshold: 0.01
+  consolidation_every_steps: 50000
+  consolidation_batch_size: 256
 
   # Episodic replay sampling for PPO training
   episodic_replay_batch_size: 64
