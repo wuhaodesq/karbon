@@ -2005,7 +2005,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 curr_active_task = curriculum._tasks[tid]
                 break
         if curr_active_task is None:
-            curr_active_task = curriculum._tasks[0] if curriculum._tasks else curriculum.sample_task()
+            curr_active_task = curriculum.sample_task()
         logger.info("Curriculum: initial task=%s (id=%d)%s",
                     curr_active_task.tag, curr_active_task.id,
                     " (resumed)" if resume is not None else "")
@@ -3388,7 +3388,7 @@ and state.step % 50000 < rollout_capacity):
             last_curr_mean_ret = current_mean_ret
             last_curr_report_step = state.step
 
-        # --- Stage 5: periodically switch task via LP-driven sampling ---
+        # --- Stage 5: periodically switch task ---
         # Use task-specific switch interval if available, else global
         _curr_switch = curr_switch_every
         if curr_active_task is not None:
@@ -3400,19 +3400,14 @@ and state.step % 50000 < rollout_capacity):
             and _curr_switch > 0
             and state.step - last_curr_switch_step >= _curr_switch
         ):
-            # In sequential mode, peek first — don't waste _next_seq_index on same-task
-            _peek_id = None
-            if curriculum.config.mode == "sequential" and curr_active_task is not None:
-                _peek = curriculum.peek_next()
-                if _peek is not None:
-                    _peek_id = _peek.id
-                if _peek_id == curr_active_task.id:
-                    last_curr_switch_step = state.step
-            if _peek_id != (curr_active_task.id if curr_active_task else None):
-                new_task = curriculum.sample_task()
+            new_task = curriculum.sample_task()
+            # Advance the timer every cycle — _next_seq_index advances in
+            # sample_task() so sequential mode naturally cycles.
+            last_curr_switch_step = state.step
+            if curr_active_task is not None and new_task.id == curr_active_task.id:
+                # Same task: skip env rebuild, continue with current env.
+                pass
             else:
-                new_task = None
-            if new_task is not None and (curr_active_task is None or new_task.id != curr_active_task.id):
                 logger.info(
                     "Curriculum switch @ step=%d: task=%s (id=%d) → %s (id=%d)",
                     state.step,
@@ -3420,8 +3415,6 @@ and state.step % 50000 < rollout_capacity):
                     curr_active_task.id if curr_active_task else -1,
                     new_task.tag, new_task.id,
                 )
-                # Rebuild env from task spec (PhysicsSandbox-aware; keeps
-                # obs/action shape stable so the resumed model keeps working).
                 try:
                     env.close()
                 except Exception:
@@ -3429,8 +3422,6 @@ and state.step % 50000 < rollout_capacity):
                 env = _build_env_from_spec(new_task.spec, env_cfg)
                 obs = env.reset()
                 curr_active_task = new_task
-                last_curr_switch_step = state.step
-            # else: task unchanged → don't reset timer, don't waste sample_task call
 
         # --- Independent evaluator: periodic 3D scoring (observation only) ---
         # Scores curiosity / drive / task independently.
