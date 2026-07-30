@@ -125,7 +125,7 @@ class ImaginationTrainer:
         real_action_onehot = F.one_hot(
             real_action, num_classes=world_model.config.action_dim
         ).float()
-        wm_state, _ = world_model.observe_step(
+        wm_state, _, _ = world_model.observe_step(
             wm_state,
             real_action_onehot,
             obs_flat.reshape(bsz, -1),
@@ -141,8 +141,11 @@ class ImaginationTrainer:
         curr_state = wm_state
         for _t in range(cfg.imagination_horizon):
             # Decode observation from latent for actor-critic input
-            imagined_obs = world_model.decode(curr_state)
-            imagined_obs_3d = imagined_obs.reshape(bsz, *actor_critic.obs_shape)
+            # NOTE: decoder outputs in [0,1] (MSE on /255-normalized targets);
+            # actor_critic.forward expects uint8 [0,255] and divides by 255
+            # internally, so we scale back up.
+            imagined_obs = world_model.decode(curr_state) * 255.0
+            imagined_obs_3d = imagined_obs.reshape(bsz, *actor_critic.obs_shape).clamp(0, 255)
 
             # Run policy
             logits, value = actor_critic(imagined_obs_3d)
@@ -170,7 +173,8 @@ class ImaginationTrainer:
             curr_state, _ = world_model.imagine_step(curr_state, action_onehot)
 
         # Bootstrap value at the end
-        final_obs = world_model.decode(curr_state).reshape(bsz, *actor_critic.obs_shape)
+        final_obs = world_model.decode(curr_state) * 255.0
+        final_obs = final_obs.reshape(bsz, *actor_critic.obs_shape).clamp(0, 255)
         with torch.no_grad():
             _, final_value = actor_critic(final_obs)
             bootstrap_value = final_value.squeeze(-1)
@@ -195,12 +199,11 @@ class ImaginationTrainer:
 
         actor_loss = -(torch.stack(imagined_logprobs, dim=0) * advantages.detach()).mean()
         entropy_bonus = 0.0
-        for a in imagined_actions:
-            dist_check = torch.distributions.Categorical(logits=actor_critic(
-                world_model.decode(imagined_states[len(imagined_actions) // 2]).reshape(bsz, *actor_critic.obs_shape)
-            )[0])
-            entropy_bonus += dist_check.entropy().mean()
-        entropy_bonus = entropy_bonus / len(imagined_actions)
+        mid_state = imagined_states[len(imagined_actions) // 2]
+        mid_obs = (world_model.decode(mid_state) * 255.0).reshape(bsz, *actor_critic.obs_shape).clamp(0, 255)
+        logits_mid = actor_critic(mid_obs)[0]
+        dist_mid = torch.distributions.Categorical(logits=logits_mid)
+        entropy_bonus = dist_mid.entropy().mean()
         actor_loss = actor_loss - cfg.actor_entropy_scale * entropy_bonus
 
         # --- 5. Critic loss ---
