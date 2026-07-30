@@ -36,15 +36,15 @@ timeline
         Stage 11 : 闭合 M2 技能复用 (嵌入检索)
                  : doorkey-5x5 SR=0.985 ✓
 
-    section 想象规划 (Imagination) : Stage 12 ← 当前
-        Stage 12 : Dreamer 风格想象驱动训练
-                 : horizon=15 · batch=128
-                 : 样本效率验证中...
-
-    section 外部记忆 (External Memory) : Stage 13
+    section 外部记忆 (External Memory) : Stage 13 ← 当前
         Stage 13 : 情景/语义/程序分层记忆
                  : Surprise Detector 关键事件存档
                  : 长期保留 > 短期回放
+
+    section 想象规划 (Imagination) : Stage 12
+        Stage 12 : Dreamer 风格想象驱动训练
+                 : 基于高质量记忆的想象
+                 : 样本效率 ↑ (Stage 13 完成后)
 
     section 因果推理 (Causal Reasoning) : Stage 14
         Stage 14 : 因果发现 + 反事实想象
@@ -74,8 +74,12 @@ timeline
 ## Current Status / 当前状态
 
 - **Completed**: Stage 0–11 (Stage 11 closed at tag `v0.11.0-stage11`)
-- **Running**: Stage 12 — Imagination-driven training (Dreamer-style)
-- **Next**: Stage 13 — External Memory (分层记忆 + Surprise Detector)
+- **Running**: Stage 13 — External Memory (分层记忆 + Surprise Detector)
+- **Next**: Stage 12 (after Stage 13) — Imagination-driven training (Dreamer-style)
+
+> **时序修正说明**: 原定 Stage 12（想象训练）→ Stage 13（外部记忆）,但发育逻辑要求先积累真实经验再发展想象能力。
+> 现已调整为 Stage 13（外部记忆）→ Stage 12（想象训练）,符合"经验→记忆→想象"的认知发育规律。
+> Stage 12 的 ImaginationTrainer 代码修复已就绪,待 Stage 13 完成后启用。
 
 ## Stage Descriptions / 阶段说明
 
@@ -93,8 +97,8 @@ timeline
 | 9 | 环境迁移 | Physics→MiniGrid | 跨环境适应 |
 | 10 | 分层决策 | Manager/Worker 架构 | 子目标达成率 |
 | 11 | 技能闭合 | M2 嵌入检索 | doorkey SR 0.985 |
-| **12** | **想象规划** | **Dreamer 想象训练** | **样本效率 vs S11** |
-| 13 | 外部记忆 | 情景/语义/程序记忆 | 长期关键事件保留 |
+| **13** | **外部记忆** | **情景/语义/程序记忆** | **长期关键事件保留** |
+| 12 | 想象规划 | Dreamer 想象训练 | 样本效率 vs S11 (Stage 13 后) |
 | 14 | 因果推理 | 因果图 + 反事实 | 多步因果链完成 |
 | 15 | 核心知识 | 物体永存/物理/数感 | 物理直觉任务 |
 | 16 | 神经符号 | 规则 + 逻辑推理 | 符号推理准确率 |
