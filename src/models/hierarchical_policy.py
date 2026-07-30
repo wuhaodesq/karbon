@@ -299,6 +299,8 @@ class HierarchicalActorCritic(nn.Module):
 
         # Worker: M2 skill-injection residual (optional)
         if skill_delta is not None:
+            if skill_delta.A.device != h.device:
+                skill_delta = skill_delta.to(h.device)
             h = h + skill_delta.apply(h)
 
         action_logits, worker_value = self.worker(h, sg)
