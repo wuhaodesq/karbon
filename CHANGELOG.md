@@ -5,7 +5,20 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
-### Stage 11: 分层架构 (Hierarchical Actor-Critic) (2026-07-29)
+### M2 技能复用闭合 + Stage 11 训练验证 (2026-07-30)
+
+#### 新增
+- **M2 skill-reuse 检索回路** (`src/memory/skill_library.py`, `src/train.py`):
+  - `SkillEntry.key_embedding`: 存储技能创建时首步隐状态作为检索键
+  - `BoundedSkillLibrary.retrieve_by_embedding()`: 用当前观察 embedding 在 GPU 层找最相似技能（余弦相似度 ≥0.6）
+  - 每 episode 首步：模型前向拿 hidden state → 检索匹配技能 → 注入 LoRA residual
+  - 成功 episode 结束时：将首步 key_embedding 存入新技能
+  - `[skills] retrieved skill #N (sim=0.xxx)` 日志
+  - key_embedding 随 checkpoint 序列化/恢复
+- **Stage 11 远端训练验证**: doorkey-5x5 SR 峰值 0.985，课程循环 7 次完美切换
+
+#### 修复
+- **课程切换不生效** (`src/train.py:1018-1024`): `AutoCurriculumConfig` 缺 `mode` 参数，默认 `"lp"` 导致 `peek_next()` 返回 None——任务永远不切换。添加 `mode=str(curriculum_cfg.get("mode", "lp"))`
 
 #### 新增
 - **MiniGrid SR 评测** (`src/eval/independent_evaluator.py`): `_measure_minigrid_sr` 用 MiniGrid-DoorKey-5x5 评测通关率，写入 `EvalReport` 和 JSONL
