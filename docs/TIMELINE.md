@@ -41,14 +41,14 @@ timeline
                  : Surprise Detector 关键事件存档
                  : 长期保留 > 短期回放
 
-    section 想象规划 (Imagination) : Stage 12
-        Stage 12 : Dreamer 风格想象驱动训练
-                 : 基于高质量记忆的想象
-                 : 样本效率 ↑ (Stage 13 完成后)
-
     section 因果推理 (Causal Reasoning) : Stage 14
         Stage 14 : 因果发现 + 反事实想象
                  : 工具使用链 · 多步因果
+
+    section 想象规划 (Imagination) : Stage 12
+        Stage 12 : Dreamer 风格想象驱动训练
+                 : 基于高质量记忆的想象
+                 : 样本效率 ↑ (拥有因果图后的想象)
 
     section Core Knowledge : Stage 15
         Stage 15 : 物体永存 · 直觉物理
@@ -73,13 +73,15 @@ timeline
 
 ## Current Status / 当前状态
 
-- **Completed**: Stage 0–11 (Stage 11 closed at tag `v0.11.0-stage11`)
-- **Running**: Stage 13 — External Memory (分层记忆 + Surprise Detector)
-- **Next**: Stage 12 (after Stage 13) — Imagination-driven training (Dreamer-style)
+- **Completed**: Stage 0–13 (Stage 13 closed at 641K steps, report in `docs/stage13_report.md`)
+- **Running**: Stage 14 — Causal Reasoning (因果发现 + 反事实想象)
+- **Next**: Stage 12 (after Stage 14) — Imagination-driven training (Dreamer-style)
 
-> **时序修正说明**: 原定 Stage 12（想象训练）→ Stage 13（外部记忆）,但发育逻辑要求先积累真实经验再发展想象能力。
-> 现已调整为 Stage 13（外部记忆）→ Stage 12（想象训练）,符合"经验→记忆→想象"的认知发育规律。
-> Stage 12 的 ImaginationTrainer 代码修复已就绪,待 Stage 13 完成后启用。
+> **时序修正说明**: 原定 Stage 12（想象训练）→ Stage 13（外部记忆）→ Stage 14（因果推理）。
+> 经 Stage 13 训练发现世界模型 (RSSM) 未有效学习（wm=0.506, near chance），导致依赖 world model 的
+> Stage 12 想象训练在此时启动可能效果不佳。Stage 14 的因果发现 + 反事实想象可以先在无想象训练的条件下
+> 建立因果图，为后续 Stage 12 提供更高质的记忆基础。顺序调整为：
+> **Stage 13（外部记忆）→ Stage 14（因果推理）→ Stage 12（想象训练）**。
 
 ## Stage Descriptions / 阶段说明
 
@@ -98,8 +100,8 @@ timeline
 | 10 | 分层决策 | Manager/Worker 架构 | 子目标达成率 |
 | 11 | 技能闭合 | M2 嵌入检索 | doorkey SR 0.985 |
 | **13** | **外部记忆** | **情景/语义/程序记忆** | **长期关键事件保留** |
-| 12 | 想象规划 | Dreamer 想象训练 | 样本效率 vs S11 (Stage 13 后) |
-| 14 | 因果推理 | 因果图 + 反事实 | 多步因果链完成 |
+| **14** | **因果推理** | **因果图 + 反事实** | **多步因果链完成** |
+| 12 | 想象规划 | Dreamer 想象训练 | 样本效率 vs S11 (拥有因果图后) |
 | 15 | 核心知识 | 物体永存/物理/数感 | 物理直觉任务 |
 | 16 | 神经符号 | 规则 + 逻辑推理 | 符号推理准确率 |
 | 17 | 元反思 | 学习自省 | 知识缺口检测 |

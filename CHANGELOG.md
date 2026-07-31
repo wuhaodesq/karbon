@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 14 — Causal Reasoning (因果发现 + 反事实想象) (2026-07-31)
+
+#### 新增
+- **Stage 14 配置** (`configs/stage14_causal_reasoning.yaml`): 继承 Stage 13 外部记忆，
+  启用 CounterfactualImagination + 增强 CausalDiscovery（intervene_every=250, max_edges=512），
+  工具使用链课程（RedBlueDoors-6x6 多步推理），eval_epsilon=0.05 避免 eval 低估能力
+- **Eval epsilon noise** (`src/eval/independent_evaluator.py`): 新增 `eval_epsilon` 配置项，
+  在独立评估中以 epsilon 概率随机探索而非纯 argmax，修复 Stage 13 sr=0.00 在贪婪评估下被低估的问题
+- **时序调整** (`docs/TIMELINE.md`): 将 Stage 14（因果推理）提到 Stage 12（想象训练）之前，
+  发育逻辑：先建立因果图再发展基于因果图的想象
+
 ### Stage 13 — External Memory (SurpriseDetector + EpisodicReplay) (2026-07-31)
 
 #### 新增

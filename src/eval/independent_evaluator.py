@@ -41,6 +41,9 @@ class EvalConfig:
     # If task_score is below floor for this many consecutive evals,
     # the training loop may reduce intrinsic reward coefficient
     task_pressure_threshold: int = 3
+    # Small epsilon-greedy noise so deterministic argmax doesn't
+    # under-report capability (S13 sr=0.00 was likely this issue)
+    eval_epsilon: float = 0.0
     # Report file (relative to ckpt dir or absolute)
     report_path: str = "eval_scores.jsonl"
 
@@ -97,6 +100,7 @@ class IndependentEvaluator:
             weights=ecfg.get("eval_weights", [2.0, 1.0, 2.0]),
             task_floor=float(ecfg.get("task_floor", 0.15)),
             task_pressure_threshold=int(ecfg.get("task_pressure_threshold", 3)),
+            eval_epsilon=float(ecfg.get("eval_epsilon", 0.0)),
             report_path=str(ecfg.get("report_path", "eval_scores.jsonl")),
         )
         self._device = device
@@ -222,6 +226,14 @@ class IndependentEvaluator:
 
     # ----------------------------------------------------------------- private
 
+    # --- Epsilon-greedy action selection for eval ---
+
+    def _eval_action(self, logits: torch.Tensor, rng: np.random.Generator) -> int:
+        """Select action with optional epsilon-greedy noise."""
+        if self._cfg.eval_epsilon > 0.0 and rng.random() < self._cfg.eval_epsilon:
+            return int(rng.integers(0, logits.shape[-1]))
+        return int(torch.argmax(logits, dim=-1).item())
+
     # --- MiniGrid scorers ---
 
     def _measure_minigrid_sr(self, model: nn.Module, env_id: str) -> float:
@@ -230,6 +242,7 @@ class IndependentEvaluator:
             from ..envs.minigrid_wrapper import MiniGridWrapper
         except ImportError:
             return 0.0
+        rng = np.random.default_rng(42)
         env = MiniGridWrapper(
             env_id=env_id, seed=0,
             max_episode_steps=self._cfg.max_steps_per_ep,
@@ -245,7 +258,7 @@ class IndependentEvaluator:
                 with torch.no_grad():
                     out = model(self._obs_to_tensor(obs, self._device))
                 logits = out[0] if isinstance(out, (tuple, list)) else out
-                a = int(torch.argmax(logits, dim=-1).item())
+                a = self._eval_action(logits, rng)
                 step_out = env.step(a)
                 obs = step_out.obs
                 done = step_out.terminated or step_out.truncated
@@ -253,43 +266,6 @@ class IndependentEvaluator:
                 successes += 1
         env.close()
         return successes / max(min(self._cfg.episodes_per_task, 5), 1)
-
-    def _measure_minigrid_tool(self, model: nn.Module) -> tuple[float, float, float]:
-        """DoorKey-5x5 sub-metrics: (key_rate, door_rate, success_rate)."""
-        try:
-            from ..envs.minigrid_wrapper import MiniGridWrapper
-        except ImportError:
-            return 0.0, 0.0, 0.0
-        env = MiniGridWrapper(
-            env_id="MiniGrid-DoorKey-5x5-v0", seed=0,
-            max_episode_steps=self._cfg.max_steps_per_ep,
-            auto_reset=False, render_size=self._render_size,
-        )
-        got_key, opened_door, reached_goal = 0, 0, 0
-        for _ in range(min(self._cfg.episodes_per_task, 5)):
-            if hasattr(model, "_step_in_goal"):
-                model._step_in_goal = 0
-            obs = env.reset()
-            ep_return = 0.0
-            done = False
-            while not done:
-                with torch.no_grad():
-                    out = model(self._obs_to_tensor(obs, self._device))
-                logits = out[0] if isinstance(out, (tuple, list)) else out
-                a = int(torch.argmax(logits, dim=-1).item())
-                step_out = env.step(a)
-                obs = step_out.obs
-                ep_return += float(step_out.reward)
-                done = step_out.terminated or step_out.truncated
-            if ep_return >= 0.1:
-                got_key += 1
-            if ep_return >= 0.6:
-                opened_door += 1
-            if step_out.terminated:
-                reached_goal += 1
-        env.close()
-        n = max(min(self._cfg.episodes_per_task, 5), 1)
-        return got_key / n, opened_door / n, reached_goal / n
 
     def _measure_minigrid_tool(self, model: nn.Module, skills: object | None = None) -> tuple[float, float, float]:
         """DoorKey-5x5 sub-metrics: (key_rate, door_rate, success_rate)."""
@@ -305,6 +281,7 @@ class IndependentEvaluator:
         got_key = 0
         opened_door = 0
         reached_goal = 0
+        rng = np.random.default_rng(42)
         n_ep = min(self._cfg.episodes_per_task, 5)
         for ep in range(n_ep):
             if hasattr(model, "_step_in_goal"):
@@ -321,7 +298,7 @@ class IndependentEvaluator:
                 with torch.no_grad():
                     out = model(self._obs_to_tensor(obs, self._device), skill_delta=skill_delta)
                 logits = out[0] if isinstance(out, (tuple, list)) else out
-                a = int(torch.argmax(logits, dim=-1).item())
+                a = self._eval_action(logits, rng)
                 actions_taken.append(a)
                 step_out = env.step(a)
                 obs = step_out.obs
