@@ -130,6 +130,13 @@ class RSSMConfig:
                                     # weight, "mean frame" reconstruction MSE is
                                     # tiny and the posterior never learns to
                                     # encode anything -> collapse)
+    recon_pixel_weight: float = 0.0  # extra MSE weight on informative pixels:
+                                    # loss *= 1 + recon_pixel_weight * target.
+                                    # MiniGrid obs channels (obj id/color/state)
+                                    # are 0 for empty floor; walls/agent/door/
+                                    # key carry the signal. Weighting by target
+                                    # value keeps the gradient from being
+                                    # drowned by the constant background.
     reward_loss_weight: float = 1.0  # weight of the reward-prediction term
     next_loss_coef: float = 1.0   # weight of the one-step-ahead prediction term
 
@@ -162,6 +169,7 @@ class RSSM(nn.Module):
         c = config
 
         self._recon_loss_weight = float(c.recon_loss_weight)
+        self._recon_pixel_weight = float(c.recon_pixel_weight)
         self._reward_loss_weight = float(c.reward_loss_weight)
         self._next_loss_coef = float(c.next_loss_coef)
         self.encoder = ObsEncoder(c.obs_dim, c.embed_dim, hidden=c.hidden)
@@ -296,7 +304,13 @@ class RSSM(nn.Module):
                 state, action_seq_onehot[:, t, :], obs_seq[:, t, :]
             )
             recon = self.decode(state)
-            recon_loss = F.mse_loss(recon, obs_seq[:, t, :])
+            if self._recon_pixel_weight > 0:
+                # Weight informative pixels (non-zero target channels) so the
+                # gradient is not drowned by the constant floor/wall background.
+                w = 1.0 + self._recon_pixel_weight * obs_seq[:, t, :]
+                recon_loss = (w * (recon - obs_seq[:, t, :]) ** 2).mean()
+            else:
+                recon_loss = F.mse_loss(recon, obs_seq[:, t, :])
             recon_losses.append(recon_loss)
 
             # KL(posterior || prior) per element, then free-nats floor

@@ -120,6 +120,7 @@ def main() -> None:
     # --- run compute_loss + backward, check grads ---
     all_grad_norms: dict[str, float] = {}
     kl_before: float = float("nan")
+    recon_vals, next_vals, copy_vals = [], [], []
     for bi in range(args.n_batches):
         s = bi * args.seq_len
         obs_seq = obs_t[s : s + args.seq_len].unsqueeze(0)
@@ -135,8 +136,17 @@ def main() -> None:
                 gn = p.grad.norm().item()
                 all_grad_norms[name] = max(all_grad_norms.get(name, 0.0), gn)
         kl_before = float(out["kl_loss"].item())
+        recon_vals.append(float(out["recon_loss"].item()))
+        next_vals.append(float(out["next_loss"].item()))
+        copy_mse = float((obs_seq[:, :-1, :] - next_seq[:, :-1, :]).pow(2).mean().item())
+        copy_vals.append(copy_mse)
         print(f"batch {bi}: loss={out['loss'].item():.6f} recon={out['recon_loss'].item():.3e} "
-              f"kl(clamped)={out['kl_loss'].item():.6f} next={out.get('next_loss', torch.tensor(0.0)).item():.3e}")
+              f"kl(clamped)={out['kl_loss'].item():.6f} kl_raw={out['kl_raw'].item():.6f} "
+              f"next={out.get('next_loss', torch.tensor(0.0)).item():.3e} copy={copy_mse:.3e}")
+
+    print(f"\nAGGREGATE: mean recon={sum(recon_vals)/len(recon_vals):.3e} "
+          f"mean next={sum(next_vals)/len(next_vals):.3e} mean copy={sum(copy_vals)/len(copy_vals):.3e}")
+    print(f"VERDICT: wm beats copy if next < copy ({sum(next_vals)/len(next_vals):.3e} vs {sum(copy_vals)/len(copy_vals):.3e})")
 
     # report the biggest gradient norms by module group
     groups = {"encoder": 0.0, "posterior": 0.0, "prior": 0.0, "decoder": 0.0, "recurrent": 0.0, "reward_head": 0.0}

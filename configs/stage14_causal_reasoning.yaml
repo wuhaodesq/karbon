@@ -220,6 +220,10 @@ world_model:
                               # posterior had no gradient reason to encode obs.
                               # 100x makes recon dominate and forces z to
                               # carry the agent/grid state.
+  recon_pixel_weight: 200.0   # MSE weight ~ 1 + 200*target: informative pixels
+                              # (agent/key/door, target ~ 0.02-0.04) get up to
+                              # ~9x the gradient of the floor background, so
+                              # the encoder cannot cheat by ignoring them.
   next_loss_coef: 2.0         # weight for the one-step-ahead frame prediction
                               # (MiniGrid transitions are mostly "no-op", so
                               # the next-frame signal is weak; amplify it)
