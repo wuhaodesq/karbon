@@ -16,6 +16,12 @@ All notable changes to this project are documented here.
 - **时序调整** (`docs/TIMELINE.md`): 将 Stage 14（因果推理）提到 Stage 12（想象训练）之前，
   发育逻辑：先建立因果图再发展基于因果图的想象
 
+#### 修复
+- **`causal_discovery.py` 干预永久休眠 bug**: `intervene()` 用 `intervention_count >= max_edges`
+  作为开关——计数达到 512 后因果发现永远空转（Stage 13 遗留 39 条边后 `[causal]` 日志消失）。
+  修复：计数与图容量解耦，干预永远运行；`_trim_graph()` 在边数达 `max_edges` 时淘汰最弱边
+  （Axiom 1 有界性仍成立，Axiom 3 图不再冻结）
+
 ### Stage 13 — External Memory (SurpriseDetector + EpisodicReplay) (2026-07-31)
 
 #### 新增
