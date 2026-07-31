@@ -26,6 +26,11 @@ All notable changes to this project are documented here.
   `forward_chain()` 的 `cosine_similarity` 抛 "Expected all tensors to be on the same device"，
   `[logic] engine population failed` 导致该步符号推理空转。修复：`load_state_dict` 恢复时
   `.to(self._device)`（补充 2e6e19c 仅覆盖 init 路径的遗漏），附 meta-device 回归测试
+- **`independent_evaluator.py` eval 样本量硬编码**: `min(episodes_per_task, 5)` 把每任务
+  episode 数锁死在 5（即使 yaml 配置更高），加上 seed=0 固定布局 + rng(42) 固定序列，
+  eval 分数呈 ±40% 噪声（102400 的 0.60 vs 126976/151552 的 0.00 均为 3/5 与 0/5 的抖动）。
+  修复：解除 5 上限（配置 25），每 episode 用 `seed=ep+random` 换布局，`evaluate()` 用
+  `eval_seed = (eval_seed*31 + step) % 2^31` 让每次 eval 序列不同
 
 ### Stage 13 — External Memory (SurpriseDetector + EpisodicReplay) (2026-07-31)
 
