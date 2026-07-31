@@ -125,6 +125,7 @@ class RSSMConfig:
     max_rollout_steps: int = 15   # bounded — Axiom 1
     kl_free_nats: float = 1.0
     reward_loss_weight: float = 1.0  # weight of the reward-prediction term
+    next_loss_coef: float = 1.0   # weight of the one-step-ahead prediction term
 
 
 @dataclass
@@ -155,6 +156,7 @@ class RSSM(nn.Module):
         c = config
 
         self._reward_loss_weight = float(c.reward_loss_weight)
+        self._next_loss_coef = float(c.next_loss_coef)
         self.encoder = ObsEncoder(c.obs_dim, c.embed_dim, hidden=c.hidden)
         self.decoder = ObsDecoder(c.h_dim, c.z_dim, c.obs_dim, hidden=c.hidden)
 
@@ -328,7 +330,7 @@ class RSSM(nn.Module):
             out["reward_loss"] = reward_loss_total
         if next_losses:
             next_loss_total = torch.stack(next_losses).mean()
-            total = total + next_loss_total
+            total = total + self._next_loss_coef * next_loss_total
             out["next_loss"] = next_loss_total
         out["loss"] = total
         return out

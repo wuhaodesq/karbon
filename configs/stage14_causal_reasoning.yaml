@@ -210,7 +210,13 @@ world_model:
   embed_dim: 64
   hidden: 128
   max_rollout_steps: 10
-  kl_free_nats: 0.5
+  kl_free_nats: 0.05          # was 0.5: free-nats floor swallowed the whole
+                              # 32-dim KL budget, so posterior never had to
+                              # encode anything (collapse). 0.05 restores
+                              # real KL gradient pressure.
+  next_loss_coef: 2.0         # weight for the one-step-ahead frame prediction
+                              # (MiniGrid transitions are mostly "no-op", so
+                              # the next-frame signal is weak; amplify it)
   update_every_steps: 4          # increased from 8 → more WM updates to help it learn
   lr: 5.0e-4                    # slightly higher LR for WM
   wm_loss_coef: 1.0

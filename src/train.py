@@ -976,6 +976,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             max_rollout_steps=int(wm_cfg.get("max_rollout_steps", 10)),
             kl_free_nats=float(wm_cfg.get("kl_free_nats", 1.0)),
             reward_loss_weight=float(wm_cfg.get("reward_loss_weight", 1.0)),
+            next_loss_coef=float(wm_cfg.get("next_loss_coef", 1.0)),
         )).to(device)
         wm_optimizer = torch.optim.Adam(wm.parameters(), lr=float(wm_cfg.get("lr", 3e-4)))
         logger.info("RSSM world model enabled (params=%d)", wm.num_parameters())
