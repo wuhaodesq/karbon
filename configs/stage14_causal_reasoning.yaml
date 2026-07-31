@@ -251,9 +251,10 @@ train:
 independent_eval:
   eval_every_steps: 25000
   eval_weights: [2.0, 1.0, 2.0]
-  episodes_per_task: 5
+  episodes_per_task: 25
   max_steps_per_ep: 200
   eval_epsilon: 0.05
+  eval_seed: 42
 
 viz:
   frame_every_steps: 0

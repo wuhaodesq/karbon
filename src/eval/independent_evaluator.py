@@ -44,6 +44,8 @@ class EvalConfig:
     # Small epsilon-greedy noise so deterministic argmax doesn't
     # under-report capability (S13 sr=0.00 was likely this issue)
     eval_epsilon: float = 0.0
+    # Per-eval RNG seed; each eval run gets a distinct seed so episodes vary
+    eval_seed: int = 42
     # Report file (relative to ckpt dir or absolute)
     report_path: str = "eval_scores.jsonl"
 
@@ -101,6 +103,7 @@ class IndependentEvaluator:
             task_floor=float(ecfg.get("task_floor", 0.15)),
             task_pressure_threshold=int(ecfg.get("task_pressure_threshold", 3)),
             eval_epsilon=float(ecfg.get("eval_epsilon", 0.0)),
+            eval_seed=int(ecfg.get("eval_seed", 42)),
             report_path=str(ecfg.get("report_path", "eval_scores.jsonl")),
         )
         self._device = device
@@ -154,6 +157,9 @@ class IndependentEvaluator:
         symbolic_layer: object | None = None,
     ) -> EvalReport:
         """Run full 6-dimension evaluation and return a structured report."""
+        # Derive a per-eval seed from the step so successive evals use
+        # different environment layouts and exploration sequences.
+        self._cfg.eval_seed = int((self._cfg.eval_seed * 31 + step) % (2**31 - 1))
         # 1. 3D Physics
         cur = self._measure_curiosity(model)
         drv = self._measure_drive(model, drives_module)
@@ -242,17 +248,18 @@ class IndependentEvaluator:
             from ..envs.minigrid_wrapper import MiniGridWrapper
         except ImportError:
             return 0.0
-        rng = np.random.default_rng(42)
+        rng = np.random.default_rng(self._cfg.eval_seed)
         env = MiniGridWrapper(
             env_id=env_id, seed=0,
             max_episode_steps=self._cfg.max_steps_per_ep,
             auto_reset=False, render_size=self._render_size,
         )
         successes = 0
-        for _ in range(min(self._cfg.episodes_per_task, 5)):
+        n_ep = self._cfg.episodes_per_task
+        for ep in range(n_ep):
             if hasattr(model, "_step_in_goal"):
                 model._step_in_goal = 0
-            obs = env.reset()
+            obs = env.reset(seed=ep + int(rng.integers(0, 2**31 - 1)))
             done = False
             while not done:
                 with torch.no_grad():
@@ -265,7 +272,7 @@ class IndependentEvaluator:
             if step_out.terminated:
                 successes += 1
         env.close()
-        return successes / max(min(self._cfg.episodes_per_task, 5), 1)
+        return successes / max(n_ep, 1)
 
     def _measure_minigrid_tool(self, model: nn.Module, skills: object | None = None) -> tuple[float, float, float]:
         """DoorKey-5x5 sub-metrics: (key_rate, door_rate, success_rate)."""
@@ -281,12 +288,12 @@ class IndependentEvaluator:
         got_key = 0
         opened_door = 0
         reached_goal = 0
-        rng = np.random.default_rng(42)
-        n_ep = min(self._cfg.episodes_per_task, 5)
+        rng = np.random.default_rng(self._cfg.eval_seed)
+        n_ep = self._cfg.episodes_per_task
         for ep in range(n_ep):
             if hasattr(model, "_step_in_goal"):
                 model._step_in_goal = 0
-            obs = env.reset(seed=ep)
+            obs = env.reset(seed=ep + int(rng.integers(0, 2**31 - 1)))
             ep_return = 0.0
             done = False
             skill_delta = None
@@ -446,7 +453,7 @@ class IndependentEvaluator:
         satisfied_count = 0
         total_steps = 0
         try:
-            for _ in range(min(self._cfg.episodes_per_task, 5)):
+            for _ in range(self._cfg.episodes_per_task):
                 obs = env.reset()
                 for _ in range(self._cfg.max_steps_per_ep):
                     with torch.no_grad():
