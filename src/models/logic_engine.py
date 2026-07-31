@@ -673,7 +673,7 @@ class LogicEngine:
             self._variables[v_dict["name"]] = Variable(
                 name=v_dict["name"],
                 var_type=VariableType(v_dict["var_type"]),
-                category_embedding=v_dict["category_embedding"],
+                category_embedding=v_dict["category_embedding"].to(self._device),
             )
 
         for r_dict in state["rules"]:

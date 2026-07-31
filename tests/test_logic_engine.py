@@ -309,6 +309,26 @@ def test_state_dict_roundtrip():
     assert engine2.get_variable("key") is not None
 
 
+def test_load_state_dict_moves_embeddings_to_device():
+    """Regression: checkpoint embeds are saved on CPU (state_dict calls .cpu()),
+    but load_state_dict must move them to the engine's device. Otherwise a mix
+    of CPU (restored) + GPU (newly defined) variables crashes forward_chain()
+    with 'Expected all tensors to be on the same device'."""
+    engine1 = LogicEngine(d_model=D_MODEL)
+    engine1.define_variable("key", VariableType.OBJECT, torch.randn(D_MODEL))
+    engine1.add_rule(Quantifier.UNIVERSAL, "key", "see(X)", 3, confidence=0.9)
+    state = engine1.state_dict()  # category_embedding saved as .cpu()
+
+    engine2 = LogicEngine(d_model=D_MODEL, device=torch.device("meta"))
+    engine2.load_state_dict(state)
+    var = engine2.get_variable("key")
+    assert var is not None
+    assert var.category_embedding.device.type == "meta"
+    # A newly defined variable on the same engine must land on the same device
+    engine2.define_variable("fresh", VariableType.OBJECT, torch.randn(D_MODEL))
+    assert engine2.get_variable("fresh").category_embedding.device.type == "meta"
+
+
 def test_engine_conforms_to_bounded_component():
     from src.monitoring.health_check import BoundedComponent
     engine = LogicEngine(d_model=D_MODEL, max_rules=8)

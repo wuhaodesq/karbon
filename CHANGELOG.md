@@ -21,6 +21,11 @@ All notable changes to this project are documented here.
   作为开关——计数达到 512 后因果发现永远空转（Stage 13 遗留 39 条边后 `[causal]` 日志消失）。
   修复：计数与图容量解耦，干预永远运行；`_trim_graph()` 在边数达 `max_edges` 时淘汰最弱边
   （Axiom 1 有界性仍成立，Axiom 3 图不再冻结）
+- **`logic_engine.py` checkpoint 恢复设备错位**: `state_dict()` 把 `category_embedding` 存到 CPU
+  （`.cpu()`），但 `load_state_dict()` 直接赋回——恢复后的变量在 CPU、新定义的变量在 CUDA，
+  `forward_chain()` 的 `cosine_similarity` 抛 "Expected all tensors to be on the same device"，
+  `[logic] engine population failed` 导致该步符号推理空转。修复：`load_state_dict` 恢复时
+  `.to(self._device)`（补充 2e6e19c 仅覆盖 init 路径的遗漏），附 meta-device 回归测试
 
 ### Stage 13 — External Memory (SurpriseDetector + EpisodicReplay) (2026-07-31)
 
