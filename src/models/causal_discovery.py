@@ -139,7 +139,7 @@ class CausalDiscovery:
             dict mapping "action_X_effect" → effect magnitude.
         """
         effects: dict[str, float] = {}
-        if world_model is None or self._intervention_count >= self._max_edges:
+        if world_model is None:
             return effects
 
         # Baseline: imagine the actual action
@@ -153,8 +153,6 @@ class CausalDiscovery:
         for alt_action in range(self._num_actions):
             if alt_action == actual_action:
                 continue
-            if self._intervention_count >= self._max_edges:
-                break
 
             alt_onehot = F.one_hot(
                 torch.tensor([alt_action]), self._num_actions,
@@ -196,8 +194,20 @@ class CausalDiscovery:
                         )
 
             self._intervention_count += 1
+            self._trim_graph()
 
         return effects
+
+    def _trim_graph(self) -> None:
+        """Keep the causal graph bounded (Axiom 1): evict weakest edges when
+        at capacity.  Interventions run forever; the *stored* graph is capped."""
+        if len(self._graph.edges) <= self._max_edges:
+            return
+        worst_key = min(
+            self._graph.edges,
+            key=lambda k: (self._graph.edges[k].strength, self._graph.edges[k].sample_count),
+        )
+        del self._graph.edges[worst_key]
 
     def query_why(self, target: str) -> list[str]:
         """Return explanations: what causes this target?"""
