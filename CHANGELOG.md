@@ -5,14 +5,28 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
-### Stage 13 — External Memory (SurpriseDetector + EpisodicReplay) (2026-07-30)
+### Stage 13 — External Memory (SurpriseDetector + EpisodicReplay) (2026-07-31)
 
 #### 新增
 - **SurpriseDetector** (`src/memory/surprise_detector.py`): 集合 4 个 surprise 信号（RND + RSSM reconstruction + Coverage novelty + TD error），用 running avg/std 自适应归一化
 - **EpisodicReplayMemory** (`src/memory/episodic_replay.py`): 在 `EpisodicMemory`（in-memory embedding）之上叠加 `ColdShardTier`（SSD 分片全量 Transition），支持 surprise-gated cold-tier 归档 + 基于 TD 损失的 replay 采样
 - **Config** (`configs/stage13_external_memory.yaml`): 三档预设 `local_smoke`/`home_64g`/`cloud_24g`，`developmental_memory.enabled=true`
 - **Train loop**: SurpriseDetector 集成到 `memory_manager.store_experience()`；EpisodicReplayMemory 冷层存储 + TD-loss 采样；extras 行 `episodic=N/capacity` 日志
-- **远端 RTX 3080 Ti 验证**: Stage 13 训练正常运行，`episodic=4096/276240` 已在 step=2048 的 extras 行出现
+
+#### 训练结果
+- **远端 RTX 3080 Ti 完整训练**: 641K steps (of 1M budget)，~11.5 h，5 轮完整 curriculum cycle
+- **Doorkey-5x5 峰值 mean_ret**: 0.665→0.779→0.943→1.030→0.966（5 轮逐轮提升）
+- **技能库饱和**: skills=10496/10496（~250K 步后写满），无淘汰策略
+- **Eval sr=0.00 全程**: mean_ret 虽升至 0.966，但独立评估从未报告 door-open 成功
+- **Coverage 仅 2.3%**: 行为多样性坍缩于最优策略附近
+- **World Model 未学习**: wm=0.506 (r=0.000, kl=0.500, rew=0.006)
+- **最终 VRAM**: 6.90 GB（Qwen-7B 4-bit 约 5 GB 占用）
+- **详细报告**: `docs/stage13_report.md`
+
+#### 修复
+- **`hierarchical_policy.py:301`**: `skill_delta` 在权重被降级到 CPU 后缺少 `.to(device)`，导致设备不匹配崩溃
+- **`train.py`**: 添加 `torch._dynamo.config.suppress_errors = True` 作为 TorchDynamo compile 回退
+- **`stage13_external_memory.yaml`**: `developmental_memory` 从 `external_memory:` 嵌套下移到顶层 YAML key
 
 ### M2 技能复用闭合 + Stage 11 训练验证 (2026-07-30)
 
