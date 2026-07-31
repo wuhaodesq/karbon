@@ -66,7 +66,7 @@ def test_compute_loss_shape_and_positive():
     obs = torch.randn(B, T, 16)
     actions = torch.zeros(B, T, 6); actions[..., 0] = 1
     out = m.compute_loss(obs, actions)
-    assert set(out.keys()) == {"loss", "recon_loss", "kl_loss"}
+    assert set(out.keys()) == {"loss", "recon_loss", "kl_loss", "kl_raw"}
     assert out["loss"].dim() == 0
     assert torch.isfinite(out["loss"])
     assert out["recon_loss"].item() >= 0

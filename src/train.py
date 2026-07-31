@@ -2023,7 +2023,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # Stage 3 knobs
     wm_update_every = int(wm_cfg.get("update_every_steps", 8)) if wm_cfg else 0
     wm_log_every = int(wm_cfg.get("log_every_steps", 5000)) if wm_cfg else 0
-    wm_last_loss: dict[str, float] = {"loss": 0.0, "recon": 0.0, "kl": 0.0, "reward": 0.0, "next": 0.0}
+    wm_last_loss: dict[str, float] = {"loss": 0.0, "recon": 0.0, "kl": 0.0, "kl_raw": 0.0, "reward": 0.0, "next": 0.0}
     wm_last_log_step = 0
 
     # Stage 5 knobs
@@ -3111,6 +3111,7 @@ and state.step % 50000 < rollout_capacity):
                     "loss": float(wm_out["loss"].item()),
                     "recon": float(wm_out["recon_loss"].item()),
                     "kl": float(wm_out["kl_loss"].item()),
+                    "kl_raw": float(wm_out.get("kl_raw", wm_out["kl_loss"]).item()),
                     "reward": float(
                         wm_out.get("reward_loss", torch.zeros(())).item()
                     ),
@@ -3452,7 +3453,7 @@ and state.step % 50000 < rollout_capacity):
             if replay is not None:
                 extras.append(f"replay={len(replay)}/{replay.capacity}")
             if wm is not None:
-                extras.append(f"wm={wm_last_loss['loss']:.3f}(r={wm_last_loss['recon']:.3f},kl={wm_last_loss['kl']:.3f},rew={wm_last_loss['reward']:.4f},nx={wm_last_loss.get('next', 0.0):.4f})")
+                extras.append(f"wm={wm_last_loss['loss']:.3f}(r={wm_last_loss['recon']:.3f},kl={wm_last_loss['kl']:.3f},kr={wm_last_loss.get('kl_raw', 0.0):.4f},rew={wm_last_loss['reward']:.4f},nx={wm_last_loss.get('next', 0.0):.4f})")
             if imagination_trainer is not None and imagination_last_loss:
                 extras.append(f"img={imagination_last_loss.get('total_loss', 0):.4f}")
             if episodic_replay is not None:

@@ -287,6 +287,7 @@ class RSSM(nn.Module):
 
         recon_losses: list[torch.Tensor] = []
         kl_losses: list[torch.Tensor] = []
+        kl_raw_losses: list[torch.Tensor] = []
         reward_losses: list[torch.Tensor] = []
         next_losses: list[torch.Tensor] = []
 
@@ -300,6 +301,7 @@ class RSSM(nn.Module):
 
             # KL(posterior || prior) per element, then free-nats floor
             kl = torch.distributions.kl_divergence(posterior, prior).sum(dim=-1)
+            kl_raw_losses.append(kl.mean())
             kl = torch.clamp(kl, min=self.config.kl_free_nats).mean()
             kl_losses.append(kl)
 
@@ -325,11 +327,13 @@ class RSSM(nn.Module):
 
         recon_loss_total = torch.stack(recon_losses).mean()
         kl_loss_total = torch.stack(kl_losses).mean()
+        kl_raw_total = torch.stack(kl_raw_losses).mean()
         total = self._recon_loss_weight * recon_loss_total + kl_loss_total
         out: dict[str, torch.Tensor] = {
             "loss": total,
             "recon_loss": recon_loss_total,
             "kl_loss": kl_loss_total,
+            "kl_raw": kl_raw_total,
         }
         if reward_losses:
             reward_loss_total = torch.stack(reward_losses).mean()
