@@ -124,6 +124,12 @@ class RSSMConfig:
     hidden: int = 128
     max_rollout_steps: int = 15   # bounded — Axiom 1
     kl_free_nats: float = 1.0
+    recon_loss_weight: float = 1.0  # amplifies reconstruction gradient so the
+                                    # posterior must encode obs detail (MiniGrid
+                                    # uint8/255 obs sits in [0, 0.04]: without a
+                                    # weight, "mean frame" reconstruction MSE is
+                                    # tiny and the posterior never learns to
+                                    # encode anything -> collapse)
     reward_loss_weight: float = 1.0  # weight of the reward-prediction term
     next_loss_coef: float = 1.0   # weight of the one-step-ahead prediction term
 
@@ -155,6 +161,7 @@ class RSSM(nn.Module):
         self.config = config
         c = config
 
+        self._recon_loss_weight = float(c.recon_loss_weight)
         self._reward_loss_weight = float(c.reward_loss_weight)
         self._next_loss_coef = float(c.next_loss_coef)
         self.encoder = ObsEncoder(c.obs_dim, c.embed_dim, hidden=c.hidden)
@@ -318,7 +325,7 @@ class RSSM(nn.Module):
 
         recon_loss_total = torch.stack(recon_losses).mean()
         kl_loss_total = torch.stack(kl_losses).mean()
-        total = recon_loss_total + kl_loss_total
+        total = self._recon_loss_weight * recon_loss_total + kl_loss_total
         out: dict[str, torch.Tensor] = {
             "loss": total,
             "recon_loss": recon_loss_total,

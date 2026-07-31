@@ -214,6 +214,12 @@ world_model:
                               # 32-dim KL budget, so posterior never had to
                               # encode anything (collapse). 0.05 restores
                               # real KL gradient pressure.
+  recon_loss_weight: 100.0    # MiniGrid obs is uint8/255 -> values in [0, 0.04];
+                              # unweighted reconstruction MSE is ~3.5e-05 and
+                              # "mean frame" output is already cheap, so the
+                              # posterior had no gradient reason to encode obs.
+                              # 100x makes recon dominate and forces z to
+                              # carry the agent/grid state.
   next_loss_coef: 2.0         # weight for the one-step-ahead frame prediction
                               # (MiniGrid transitions are mostly "no-op", so
                               # the next-frame signal is weak; amplify it)
