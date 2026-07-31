@@ -47,6 +47,7 @@ llm_fusion:
 advanced:
   counterfactual_enabled: true
   counterfactual_max_steps: 5
+  counterfactual_every_steps: 500
   behavior_cloning_enabled: false
   meta_learner_enabled: false
 

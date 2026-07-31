@@ -2085,10 +2085,12 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     num_sense_train_every = int(num_sense_cfg.get("train_every_episodes", 10)) if num_sense_cfg else 0
     rule_induce_every = int(rule_ind_cfg.get("induction_every_episodes", 20)) if rule_ind_cfg else 0
     causal_intervene_every = int(causal_cfg.get("intervene_every_steps", 500)) if causal_cfg else 0
+    counterfactual_every = int(advanced_cfg.get("counterfactual_every_steps", 500)) if advanced_cfg else 0
     xmodal_train_every = int(xmodal_cfg.get("train_every_steps", 1000)) if xmodal_cfg else 0
     num_sense_last_train = 0
     rule_induce_last_ep = 0
     causal_last_intervene = 0
+    counterfactual_last = 0
     xmodal_last_train = 0
     # Trajectory buffers for rule induction predicates
     episode_predicates: list[dict[str, bool]] = []
@@ -2872,7 +2874,32 @@ and state.step % 50000 < rollout_capacity):
                                 wm, wm_state, int(action.item()),
                                 slot_states, state.step,
                             )
+                        if effects:
+                            top_effect = max(effects, key=effects.get)
+                            logger.info(
+                                "[causal] step=%d intervene: %s effect=%.4f | graph=%d/%d edges",
+                                state.step, top_effect, effects[top_effect],
+                                len(causal_disc), causal_disc.capacity,
+                            )
                     causal_last_intervene = state.step
+
+                # --- Phase 0: counterfactual imagination ---
+                if (counterfactual is not None and wm is not None
+                        and state.step - counterfactual_last >= counterfactual_every):
+                    with torch.no_grad():
+                        alt_action = (int(action.item()) + 1 + hash(f"cf{state.step}") % 6) % num_actions
+                        alt_onehot = F.one_hot(
+                            torch.tensor([alt_action]), num_actions,
+                        ).float().to(device)
+                        _, imagined_reward = counterfactual.imagine_alternative(
+                            wm, wm.initial_state(1, device), alt_onehot, num_actions,
+                        )
+                    logger.info(
+                        "[counterfactual] step=%d actual=%d alt=%d reward=%.4f",
+                        state.step, int(action.item()), alt_action,
+                        float(imagined_reward.mean().item()),
+                    )
+                    counterfactual_last = state.step
 
             if state.step >= total_steps:
                 break
