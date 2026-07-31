@@ -155,6 +155,72 @@ class HotRingTier:
             "priority": self.priority.index_select(0, idx),
         }
 
+    def sample_sequences(
+        self, batch_size: int, seq_len: int, rng: np.random.Generator,
+    ) -> dict[str, torch.Tensor]:
+        """Sample *temporally contiguous* trajectories of length ``seq_len``.
+
+        The hot tier is written in time order (ring buffer), so consecutive
+        indices (mod capacity) form real episode segments.  We sample
+        ``batch_size`` start positions and roll each forward ``seq_len - 1``
+        steps, skipping starts whose window crosses a ``done`` boundary or
+        wraps over unwritten slots.
+
+        Returns:
+            dict with ``obs`` (B, T, *obs_shape), ``action`` (B, T),
+            ``reward`` (B, T), ``next_obs`` (B, T, *obs_shape),
+            ``done`` (B, T) — each row is a real time segment.
+        """
+        if seq_len < 2:
+            raise ValueError("sample_sequences requires seq_len >= 2")
+        if self._size < seq_len:
+            raise ValueError(
+                f"hot tier too small for sequences: size={self._size} seq_len={seq_len}"
+            )
+        starts: list[int] = []
+        attempts = 0
+        while len(starts) < batch_size and attempts < batch_size * 50:
+            attempts += 1
+            s = int(rng.integers(0, self._size))
+            # Raw (unwrapped) window indices; the ring only wraps within the
+            # written region, so a segment must stay inside [0, size).
+            raw = list(range(s, s + seq_len))
+            if raw[-1] >= self._size:
+                continue  # would wrap over the write pointer / unwritten slots
+            done_vals = self.done[torch.as_tensor(raw, dtype=torch.long, device=self._device)]
+            if bool(done_vals[:-1].any().item()):
+                continue  # a segment ending inside the window invalidates continuity
+            starts.append(s)
+        if len(starts) < batch_size:
+            raise ValueError(
+                f"could not gather {batch_size} clean sequences "
+                f"(size={self._size}, seq_len={seq_len}, got {len(starts)})"
+            )
+
+        idx = torch.as_tensor(
+            np.array(
+                [[s + k for k in range(seq_len)] for s in starts],
+                dtype=np.int64,
+            ),
+            dtype=torch.long,
+            device=self._device,
+        )  # (B, T)
+        flat = idx.reshape(-1)  # (B*T)
+        obs = self.obs.index_select(0, flat).reshape(batch_size, seq_len, *self._obs_shape)
+        next_obs = self.next_obs.index_select(0, flat).reshape(
+            batch_size, seq_len, *self._obs_shape
+        )
+        action = self.action.index_select(0, flat).reshape(batch_size, seq_len)
+        reward = self.reward.index_select(0, flat).reshape(batch_size, seq_len)
+        done = self.done.index_select(0, flat).reshape(batch_size, seq_len)
+        return {
+            "obs": obs,
+            "action": action,
+            "reward": reward,
+            "next_obs": next_obs,
+            "done": done,
+        }
+
     def update_priorities(self, indices: np.ndarray, new_priorities: np.ndarray) -> None:
         """PER support: update priorities after TD-error computation."""
         idx = torch.as_tensor(indices, dtype=torch.long, device=self._device)
@@ -549,6 +615,18 @@ class BoundedReplayBuffer:
 
     def update_hot_priorities(self, indices: np.ndarray, priorities: np.ndarray) -> None:
         self.hot.update_priorities(indices, priorities)
+
+    def sample_sequences(self, batch_size: int, seq_len: int) -> dict[str, torch.Tensor]:
+        """Temporally-contiguous trajectory sampling from the hot tier.
+
+        Picks start positions uniformly from the hot tier, then rolls each
+        window forward ``seq_len`` real time steps (skipping segments that
+        cross a ``done`` boundary).  Used by the world model to learn
+        one-step-ahead dynamics (T>1 sequential replay).
+        """
+        if len(self.hot) < seq_len:
+            raise ValueError(f"hot tier too small for sequences (len={len(self.hot)})")
+        return self.hot.sample_sequences(batch_size, seq_len, rng=self._rng)
 
     # ------------------------------------------------------------ helpers
 

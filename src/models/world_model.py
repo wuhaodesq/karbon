@@ -248,11 +248,19 @@ class RSSM(nn.Module):
         obs_seq: torch.Tensor,
         action_seq_onehot: torch.Tensor,
         reward_seq: torch.Tensor | None = None,
+        next_obs_seq: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
-        """Compute reconstruction + KL (+ reward) loss over a rollout.
+        """Compute reconstruction + KL (+ reward + next-frame) loss over a rollout.
 
         When ``reward_seq`` (B, T, 1) is provided, an MSE reward-prediction
         loss is added so the world model learns objective environment reward.
+
+        When ``next_obs_seq`` (B, T, obs_dim) is provided, an additional
+        one-step-ahead prediction loss is added: from the posterior state at
+        step t the model must *imagine* the next observation.  This forces the
+        latent ``z`` to carry forward-predictive information (prevents the
+        posterior collapse where ``z`` just encodes the current frame and the
+        GRU dynamics are never exercised).
 
         Rollout length ``T`` must not exceed ``config.max_rollout_steps``.
         """
@@ -271,6 +279,7 @@ class RSSM(nn.Module):
         recon_losses: list[torch.Tensor] = []
         kl_losses: list[torch.Tensor] = []
         reward_losses: list[torch.Tensor] = []
+        next_losses: list[torch.Tensor] = []
 
         for t in range(T):
             state, prior, posterior = self.observe_step(
@@ -284,6 +293,13 @@ class RSSM(nn.Module):
             kl = torch.distributions.kl_divergence(posterior, prior).sum(dim=-1)
             kl = torch.clamp(kl, min=self.config.kl_free_nats).mean()
             kl_losses.append(kl)
+
+            # One-step-ahead prediction: from the posterior state at step t,
+            # imagine action a_t and require the decoder to reconstruct o_{t+1}.
+            if next_obs_seq is not None:
+                next_state, _ = self.imagine_step(state, action_seq_onehot[:, t, :])
+                pred_next = self.decode(next_state)
+                next_losses.append(F.mse_loss(pred_next, next_obs_seq[:, t, :]))
 
             if reward_seq is not None:
                 r_target = reward_seq[:, t].squeeze(-1)
@@ -310,6 +326,10 @@ class RSSM(nn.Module):
             reward_loss_total = torch.stack(reward_losses).mean()
             total = total + self._reward_loss_weight * reward_loss_total
             out["reward_loss"] = reward_loss_total
+        if next_losses:
+            next_loss_total = torch.stack(next_losses).mean()
+            total = total + next_loss_total
+            out["next_loss"] = next_loss_total
         out["loss"] = total
         return out
 

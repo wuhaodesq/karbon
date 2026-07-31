@@ -2021,7 +2021,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # Stage 3 knobs
     wm_update_every = int(wm_cfg.get("update_every_steps", 8)) if wm_cfg else 0
     wm_log_every = int(wm_cfg.get("log_every_steps", 5000)) if wm_cfg else 0
-    wm_last_loss: dict[str, float] = {"loss": 0.0, "recon": 0.0, "kl": 0.0, "reward": 0.0}
+    wm_last_loss: dict[str, float] = {"loss": 0.0, "recon": 0.0, "kl": 0.0, "reward": 0.0, "next": 0.0}
     wm_last_log_step = 0
 
     # Stage 5 knobs
@@ -3068,7 +3068,14 @@ and state.step % 50000 < rollout_capacity):
             except Exception as exc:
                 logger.debug("episodic replay sample skipped: %s", exc)
 
-        # --- Stage 3: World Model update from replay ---
+        # --- Stage 3: World Model update from replay (sequential) ---
+        # Sequential T>1 replay: hot tier stores transitions in time order, so
+        # sample_sequences() returns real episode segments. The RSSM now sees
+        # temporal continuity: at each step it must *imagine* the next
+        # observation (next_obs_seq target), giving the latent z genuine
+        # forward-predictive pressure instead of the old T=1 frame-copy
+        # shortcut that collapsed the posterior (kl stuck at free-nats floor,
+        # recon ≈ constant frame, wm=0.500 across Stages 11-14).
         if (
             wm is not None
             and wm_optimizer is not None
@@ -3078,25 +3085,22 @@ and state.step % 50000 < rollout_capacity):
             and state.step % wm_update_every < rollout_capacity
         ):
             try:
-                sample, _, _ = replay.sample_prioritized(
-                    min(replay_batch_size, wm.config.max_rollout_steps * 4),
-                    alpha=per_alpha,
-                )
-                # Reshape B*T into (batch=B/T, T=max_rollout_steps).
-                # For simplicity we treat each transition as a T=1 sequence.
-                # This is an approximation — proper sequential replay comes later.
-                bsz = sample["obs"].shape[0]
-                T = 1
+                wm_seq_len = wm.config.max_rollout_steps
+                wm_bsz = max(1, min(replay_batch_size, wm_seq_len * 4) // wm_seq_len)
+                sample = replay.sample_sequences(wm_bsz, wm_seq_len)
+                bsz, T = sample["obs"].shape[0], sample["obs"].shape[1]
                 obs_flat = sample["obs"].reshape(bsz, T, -1).float() / 255.0
+                next_obs_flat = sample["next_obs"].reshape(bsz, T, -1).float() / 255.0
                 # One-hot actions
                 actions_onehot = F.one_hot(
                     sample["action"].to(torch.long), num_classes=num_actions
                 ).float().reshape(bsz, T, num_actions)
                 # Reward (B, T, 1) for the world-model reward head, if present.
-                reward_seq = None
-                if "reward" in sample and sample["reward"] is not None:
-                    reward_seq = sample["reward"].reshape(bsz, T, 1).float()
-                wm_out = wm.compute_loss(obs_flat, actions_onehot, reward_seq=reward_seq)
+                reward_seq = sample["reward"].reshape(bsz, T, 1).float()
+                wm_out = wm.compute_loss(
+                    obs_flat, actions_onehot,
+                    reward_seq=reward_seq, next_obs_seq=next_obs_flat,
+                )
                 wm_optimizer.zero_grad(set_to_none=True)
                 wm_out["loss"].backward()
                 torch.nn.utils.clip_grad_norm_(wm.parameters(), max_norm=1.0)
@@ -3107,6 +3111,9 @@ and state.step % 50000 < rollout_capacity):
                     "kl": float(wm_out["kl_loss"].item()),
                     "reward": float(
                         wm_out.get("reward_loss", torch.zeros(())).item()
+                    ),
+                    "next": float(
+                        wm_out.get("next_loss", torch.zeros(())).item()
                     ),
                 }
             except (ValueError, IndexError, RuntimeError) as exc:
@@ -3443,7 +3450,7 @@ and state.step % 50000 < rollout_capacity):
             if replay is not None:
                 extras.append(f"replay={len(replay)}/{replay.capacity}")
             if wm is not None:
-                extras.append(f"wm={wm_last_loss['loss']:.3f}(r={wm_last_loss['recon']:.3f},kl={wm_last_loss['kl']:.3f},rew={wm_last_loss['reward']:.4f})")
+                extras.append(f"wm={wm_last_loss['loss']:.3f}(r={wm_last_loss['recon']:.3f},kl={wm_last_loss['kl']:.3f},rew={wm_last_loss['reward']:.4f},nx={wm_last_loss.get('next', 0.0):.4f})")
             if imagination_trainer is not None and imagination_last_loss:
                 extras.append(f"img={imagination_last_loss.get('total_loss', 0):.4f}")
             if episodic_replay is not None:

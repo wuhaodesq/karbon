@@ -31,6 +31,18 @@ All notable changes to this project are documented here.
   eval 分数呈 ±40% 噪声（102400 的 0.60 vs 126976/151552 的 0.00 均为 3/5 与 0/5 的抖动）。
   修复：解除 5 上限（配置 25），每 episode 用 `seed=ep+random` 换布局，`evaluate()` 用
   `eval_seed = (eval_seed*31 + step) % 2^31` 让每次 eval 序列不同
+- **`world_model.py` + `train.py` + `bounded_replay.py`: wm 退化根因修复（T=1 序列近似）**:
+  wm 更新一直把每个 transition 当 T=1 独立样本训练（train.py 注释 "proper sequential
+  replay comes later"），GRU 递归从未在训练中展开，多步想象从未被要求正确 → posterior
+  塌缩（kl 卡在 free-nats 下限 0.500）、recon 退化为常数帧、counterfactual reward 恒 0，
+  Stage 11-14 全程 wm=0.500。修复三件套：
+  1. `compute_loss()` 新增 `next_obs_seq` 参数 + one-step-ahead 预测项（posterior 状态
+     imagine 下一帧必须重建 next_obs，给 z 前向预测压力）
+  2. `HotRingTier.sample_sequences()`: 热层按时间序写入，连续索引即真实轨迹段；按
+     起点滚动窗口，跳过跨越 done 边界的段（Axiom 1 有界）
+  3. `train.py`: wm 更新改调 `replay.sample_sequences(wm_bsz, T=max_rollout_steps)`，
+     日志新增 `nx=` 显示 next 预测 loss
+  附 6 个回归测试（连续性断言、done 边界跳过、短缓冲拒绝、next_loss 梯度流、向后兼容）
 
 ### Stage 13 — External Memory (SurpriseDetector + EpisodicReplay) (2026-07-31)
 

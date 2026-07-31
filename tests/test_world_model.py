@@ -98,6 +98,37 @@ def test_compute_loss_rejects_over_max_rollout():
         m.compute_loss(obs, actions)
 
 
+def test_compute_loss_with_next_obs_adds_prediction_term():
+    """next_obs_seq must produce an extra 'next_loss' (one-step-ahead
+    imagination pressure) and keep gradients flowing through the decoder
+    and recurrent cell."""
+    torch.manual_seed(0)
+    m = _make_rssm(max_T=4, free_nats=0.0)
+    B, T = 2, 4
+    obs = torch.randn(B, T, 16)
+    next_obs = torch.randn(B, T, 16)
+    actions = torch.zeros(B, T, 6); actions[..., 0] = 1
+    out = m.compute_loss(obs, actions, next_obs_seq=next_obs)
+    assert "next_loss" in out
+    assert torch.isfinite(out["next_loss"])
+    assert out["next_loss"].item() >= 0
+    out["loss"].backward()
+    # The one-step-ahead path must pull gradients into the decoder (it must
+    # reconstruct a *future* frame) and the recurrent cell (dynamics).
+    assert m.decoder.mlp.net[0].weight.grad is not None
+    assert m.recurrent.weight_hh.grad is not None
+
+
+def test_compute_loss_without_next_obs_unchanged():
+    """Backward-compat: omitting next_obs_seq must not add 'next_loss'."""
+    torch.manual_seed(0)
+    m = _make_rssm(max_T=4)
+    obs = torch.randn(2, 3, 16)
+    actions = torch.zeros(2, 3, 6); actions[..., 1] = 1
+    out = m.compute_loss(obs, actions)
+    assert "next_loss" not in out
+
+
 def test_imagine_bounded_length():
     m = _make_rssm(max_T=4)
     s0 = m.initial_state(1, torch.device("cpu"))

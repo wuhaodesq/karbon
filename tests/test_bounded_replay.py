@@ -304,3 +304,73 @@ def test_replay_cold_capacity_includes_pending_allowance(tmp_path):
     tier = ColdShardTier(archive_dir=tmp_path, max_shards=4, shard_size=64)
     # (max_shards + 1) * shard_size = 5 * 64 = 320
     assert tier.capacity == 5 * 64
+
+
+# =====================================================================
+# Sequential sampling (world-model T>1 replay)
+# =====================================================================
+
+
+def test_hot_tier_sample_sequences_returns_contiguous_segments():
+    """Windows must be real time segments: obs[t+1] of row k must equal
+    next_obs[t] of row k (transitions are stored in time order)."""
+    tier = HotRingTier(capacity=64, obs_shape=OBS_SHAPE, device="cpu")
+    rng = np.random.default_rng(0)
+    # Write a clean trajectory: 41 frames → 40 transitions, no done boundaries
+    frames = [rng.integers(0, 255, size=OBS_SHAPE, dtype=np.uint8) for _ in range(41)]
+    for i in range(40):
+        tier.add(Transition(
+            obs=frames[i], action=int(rng.integers(0, 7)), reward=float(i % 3),
+            next_obs=frames[i + 1], done=False,
+        ))
+
+    batch = tier.sample_sequences(batch_size=4, seq_len=6, rng=rng)
+    assert batch["obs"].shape == (4, 6, *OBS_SHAPE)
+    assert batch["action"].shape == (4, 6)
+    assert batch["reward"].shape == (4, 6)
+    assert batch["next_obs"].shape == (4, 6, *OBS_SHAPE)
+    # Contiguity: obs[k, t+1] == next_obs[k, t] for every t < T-1
+    torch.testing.assert_close(batch["obs"][:, 1:, :], batch["next_obs"][:, :-1, :])
+
+
+def test_hot_tier_sample_sequences_skips_done_boundaries():
+    """Segments must not contain a done=True transition before the end."""
+    tier = HotRingTier(capacity=64, obs_shape=OBS_SHAPE, device="cpu")
+    rng = np.random.default_rng(1)
+    for i in range(32):
+        obs = rng.integers(0, 255, size=OBS_SHAPE, dtype=np.uint8)
+        done = (i == 20)  # one boundary in the middle
+        tier.add(Transition(
+            obs=obs, action=1, reward=0.0, next_obs=obs, done=done,
+        ))
+
+    # All sampled windows must have done == False in positions [0, T-1)
+    for _ in range(20):
+        batch = tier.sample_sequences(batch_size=4, seq_len=6, rng=rng)
+        assert bool(batch["done"][:, :-1].any()) is False
+
+
+def test_hot_tier_sample_sequences_rejects_short_buffer():
+    tier = HotRingTier(capacity=8, obs_shape=OBS_SHAPE, device="cpu")
+    rng = np.random.default_rng(2)
+    obs = np.zeros(OBS_SHAPE, dtype=np.uint8)
+    for _ in range(4):
+        tier.add(Transition(obs=obs, action=1, reward=0.0, next_obs=obs, done=False))
+    with pytest.raises(ValueError):
+        tier.sample_sequences(batch_size=1, seq_len=6, rng=rng)
+
+
+def test_replay_sample_sequences_api(tmp_path):
+    """BoundedReplayBuffer.sample_sequences forwards to hot tier."""
+    from src.memory import ReplayBudget
+    buf = BoundedReplayBuffer(
+        ReplayBudget(hot_capacity=64, warm_capacity=32, cold_max_shards=1, cold_shard_size=16),
+        obs_shape=OBS_SHAPE, device="cpu", archive_dir=tmp_path,
+    )
+    rng = np.random.default_rng(3)
+    for i in range(48):
+        obs = rng.integers(0, 255, size=OBS_SHAPE, dtype=np.uint8)
+        buf.add(Transition(obs=obs, action=1, reward=0.0, next_obs=obs, done=False))
+
+    batch = buf.sample_sequences(batch_size=2, seq_len=8)
+    assert batch["obs"].shape == (2, 8, *OBS_SHAPE)
