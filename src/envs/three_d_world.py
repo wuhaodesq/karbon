@@ -149,8 +149,12 @@ class SceneBuilder:
     Room: 4m × 4m × 2.5m (walls, floor, ceiling).
     """
 
-    def __init__(self, room_size: tuple[float, float, float] = (4.0, 4.0, 2.5)) -> None:
+    def __init__(self, room_size: tuple[float, float, float] = (4.0, 4.0, 2.5),
+                 camera_pos: tuple[float, float, float] = (0.0, -1.0, 0.8),
+                 camera_fovy: float = 60.0) -> None:
         self._rw, self._rl, self._rh = room_size
+        self._camera_pos = camera_pos
+        self._camera_fovy = camera_fovy
         self._objects: list[dict] = []
         self._agents: list[dict] = []
         self._sun_angle: float = 0.0  # radians
@@ -291,7 +295,15 @@ class SceneBuilder:
             rgba="{c[0]} {c[1]} {c[2]} {c[3]}" mass="1.5"/>
     </body>"""
 
-        xml += """
+        # Third-person camera tracking the learner (targetbody mode: the
+        # camera stays at a fixed offset relative to the learner body, so it
+        # follows movement while keeping the scene in view).
+        cam_pos = self._camera_pos
+        cam_fovy = self._camera_fovy
+        xml += f"""
+    <camera name="ego" mode="targetbody" target="learner"
+            pos="{cam_pos[0]} {cam_pos[1]} {cam_pos[2]}" fovy="{cam_fovy}"/>
+
   </worldbody>
 
   <actuator>
@@ -337,6 +349,8 @@ class ThreeDWorld:
         day_cycle_steps: int = 1000,  # full day in 1000 steps
         action_force: float = 2.0,
         developmental_age: float = 0.0,  # 0=infant, 1=child
+        camera_pos: tuple[float, float, float] = (0.0, -1.0, 0.8),
+        camera_fovy: float = 60.0,
     ) -> None:
         if not _mj_available:
             raise ImportError("mujoco is required for ThreeDWorld. Run: pip install mujoco")
@@ -347,6 +361,8 @@ class ThreeDWorld:
         self._day_cycle = day_cycle_steps
         self._action_force = action_force
         self._dev_age = developmental_age
+        self._camera_pos = camera_pos
+        self._camera_fovy = camera_fovy
         self._rng = np.random.RandomState(seed)
 
         # Object library
@@ -526,10 +542,11 @@ class ThreeDWorld:
 
     def _build_scene(self) -> None:
         """Build MuJoCo scene from scratch."""
-        builder = SceneBuilder()
+        builder = SceneBuilder(camera_pos=self._camera_pos, camera_fovy=self._camera_fovy)
 
         # Agent size grows with developmental age
         agent_size = 0.12 + self._dev_age * 0.08  # 0.12 (infant) → 0.20 (child)
+        self._agent_size = agent_size
 
         builder.add_agent(
             name="learner",
@@ -605,13 +622,14 @@ class ThreeDWorld:
         # Update scene state
         mujoco.mj_forward(self._model, self._data)
 
-        # Update renderer scene
-        self._renderer.update_scene(self._data)
+        # Update renderer scene (fixed third-person camera)
+        self._renderer.update_scene(self._data, camera="ego")
 
-        # Render offscreen
+        # Render offscreen — mujoco >= 3.x returns (H, W, 3) uint8 already
         pixels = self._renderer.render()
-        # pixels is (H, W, 3) float32 in [0, 1] → uint8
-        return (np.clip(pixels, 0, 1) * 255).astype(np.uint8)
+        if pixels.dtype != np.uint8:
+            pixels = (np.clip(pixels, 0, 1) * 255).astype(np.uint8)
+        return pixels
 
     # ------------------------------------------------------------------ dev signals
 
@@ -638,8 +656,10 @@ class ThreeDWorld:
                     ox = float(self._data.xpos[body_id, 0])
                     oy = float(self._data.xpos[body_id, 1])
                     rel_x, rel_y = ox - ax, oy - ay
+                    rel_dist = (rel_x**2 + rel_y**2) ** 0.5
+                    reach = self._contact_reach(i)
                     # Object in front and close enough to be pushed
-                    if ux * rel_x + uy * rel_y > 0 and (rel_x**2 + rel_y**2) ** 0.5 < 0.4:
+                    if ux * rel_x + uy * rel_y > 0 and rel_dist < reach:
                         vx = float(self._data.qvel[body_id, 0])
                         vy = float(self._data.qvel[body_id, 1])
                         self._force_motion_pairs.append({
@@ -688,11 +708,29 @@ class ThreeDWorld:
                 ox = float(self._data.xpos[body_id, 0])
                 oy = float(self._data.xpos[body_id, 1])
                 d = ((ax - ox)**2 + (ay - oy)**2) ** 0.5
-                if d < 0.25:
+                if d < self._contact_reach(i):
                     self._contacted.add(i)
                     self._object_contact_order.append(i)
             except Exception:
                 continue
+
+    def _contact_reach(self, obj_idx: int) -> float:
+        """Geometry-based contact detection radius.
+
+        Uses the physical sizes (agent radius + object half-extent + small
+        margin) instead of a fixed threshold, so large objects are correctly
+        detected as contacted even though their center is far away.
+
+        Returns reach (a 2D distance).
+        """
+        try:
+            obj = self._object_lib[obj_idx]  # ObjectDef (size is (hx,hy,hz) or radius)
+            sx, sy, _sz = obj.size
+            obj_extent = max(float(sx), float(sy))
+            agent_r = float(getattr(self, "_agent_size", 0.15))
+            return agent_r + obj_extent + 0.08
+        except Exception:
+            return 0.35
 
     def _compute_reward(self, action: int = -1) -> float:
         """Multi-component reward.

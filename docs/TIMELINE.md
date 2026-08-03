@@ -74,8 +74,12 @@ timeline
 ## Current Status / 当前状态
 
 - **Completed**: Stage 0–14 (Stage 14 closed at 1,000,000 steps, report in `docs/stage14_report.md`)
-- **Running**: (none - Stage 14 sealed, deciding next stage)
-- **Next**: Stage 12 (Imagination) blocked - needs working WM (proven S14: encode cost > recon gain on MiniGrid). Recommend 3D world migration or Stage 15 (Core Knowledge) as bridge.
+- **Planning**: Stage 15 — 3D world migration (Path B chosen; rendering fixed, camera optimized)
+- **Next**: Stage 15a smoke test on ThreeDWorld (WM recon re-enabled in 3D)
+
+> **3D 迁移决策** (2026-08-04): MiniGrid 信息天花板已实证确认(encode cost > recon gain)。
+> Path B (3D 迁移) 是"以终为始"选择(AGENTS.md §0)。ThreeDWorld 渲染修复完成,
+> camera 参数化, close-up 视角下画面信息量提升 57x。规划见 `docs/stage15_3d_migration_plan.md`。
 
 > **时序修正说明**: 原定 Stage 12（想象训练）→ Stage 13（外部记忆）→ Stage 14（因果推理）。
 > 经 Stage 13 训练发现世界模型 (RSSM) 未有效学习（wm=0.506, near chance），导致依赖 world model 的
@@ -102,7 +106,7 @@ timeline
 | **13** | **外部记忆** | **情景/语义/程序记忆** | **长期关键事件保留** |
 | **14** | **因果推理** | **因果图 + 反事实** | **多步因果链完成** |
 | 12 | 想象规划 | Dreamer 想象训练 | 样本效率 vs S11 (拥有因果图后) |
-| 15 | 核心知识 | 物体永存/物理/数感 | 物理直觉任务 |
+| **15** | **3D 核心知识** | **ThreeDWorld 迁移 + 物体永存/物理** | **WM recon 下降, 因果边>100, 物体永存 SR>0.3** |
 | 16 | 神经符号 | 规则 + 逻辑推理 | 符号推理准确率 |
 | 17 | 元反思 | 学习自省 | 知识缺口检测 |
 | 18 | 组合成长 | 技能组合 + 创造 | 新技能组合数 |

@@ -5,6 +5,35 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 15 · 3D 世界迁移准备 (2026-08-04)
+
+#### 渲染修复 (three_d_world.py)
+- **camera 缺失修复**: 场景 XML 无 `<camera>` 定义 → free camera 在视野外 → 渲染全白
+  (mean=255, std=0)。添加 `targetbody` camera 跟随 learner
+- **像素缩放 bug**: `Renderer.render()` 在 mujoco 3.x 返回 uint8(0-255)，
+  代码误用 `clip(0,1)*255` → 任何非零像素变纯白。修正为 dtype 检查
+- **camera 参数化**: SceneBuilder + ThreeDWorld 新增 `camera_pos`/`camera_fovy`
+  参数，支持多视角对比实验
+- **默认视角优化**: close-up (0,-1,0.8) fovy60 → edge=4.98/unique=3431/frame_diff=6.19
+  (vs 旧高远视角 edge=0.008/unique=9)，画面信息量提升 57 倍
+
+#### 接触检测修复
+- **固定阈值 bug**: contact/force_motion 用固定距离(0.25/0.4)，大物体
+  (halfsize=0.5) 接触时中心距≈0.62 永远检测不到。改为 `_contact_reach()`
+  基于 agent 半径 + 物体半径 + margin 的动态阈值
+- **agent size 缓存**: `_agent_size` 存储在 `_build_scene` 中供检测复用
+
+#### 验证结果
+- ✅ 渲染: unique=3431, edge=4.98 (17x vs 旧视角)
+- ✅ agent 移动: 30 步移动 2.19 单位
+- ✅ 接触检测: contact_reach 动态阈值生效
+- ✅ 物体推动: position change verified (真实物理)
+- ✅ 环境接口兼容: env_id="ThreeDWorld", action_space=8, obs=(128,128,3)
+
+#### 文档
+- **3D 迁移规划** (`docs/stage15_3d_migration_plan.md`): 迁移动机、验证结果、
+  保留/迁移/新建清单、配置设计、训练计划、风险分析、成功标准
+
 ### Stage 14 修正 — WM 验证结论 + 因果发现 experience 模式 (2026-08-03)
 
 #### 世界模型实验结论（已实证，84K 步）
