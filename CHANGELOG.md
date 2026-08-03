@@ -5,6 +5,43 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 14 修正 — WM 验证结论 + 因果发现 experience 模式 (2026-08-03)
+
+#### 世界模型实验结论（已实证，84K 步）
+- **像素 WM 在 MiniGrid 上经济上不可行**：`wm_diag` 验证 + free_nats=0.0 消融实验
+  （kl_raw 单调跌向 0.0028，recon 恒为平均帧地板 ~4-5e-5）确认根因是
+  **编码成本（~0.1-0.5 KL nats）> 重建收益（~0.003 loss）**，优化器理性地选择
+  "不感知"。外部评审的"环境承载上限"风险被实证坐实。
+- **发育路线修正**：想象训练（Stage 12 式）推迟到 3D 世界（Step 6，高信息量像素 +
+  真实物理动态），类比人类 7-11 岁具体运算期之后。MiniGrid 阶段聚焦分层决策 +
+  真实轨迹因果发现。
+
+#### 新增
+- **CausalDiscovery experience 模式** (`src/models/causal_discovery.py`):
+  `observe()` 每步收集真实 (s, a, s', r) 转移（有界 deque，Axiom 1），
+  `intervene_from_experience()` 按动作分组统计 E[||s'-s|| | a] 与全局基线之差，
+  即随机探索策略下的观测等价 do(a)。不依赖世界模型；effect 信号直接来自真实交互。
+- **配置** (`configs/stage14_causal_reasoning.yaml`): `causal_discovery.mode:
+  "experience"`（默认；"wm" 模式保留给 3D 世界）、`buffer_capacity: 4096`
+- **WM latent-only 切换**: `world_model.recon_loss_weight: 0.0`（像素重建关闭，
+  保留 next 预测 + KL + reward 头），算力释放给因果主线；recon 权重 100x/
+  像素加权 200x 的调优记录在此前的 Stage 14 配置中，供 3D 世界复用
+- **测试** (`tests/test_causal_discovery.py`): 8 项（experience 边记录/最小样本/
+  有界性/wm 模式隔离/legacy 干预路径/序列化往返/图容量/autograd 释放）
+
+#### 修复
+- **train.py 因果干预死循环修复**：intervene 调用点原要求 `wm is not None`，
+  wm 无可用隐空间动态时 effect 恒 0（Stage 13-14 全程）；现按 mode 分流，
+  experience 模式不再依赖 wm
+- **experience 模式量纲修正**：effect 改为与全局基线的**相对提升**
+  `(E[||Δs|||a] − baseline) / baseline`，替换原绝对差；记录阈值 rel>0.05、
+  reward 缩放 ×100。因为 embedding 距离量纲是任意缩放的，绝对差（~0.01）
+  × EMA(0.1) 收敛后 strength≈0.1，低于 wm 时代遗留的 get_causes(≥0.3)
+  查询阈值，导致边界记了却查不出
+- **CausalGraph 查询阈值** `min_strength=0.3→0.1`：wm 模式同样受益
+  （MSE 量纲 ×10 scaling 原本也达不到 0.3）；`creativity_orchestrator`
+  已显式传 0.1，不受影响
+
 ### Stage 14 — Causal Reasoning (因果发现 + 反事实想象) (2026-07-31)
 
 #### 新增

@@ -111,6 +111,7 @@ def main():
                 logits = out[0] if isinstance(out, (tuple, list)) else out
                 dist = torch.distributions.Categorical(logits=logits)
                 action = int(dist.sample().item())
+                action = min(action, env.action_space_n - 1)
                 step_out = env.step(action)
                 obs = step_out.obs
                 ep_ret += float(step_out.reward)

@@ -266,6 +266,7 @@ class IndependentEvaluator:
                     out = model(self._obs_to_tensor(obs, self._device))
                 logits = out[0] if isinstance(out, (tuple, list)) else out
                 a = self._eval_action(logits, rng)
+                a = min(int(a), env.action_space_n - 1)
                 step_out = env.step(a)
                 obs = step_out.obs
                 done = step_out.terminated or step_out.truncated
@@ -306,6 +307,7 @@ class IndependentEvaluator:
                     out = model(self._obs_to_tensor(obs, self._device), skill_delta=skill_delta)
                 logits = out[0] if isinstance(out, (tuple, list)) else out
                 a = self._eval_action(logits, rng)
+                a = min(int(a), env.action_space_n - 1)
                 actions_taken.append(a)
                 step_out = env.step(a)
                 obs = step_out.obs

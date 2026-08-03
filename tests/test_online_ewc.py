@@ -184,6 +184,32 @@ def test_state_dict_roundtrip():
     assert ewc2.has_consolidated()
 
 
+def test_load_state_dict_keeps_current_config():
+    """Resume must NOT override hyperparams with checkpoint values.
+
+    Config comes from the yaml (dev-side), state (Fisher/anchor) comes from
+    the checkpoint. Regression test for the 2026-08-03 bug where a tuned
+    lambda/gamma in the yaml was silently replaced by the checkpoint's old
+    values on every resume (``[sleep] ewc_consolidate done ... lambda_reg=3.0``
+    despite ``ewc_lambda: 50.0`` in the config file).
+    """
+    torch.manual_seed(0)
+    model = TinyNet()
+    ewc = OnlineEWC(model, OnlineEWCConfig(lambda_reg=1.0, gamma=0.9))
+    ewc.consolidate(model, _make_batches(3, 4), _loss_fn, num_batches=3)
+    state = ewc.state_dict()
+
+    model2 = TinyNet()
+    ewc2 = OnlineEWC(model2, OnlineEWCConfig(lambda_reg=50.0, gamma=0.99))
+    ewc2.load_state_dict(state)
+    assert ewc2.config.lambda_reg == 50.0
+    assert ewc2.config.gamma == 0.99
+    assert ewc2.has_consolidated()
+    # state still restored
+    for name in ewc._fisher:
+        torch.testing.assert_close(ewc._fisher[name], ewc2._fisher[name])
+
+
 def test_summary_shape():
     model = TinyNet()
     ewc = OnlineEWC(model)

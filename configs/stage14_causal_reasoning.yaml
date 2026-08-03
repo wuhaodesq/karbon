@@ -95,11 +95,18 @@ curriculum:
 
 # --- Core modules ---
 continual:
-  ewc_lambda: 3.0
-  ewc_gamma: 0.95
+  ewc_lambda: 50.0          # was 3.0: too weak to protect learned navigation
+                            # (empty-5x5 SR 0.40 -> 0.00 after doorkey switch).
+                            # Developmental fix: strong old-task protection +
+                            # curriculum review loops (ability stacking, not
+                            # reset-and-relearn). 50x on a PPO-scale loss (~0.05)
+                            # ≈ EWC term comparable to the task loss.
+  ewc_gamma: 0.99           # was 0.95: keep more Fisher history across tasks
   ewc_anchor_mode: "replace"
   ewc_anchor_ema_alpha: 0.9
-  ewc_consolidate_every_steps: 100000
+  ewc_consolidate_every_steps: 25000   # was 100000: consolidate at every task
+                            # switch cadence; also a hook consolidates at each
+                            # actual curriculum switch (task-end Fisher).
   ewc_consolidate_num_batches: 32
   ewc_batch_size: 32
   gr_enabled: true
@@ -176,6 +183,12 @@ causal_discovery:
   max_edges: 512
   min_intervention_effect: 0.005
   intervene_every_steps: 250
+  mode: "experience"          # experience: real-trajectory intervention stats
+                              # (WM-imagination mode proven unusable on MiniGrid:
+                              # kl_raw ~ 0.001 after 84K steps of latent-only).
+                              # Switch to "wm" only on the 3D world where the
+                              # RSSM can actually learn latent dynamics.
+  buffer_capacity: 4096       # bounded real-transition buffer (Axiom 1)
 
 number_sense:
   enabled: true
@@ -210,16 +223,24 @@ world_model:
   embed_dim: 64
   hidden: 128
   max_rollout_steps: 10
-  kl_free_nats: 0.05          # was 0.5: free-nats floor swallowed the whole
-                              # 32-dim KL budget, so posterior never had to
-                              # encode anything (collapse). 0.05 restores
-                              # real KL gradient pressure.
-  recon_loss_weight: 100.0    # MiniGrid obs is uint8/255 -> values in [0, 0.04];
-                              # unweighted reconstruction MSE is ~3.5e-05 and
-                              # "mean frame" output is already cheap, so the
-                              # posterior had no gradient reason to encode obs.
-                              # 100x makes recon dominate and forces z to
-                              # carry the agent/grid state.
+  kl_free_nats: 0.0           # was 0.05: wm_diag proved free-nats=0.05 is the
+                              # gradient choke point — with 0.05 the clamped KL
+                              # is always 0.0500 (kl_raw 0.021 < floor) and the
+                              # encoder grad is 1e-4 (dead). At 0.0 the encoder
+                              # grad jumps 220x; posterior must pay for laziness.
+                              # NOTE: free_nats=0.0 experiment (kl_raw -> 0.0028)
+                              # confirmed "encode cost > recon gain" is the
+                              # binding constraint on MiniGrid's low-information
+                              # 2.5D render, not the floor itself.
+  recon_loss_weight: 0.0      # LATENT-ONLY mode (2026-08-03): pixel recon on
+                              # MiniGrid renders is economically impossible
+                              # (encode cost ~0.1-0.5 KL nats >> recon gain
+                              # ~0.003), proven by the free_nats=0.0 ablation.
+                              # Turn recon off; keep next-frame prediction as
+                              # the only visual signal, so RSSM h/z dynamics
+                              # still train for causal/counterfactual modules.
+                              # Pixel prediction learning moves to 3D world
+                              # (Step 6) where encode gain > cost.
   recon_pixel_weight: 200.0   # MSE weight ~ 1 + 200*target: informative pixels
                               # (agent/key/door, target ~ 0.02-0.04) get up to
                               # ~9x the gradient of the floor background, so

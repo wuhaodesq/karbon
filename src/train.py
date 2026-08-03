@@ -1111,7 +1111,9 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             # Future work.
             logger.info("[sleep] ttt_distill (placeholder)")
 
-        def _sleep_ewc_consolidate() -> None:
+        # EWC consolidation reused both by the sleep loop (periodic) and by the
+        # curriculum switch hook (task-end Fisher — Online EWC task semantics).
+        def _run_ewc_consolidate() -> None:
             if ewc is None or replay is None or len(replay) == 0:
                 return
             batch_size = int(continual_cfg.get("ewc_batch_size", 32))
@@ -1140,7 +1142,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         sleep_loop.set_replay_trim(_sleep_replay_trim)
         sleep_loop.set_skills_merge(_sleep_skills_merge)
         sleep_loop.set_ttt_distill(_sleep_ttt_distill)
-        sleep_loop.set_ewc_consolidate(_sleep_ewc_consolidate)
+        sleep_loop.set_ewc_consolidate(_run_ewc_consolidate)
         logger.info("SleepConsolidationLoop enabled")
 
     # --- Stage 7+: Cognitive modules (SelfModel, NeuralSymbolic, LogicEngine, etc.) ---
@@ -1393,9 +1395,11 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             num_actions=num_actions,
             max_edges=int(causal_cfg.get("max_edges", 256)),
             min_intervention_effect=float(causal_cfg.get("min_intervention_effect", 0.01)),
+            mode=str(causal_cfg.get("mode", "experience")),
+            buffer_capacity=int(causal_cfg.get("buffer_capacity", 4096)),
         )
         health.register("causal_edges", causal_disc)
-        logger.info("CausalDiscovery enabled (max_edges=%d)", causal_disc.capacity)
+        logger.info("CausalDiscovery enabled (max_edges=%d, mode=%s)", causal_disc.capacity, causal_disc.mode)
 
     if growth_cfg and bool(growth_cfg.get("enabled", False)):
         from src.models.model_growth_v2 import ModelGrowerV2, GrowthConfigV2
@@ -2186,6 +2190,19 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             t_cog = time.perf_counter()
             total_r = extrinsic_r.copy()  # (N,) per-env reward accumulator
 
+            # --- Causal discovery: feed real (s, a, s', r) transitions ---
+            if (causal_disc is not None and causal_disc.mode == "experience"
+                    and model.use_slots and n_envs == 1 and model._last_slots is not None):
+                with torch.no_grad():
+                    s_embed = model._last_slots.squeeze(0).mean(dim=0)
+                    n_obs_t = _obs_to_tensor(step_out.obs, device)
+                    n_embed = model.encoder(n_obs_t).squeeze(0).mean(dim=0)
+                    causal_disc.observe(
+                        s_embed, int(action.item()), n_embed,
+                        float(extrinsic_r.item() if extrinsic_r.ndim else extrinsic_r),
+                        state.step,
+                    )
+
             # --- Collect hidden state for cognitive modules (single-env only) ---
             if _collect_cognitive and n_envs == 1:
                 rollout_hidden_states.append(
@@ -2867,9 +2884,9 @@ and state.step % 50000 < rollout_capacity):
                 episode_predicates.clear()
 
                 # --- Phase 0: causal discovery intervention ---
-                if (causal_disc is not None and wm is not None
+                if (causal_disc is not None
                         and state.step - causal_last_intervene >= causal_intervene_every):
-                    if model.use_slots:
+                    if causal_disc.mode == "wm" and wm is not None and model.use_slots:
                         with torch.no_grad():
                             slot_states = model.encoder(obs_t).squeeze(0)
                             wm_state = wm.initial_state(1, device)
@@ -2877,13 +2894,18 @@ and state.step % 50000 < rollout_capacity):
                                 wm, wm_state, int(action.item()),
                                 slot_states, state.step,
                             )
-                        if effects:
-                            top_effect = max(effects, key=effects.get)
-                            logger.info(
-                                "[causal] step=%d intervene: %s effect=%.4f | graph=%d/%d edges",
-                                state.step, top_effect, effects[top_effect],
-                                len(causal_disc), causal_disc.capacity,
-                            )
+                    else:
+                        # Experience mode: no world model needed — statistics
+                        # over the real-transition buffer (Stage 14 fallback
+                        # after WM-imagination proved unusable on MiniGrid).
+                        effects = causal_disc.intervene_from_experience(state.step)
+                    if effects:
+                        top_effect = max(effects, key=effects.get)
+                        logger.info(
+                            "[causal] step=%d intervene: %s effect=%.4f | graph=%d/%d edges",
+                            state.step, top_effect, effects[top_effect],
+                            len(causal_disc), causal_disc.capacity,
+                        )
                     causal_last_intervene = state.step
 
                 # --- Phase 0: counterfactual imagination ---
@@ -3553,6 +3575,9 @@ and state.step % 50000 < rollout_capacity):
                     curr_active_task.id if curr_active_task else -1,
                     new_task.tag, new_task.id,
                 )
+                # Developmental consolidation: protect the just-finished task
+                # (Online EWC task-end Fisher) BEFORE moving to the new task.
+                _run_ewc_consolidate()
                 try:
                     env.close()
                 except Exception:

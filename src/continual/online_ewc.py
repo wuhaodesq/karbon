@@ -241,9 +241,9 @@ class OnlineEWC:
         }
 
     def load_state_dict(self, state: dict, device: str | torch.device = "cpu") -> None:
-        # Config fields — validate names but accept updated values
-        for k, v in state["config"].items():
-            setattr(self.config, k, v)
+        # NOTE: hyperparameters (lambda_reg/gamma/anchor mode) are NOT restored
+        # from the checkpoint — they come from the current config file, so a
+        # tuned config takes effect on resume. Only state is restored.
         self._fisher = {k: v.clone().to(device) for k, v in state["fisher"].items()}
         self._anchor = {k: v.clone().to(device) for k, v in state["anchor"].items()}
         self._param_names = list(self._fisher.keys())

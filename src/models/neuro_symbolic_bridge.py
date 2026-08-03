@@ -37,7 +37,7 @@ class Causal2Prolog:
     → Prolog can deduce "push causes chain of 3 movements".
     """
 
-    def __init__(self, min_strength: float = 0.3, max_rules: int = 200) -> None:
+    def __init__(self, min_strength: float = 0.02, max_rules: int = 200) -> None:
         self._min_strength = min_strength
         self._max_rules = max_rules
         self._converted: list[str] = []
