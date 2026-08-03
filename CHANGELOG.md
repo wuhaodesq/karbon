@@ -41,6 +41,41 @@ All notable changes to this project are documented here.
 - **CausalGraph 查询阈值** `min_strength=0.3→0.1`：wm 模式同样受益
   （MSE 量纲 ×10 scaling 原本也达不到 0.3）；`creativity_orchestrator`
   已显式传 0.1，不受影响
+- **EWC 发育式强化（anti-forgetting）**: `ewc_lambda` 3.0->50.0、
+  `ewc_gamma` 0.95->0.99、`ewc_consolidate_every_steps` 100K->25K +
+  课程切换钩子（task-end Fisher，`src/train.py`）。修复
+  `OnlineEWC.load_state_dict` 无条件从 ckpt 恢复 config 的 bug（每次 resume
+  静默回退 yaml 调参 -> lambda=3.0）。回归测试 `test_load_state_dict_keeps_current_config`
+- **eval 动作映射 bug**: 8-action 模型 argmax 直接喂 5-action MiniGrid 环境
+  报 `Unknown action: 7`；`independent_evaluator.py` + `run_minigrid_eval.py`
+  clip 到 `action_space_n-1`
+
+### Stage 14 完成 - 最终结果 (2026-08-03)
+
+> 1,000,000 步，RTX 3080 Ti (12 GB)，Stage sealed。
+> 报告见 `docs/stage14_report.md`。
+
+| 指标 | 值 |
+|---|---|
+| 独立评估 total | **0.648** (curiosity=0.21 drive=1.00 task=0.91) |
+| empty-5x5 SR | 20% (GRR 43%) |
+| empty-8x8 SR | 7% (GRR 10%) |
+| doorkey-5x5 SR | **30%** (GRR 47%) ← 手段-目的推理核心目标 |
+| doorkey-6x6 SR | 7% (GRR 17%) |
+| Navigation / Means-Ends / Systematic | 0.20 / **0.30** / 0.22 |
+| 因果图 | 58/512 边，experience 模式，effect 非零，query_why 可返回 |
+| EWC | lambda=50, gamma=0.99, 23× consolidated, task-end 钩子触发 |
+| Coverage | 49.9% |
+| WM (latent-only) | loss ~0.0007, kl_raw ~0.0002 |
+
+**关键发现**:
+1. **像素 WM 在 MiniGrid 经济上不可行**（84K 步实证：encode cost > recon gain）->
+   因果发现改用真实轨迹干预统计（experience 模式），想象训练推迟到 3D 世界
+2. **EWC 强化验证发育式能力堆叠**：lambda 3->50 后 empty-5x5 SR 从 3%(强化前)
+   回升至 37%(强化后)，doorkey-5x5 从 10% 升至 30%（最终）；对比强化前
+   全任务崩至 0-3% 的覆盖式遗忘，是质的改变
+3. **empty-8x8 遗留遗忘**：训练时间最久远的任务，EWC gamma=0.99 仍有衰减，
+   SR 波动大（37%->0%）。后续可考虑任务级 Fisher 重放或 interleaved curriculum
 
 ### Stage 14 — Causal Reasoning (因果发现 + 反事实想象) (2026-07-31)
 

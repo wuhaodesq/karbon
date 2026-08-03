@@ -1,4 +1,4 @@
-# Developmental Stage Timeline / 发育阶段时序图
+﻿# Developmental Stage Timeline / 发育阶段时序图
 
 ```mermaid
 timeline
@@ -73,9 +73,9 @@ timeline
 
 ## Current Status / 当前状态
 
-- **Completed**: Stage 0–13 (Stage 13 closed at 641K steps, report in `docs/stage13_report.md`)
-- **Running**: Stage 14 — Causal Reasoning (因果发现 + 反事实想象)
-- **Next**: Stage 12 (after Stage 14) — Imagination-driven training (Dreamer-style)
+- **Completed**: Stage 0–14 (Stage 14 closed at 1,000,000 steps, report in `docs/stage14_report.md`)
+- **Running**: (none - Stage 14 sealed, deciding next stage)
+- **Next**: Stage 12 (Imagination) blocked - needs working WM (proven S14: encode cost > recon gain on MiniGrid). Recommend 3D world migration or Stage 15 (Core Knowledge) as bridge.
 
 > **时序修正说明**: 原定 Stage 12（想象训练）→ Stage 13（外部记忆）→ Stage 14（因果推理）。
 > 经 Stage 13 训练发现世界模型 (RSSM) 未有效学习（wm=0.506, near chance），导致依赖 world model 的
