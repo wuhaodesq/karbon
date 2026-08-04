@@ -8,7 +8,7 @@
 # 3. Curriculum: MiniGrid tasks → 3D physics tasks (varying object count/density)
 # 4. Carry-forward: EWC λ=50 γ=0.99, causal experience mode, skill library
 #
-# Smoke test config (50K steps): verify WM recon loss下降 in 3D.
+# Full training config (1M steps): 3D core knowledge acquisition.
 
 stage: 15
 name: "stage15_3d_core_knowledge"
@@ -85,7 +85,7 @@ curriculum:
   exploration_epsilon: 0.3
   mode: sequential
   smoothing: 0.5
-  switch_every_steps: 20000
+  switch_every_steps: 50000
   report_every_steps: 500
   tasks:
     - {id: 0, num_objects: 3,  action_force: 70.0, difficulty: 0.1, tag: "3d-sparse"}
@@ -100,7 +100,7 @@ continual:
   ewc_gamma: 0.99
   ewc_anchor_mode: "replace"
   ewc_anchor_ema_alpha: 0.9
-  ewc_consolidate_every_steps: 25000
+  ewc_consolidate_every_steps: 50000
   ewc_consolidate_num_batches: 32
   ewc_batch_size: 32
   gr_enabled: true
@@ -113,9 +113,9 @@ continual:
   gr_rehearsal_batch_size: 32
   gr_inject_every_steps: 5000
   sleep_warmup_steps: 1000
-  sleep_replay_trim_every: 10000
-  sleep_skills_merge_every: 20000
-  sleep_ttt_distill_every: 20000
+  sleep_replay_trim_every: 25000
+  sleep_skills_merge_every: 50000
+  sleep_ttt_distill_every: 50000
 
 core_knowledge_loss:
   enabled: true
@@ -209,7 +209,7 @@ world_model:
   update_every_steps: 4
   lr: 5.0e-4
   wm_loss_coef: 1.0
-  log_every_steps: 1000       # more frequent logging for smoke test
+  log_every_steps: 2000       # logging frequency for full run
 
 intrinsic:
   embed_dim: 128
@@ -231,9 +231,9 @@ replay:
 
 coverage:
   num_buckets: 16384
-  log_every_steps: 5000
+  log_every_steps: 10000
 
-# --- Training (smoke test: 50K steps) ---
+# --- Training (full 1M steps) ---
 train:
   ppo_clip: 0.2
   ppo_epochs: 4
@@ -241,16 +241,17 @@ train:
   value_coef: 0.5
   gamma: 0.99
   gae_lambda: 0.95
-  total_steps: 50000          # smoke test (full run would be 1M+)
-  ckpt_every_steps: 10000
+  total_steps: 1000000         # full training
+  ckpt_every_steps: 50000
+  log_every_steps: 2000
 
 independent_eval:
-  eval_every_steps: 10000
+  eval_every_steps: 50000
   eval_weights: [2.0, 1.0, 2.0]
-  episodes_per_task: 10       # fewer for smoke test
+  episodes_per_task: 10
   max_steps_per_ep: 200
   eval_epsilon: 0.05
   eval_seed: 42
 
 viz:
-  frame_every_steps: 5000     # save rendered frames for visual inspection
+  frame_every_steps: 25000     # save rendered frames every 25K steps
