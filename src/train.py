@@ -665,6 +665,17 @@ def _build_env_from_spec(spec: dict[str, Any], env_cfg: dict[str, Any]):
             gravity=float(spec.get("gravity", env_cfg.get("gravity", -9.8))),
             action_force=float(spec.get("action_force", env_cfg.get("action_force", 50.0))),
         )
+    if env_id == "ThreeDWorld":
+        from src.envs.three_d_world import ThreeDWorld
+        return ThreeDWorld(
+            num_objects=int(spec.get("num_objects", env_cfg.get("num_objects", 8))),
+            seed=42,
+            max_episode_steps=env_cfg.get("max_episode_steps", 300),
+            render_size=int(env_cfg.get("render_size", 128)),
+            action_force=float(spec.get("action_force", env_cfg.get("action_force", 50.0))),
+            camera_pos=tuple(env_cfg.get("camera_pos", [0.0, -1.0, 0.8])),
+            camera_fovy=float(env_cfg.get("camera_fovy", 60.0)),
+        )
     return MiniGridWrapper(
         env_id=env_id,
         seed=42,
@@ -725,6 +736,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             render_size=int(env_cfg.get("render_size", 256)),
             action_force=float(env_cfg.get("action_force", 2.0)),
             developmental_age=float(env_cfg.get("developmental_age", 0.0)),
+            camera_pos=tuple(env_cfg.get("camera_pos", [0.0, -1.0, 0.8])),
+            camera_fovy=float(env_cfg.get("camera_fovy", 60.0)),
         )
         n_envs = int(env_cfg.get("num_envs", 1))
         if n_envs > 1:
