@@ -5,7 +5,20 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
-### Stage 15 · 3D 世界迁移准备 (2026-08-04)
+### Stage 15 · 3D 世界迁移 (2026-08-04)
+
+#### Smoke Test 结果 (50K steps) ✅
+- **信息天花板突破**: KL 从 0.003 (MiniGrid 坍缩) → 1.41 (3D 活跃编码)
+- **Recon loss 趋势**: 40-50K 步平均 ~24.4，从初始 ~44 降至最终 22.36
+- **帧复杂度递增**: 单球→双球→多物体，课程在推进
+- **VRAM 稳定**: 3.66GB (RTX 3080 Ti 12GB)
+- **性能**: ~47ms/step
+- **覆盖率**: 95.1%
+
+#### 完整 1M 步训练启动
+- 配置: `stage15_3d.yaml` + `cloud_24g` preset
+- 预计时间: ~13 小时
+- 监控重点: recon loss <15，因果边 >50，想象训练验证
 
 #### 渲染修复 (three_d_world.py)
 - **camera 缺失修复**: 场景 XML 无 `<camera>` 定义 → free camera 在视野外 → 渲染全白
