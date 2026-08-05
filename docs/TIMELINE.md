@@ -45,9 +45,9 @@ timeline
         Stage 14 : 因果发现 + 反事实想象
                  : 工具使用链 · 多步因果
 
-    section 想象规划 (Imagination) : Stage 12
+    section 想象规划 (Imagination) : Stage 12 ← 下一步
         Stage 12 : Dreamer 风格想象驱动训练
-                 : 基于高质量记忆的想象
+                 : 基于 3D 世界模型 + 完整因果图谱
                  : 样本效率 ↑ (拥有因果图后的想象)
 
     section 3D Core Knowledge : Stage 15 ✅
