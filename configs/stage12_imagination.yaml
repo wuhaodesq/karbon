@@ -236,7 +236,7 @@ replay:
   cold_max_shards: 32
   cold_shard_size: 16384
   per_alpha: 0.6
-  min_size_to_sample: 1024
+  min_size_to_sample: 256              # 原1024,降低4x让想象训练更早启动
   sample_every_steps: 4
   batch_size_offpolicy: 128
   archive_subdir: "replay"
