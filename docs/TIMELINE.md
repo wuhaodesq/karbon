@@ -50,9 +50,12 @@ timeline
                  : 基于高质量记忆的想象
                  : 样本效率 ↑ (拥有因果图后的想象)
 
-    section Core Knowledge : Stage 15
-        Stage 15 : 物体永存 · 直觉物理
-                 : 数感 · 空间推理
+    section 3D Core Knowledge : Stage 15 ✅
+        Stage 15 : 3D 世界迁移 (MiniGrid → ThreeDWorld)
+                 : 信息天花板突破 (KL 0.003→0.35)
+                 : 像素 WM 学习 (Recon 39→1.68, 96%↓)
+                 : 因果发现完成 (23/64 边, 36% 覆盖)
+                 : Mean Return 56.3 · 覆盖率 100%
 
     section 神经符号 (Neuro-symbolic) : Stage 16
         Stage 16 : 规则抽取 + 逻辑推理
@@ -73,9 +76,8 @@ timeline
 
 ## Current Status / 当前状态
 
-- **Completed**: Stage 0–14 (Stage 14 closed at 1,000,000 steps, report in `docs/stage14_report.md`)
-- **Planning**: Stage 15 — 3D world migration (Path B chosen; rendering fixed, camera optimized)
-- **Next**: Stage 15a smoke test on ThreeDWorld (WM recon re-enabled in 3D)
+- **Completed**: Stage 0–15 (Stage 15 completed at 1,000,000 steps, 3D migration + causal discovery finished)
+- **Next**: Stage 12 — 想象训练验证 (基于完整因果图谱)
 
 > **3D 迁移决策** (2026-08-04): MiniGrid 信息天花板已实证确认(encode cost > recon gain)。
 > Path B (3D 迁移) 是"以终为始"选择(AGENTS.md §0)。ThreeDWorld 渲染修复完成,
@@ -106,7 +108,7 @@ timeline
 | **13** | **外部记忆** | **情景/语义/程序记忆** | **长期关键事件保留** |
 | **14** | **因果推理** | **因果图 + 反事实** | **多步因果链完成** |
 | 12 | 想象规划 | Dreamer 想象训练 | 样本效率 vs S11 (拥有因果图后) |
-| **15** | **3D 核心知识** | **ThreeDWorld 迁移 + 物体永存/物理** | **WM recon 下降, 因果边>100, 物体永存 SR>0.3** |
+| **15** | **3D 核心知识** | **ThreeDWorld 迁移 + 因果发现** | **KL 0.35, Recon 1.68, 因果 23/64 边** |
 | 16 | 神经符号 | 规则 + 逻辑推理 | 符号推理准确率 |
 | 17 | 元反思 | 学习自省 | 知识缺口检测 |
 | 18 | 组合成长 | 技能组合 + 创造 | 新技能组合数 |
