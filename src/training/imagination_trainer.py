@@ -79,6 +79,7 @@ class ImaginationTrainer:
         self.config = config or ImaginationConfig()
         self._device = device or torch.device("cpu")
         self._optimizer: torch.optim.Adam | None = None
+        self._pending_optimizer_state: dict | None = None  # deferred restore
         self._total_imagine_updates = 0
         self._last_loss: dict[str, float] = {}
 
@@ -111,6 +112,12 @@ class ImaginationTrainer:
                 [p for p in actor_critic.parameters() if p.requires_grad],
                 lr=cfg.lr,
             )
+            if self._pending_optimizer_state is not None:
+                try:
+                    self._optimizer.load_state_dict(self._pending_optimizer_state)
+                except (ValueError, RuntimeError) as exc:
+                    logger.warning("Could not restore imagination optimizer state: %s", exc)
+                self._pending_optimizer_state = None
 
         bsz_orig = replay_sample["obs"].shape[0]
         if bsz_orig == 0:
@@ -253,5 +260,12 @@ class ImaginationTrainer:
 
     def load_state_dict(self, state: dict) -> None:
         self._total_imagine_updates = int(state.get("total_imagine_updates", 0))
-        if self._optimizer and "optimizer" in state and state["optimizer"]:
-            self._optimizer.load_state_dict(state["optimizer"])
+        saved_optim = state.get("optimizer")
+        if saved_optim:
+            if self._optimizer is not None:
+                try:
+                    self._optimizer.load_state_dict(saved_optim)
+                except (ValueError, RuntimeError) as exc:
+                    logger.warning("Could not restore imagination optimizer: %s", exc)
+            else:
+                self._pending_optimizer_state = saved_optim

@@ -3179,7 +3179,7 @@ and state.step % 50000 < rollout_capacity):
                     num_actions=num_actions,
                 )
             except (ValueError, IndexError, RuntimeError) as exc:
-                logger.debug("imagination update skipped: %s", exc)
+                logger.info("imagination update FAILED at step %d: %s (replay len=%d)", state.step, exc, len(replay))
 
         # --- Phase 1+: knowledge gap update ---
         if (knowledge_gap is not None and wm is not None
