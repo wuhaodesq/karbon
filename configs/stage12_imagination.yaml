@@ -245,7 +245,7 @@ coverage:
   num_buckets: 16384
   log_every_steps: 10000
 
-# --- Training (smoke test: 50K steps) ---
+# --- Training (full: 1M steps) ---
 train:
   ppo_clip: 0.2
   ppo_epochs: 4
@@ -253,11 +253,11 @@ train:
   value_coef: 0.5
   gamma: 0.99
   gae_lambda: 0.95
-  total_steps: 50000              # smoke test
-  ckpt_every_steps: 10000
+  total_steps: 1000000             # full training
+  ckpt_every_steps: 50000
 
 independent_eval:
-  eval_every_steps: 10000
+  eval_every_steps: 50000
   eval_weights: [2.0, 1.0, 2.0]
   episodes_per_task: 5
   max_steps_per_ep: 200

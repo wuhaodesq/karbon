@@ -3165,7 +3165,7 @@ and state.step % 50000 < rollout_capacity):
             and replay is not None
             and len(replay) >= replay_min_size
             and imagination_update_every > 0
-            and state.step % imagination_update_every < rollout_capacity
+            and state.step % imagination_update_every == 0
         ):
             try:
                 sample, _, _ = replay.sample_prioritized(
