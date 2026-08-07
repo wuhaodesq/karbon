@@ -37,7 +37,7 @@ env:
   max_episode_steps: 300
   render_size: 128
   action_force: 50.0
-  developmental_age: 0.0
+  developmental_age: 0.35             # toddler: grasping + chain tasks unlocked
   num_envs: 1
 
 # --- LLM Fusion (disabled) ---
@@ -218,7 +218,7 @@ imagination:
   discount: 0.99                   # gamma
   actor_entropy_scale: 0.01        # 熵奖励权重
   critic_loss_scale: 0.5           # TD-error 权重
-  update_every_steps: 8            # 每 N 步更新一次 (原16,提升2x)
+  update_every_steps: 4            # 每 N 步更新一次 (原8,翻倍想象训练频率)
   min_replay_size: 64              # 最小回放缓冲 (原256,降低4x)
   lambda_gae: 0.95                 # GAE lambda
   lr: 3.0e-4                       # 学习率

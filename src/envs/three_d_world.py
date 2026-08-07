@@ -10,6 +10,9 @@ Features:
     - Language labels on objects and actions
     - Developmental body scaling (agent grows from baby → child size)
     - Proprioceptive output (position, velocity, touch, joint angles)
+    - Grasping system (unlocks at developmental_age > 0.15)
+    - Chain tasks: obstacle clearing, key-door (unlock at age > 0.3)
+    - Touch sensor for contact-force rewards
 
 Architecture:
     MuJoCo physics engine (CPU, ~1ms/step)
@@ -52,7 +55,7 @@ class EnvStep3D:
     terminated: bool
     truncated: bool
     info: dict[str, Any]
-    proprio: np.ndarray      # (12,) — position(3) + velocity(3) + touch(3) + joint(3)
+    proprio: np.ndarray      # (12,) or (16,) depending on dev_age— position(3) + velocity(3) + touch(3) + joint(3)
 
 
 # =====================================================================
@@ -333,11 +336,20 @@ class ThreeDWorld:
 
     Matches the EnvStep interface used by train.py.
 
-    Action space (8 discrete):
+    Action space (8 or 12 discrete, depends on developmental age):
         0-3: move agent (north, south, west, east)
         4-7: move agent × 2 (strong push)
+        8:   grasp nearest object (dev_age > 0.15)
+        9:   release held object (dev_age > 0.15)
+        10:  use held object as tool (push forward) (dev_age > 0.15)
+        11:  rotate (visual exploration) (dev_age > 0.15)
 
-    Observation: 256×256×3 RGB + 12-dim proprioceptive.
+    Chain tasks (unlock with developmental age):
+        age < 0.3:  free play
+        age 0.3-0.5: obstacle clearing (push barrier to reach target)
+        age > 0.5:  key-door (grasp key, bring to door, reach reward)
+
+    Observation: render_size×render_size×3 RGB + 12/16-dim proprioceptive.
     """
 
     def __init__(
@@ -393,6 +405,19 @@ class ThreeDWorld:
         self._logic_bonus_action: int | None = None
         self._logic_bonus_weight: float = 0.3
 
+        # --- Grasping state (developmental: unlocks at age > 0.15) ---
+        self._held_obj_id: int | None = None  # index into _object_lib, None = empty hand
+        self._weld_eq_id: int = -1  # MuJoCo equality constraint id for weld
+
+        # --- Chain task state (developmental: unlocks at age > 0.3) ---
+        self._task_type: str = "free_play"  # "free_play", "obstacle", "key_door"
+        self._task_target_body: str | None = None  # body name of target object
+        self._task_barrier_body: str | None = None  # body name of barrier
+        self._task_key_body: str | None = None  # body name of key
+        self._task_door_open: bool = False
+        self._task_progress: float = 0.0  # 0..1
+        self._task_reward_collected: bool = False
+
         # Initial reset
         self._build_scene()
 
@@ -400,6 +425,10 @@ class ThreeDWorld:
 
     @property
     def action_space_n(self) -> int:
+        # 8 base locomotion actions always available.
+        # Grasping actions (8-11) unlock when developmental_age > 0.15.
+        if self._dev_age > 0.15:
+            return 12
         return 8
 
     @property
@@ -408,6 +437,9 @@ class ThreeDWorld:
 
     @property
     def proprio_dim(self) -> int:
+        # 12 base + 4 grasping (is_holding + held_obj_pos xyz) when unlocked
+        if self._dev_age > 0.15:
+            return 16
         return 12
 
     @property
@@ -439,19 +471,31 @@ class ThreeDWorld:
         return self._render()
 
     def step(self, action: int) -> EnvStep3D:
-        action = int(action) % 8
+        action = int(action) % self.action_space_n
         agent_name = self._agent_names[0]
 
-        # Apply force via position actuators
-        if action < 4:
-            force = self._action_force
-            dir_idx = action
+        # --- Grasping actions (8-11): only when dev_age > 0.15 ---
+        if action >= 8 and self._dev_age > 0.15:
+            if action == 8:
+                self._grasp()
+            elif action == 9:
+                self._release()
+            elif action == 10:
+                self._use_held_as_tool()
+            elif action == 11:
+                pass  # rotate: just turn in place (no-op for now, visual exploration)
+            dx, dy = 0.0, 0.0
         else:
-            force = self._action_force * 2.0
-            dir_idx = action - 4
+            # Apply force via position actuators (actions 0-7)
+            if action < 4:
+                force = self._action_force
+                dir_idx = action
+            else:
+                force = self._action_force * 2.0
+                dir_idx = action - 4
 
-        dx = force * [0, 0, -1, 1][dir_idx]
-        dy = force * [1, -1, 0, 0][dir_idx]
+            dx = force * [0, 0, -1, 1][dir_idx]
+            dy = force * [1, -1, 0, 0][dir_idx]
 
         # Move agent target position via velocity control
         try:
@@ -478,6 +522,10 @@ class ThreeDWorld:
 
         # Physics step
         mujoco.mj_step(self._model, self._data)
+
+        # Sync held object position (virtual grasp)
+        if self._held_obj_id is not None:
+            self._sync_held_object()
 
         # Reward
         reward = self._compute_reward(action)
@@ -534,6 +582,9 @@ class ThreeDWorld:
                 "count_trials": self._count_trials,
                 "actions": self._actions,
                 "object_contact_order": self._object_contact_order,
+                "task_type": self._task_type,
+                "task_progress": self._task_progress,
+                "held_obj": self._held_obj_id,
             },
             proprio=self._proprio(),
         )
@@ -610,6 +661,15 @@ class ThreeDWorld:
         self._object_contact_order = []
         self._contacted = set()
         self._active_occlusions_3d = {}
+
+        # Reset grasping state
+        self._held_obj_id = None
+
+        # Set up chain task based on developmental age
+        self._task_reward_collected = False
+        self._task_progress = 0.0
+        self._task_door_open = False
+        self._setup_chain_task()
 
     def _rebuild_scene(self) -> None:
         self._build_scene()
@@ -732,12 +792,194 @@ class ThreeDWorld:
         except Exception:
             return 0.35
 
+    # ------------------------------------------------------------------ grasping
+
+    def _grasp(self) -> None:
+        """Attempt to grasp the nearest graspable object within reach."""
+        if self._held_obj_id is not None or self._model is None:
+            return
+        learner_id = self._model.body("learner").id
+        ax = float(self._data.xpos[learner_id, 0])
+        ay = float(self._data.xpos[learner_id, 1])
+        best_idx = -1
+        best_dist = 1e9
+        for i in range(min(self._num_objects, len(self._object_lib))):
+            if not self._object_lib[i].graspable:
+                continue
+            try:
+                bid = self._model.body(f"obj_{i}").id
+                ox = float(self._data.xpos[bid, 0])
+                oy = float(self._data.xpos[bid, 1])
+                d = ((ax - ox)**2 + (ay - oy)**2) ** 0.5
+                if d < self._contact_reach(i) and d < best_dist:
+                    best_dist = d
+                    best_idx = i
+            except Exception:
+                continue
+        if best_idx >= 0:
+            self._held_obj_id = best_idx
+
+    def _release(self) -> None:
+        """Release the currently held object."""
+        self._held_obj_id = None
+
+    def _use_held_as_tool(self) -> None:
+        """Use held object as a tool: apply extra force to objects in front."""
+        if self._held_obj_id is None or self._model is None:
+            return
+        try:
+            learner_id = self._model.body("learner").id
+            ax = float(self._data.xpos[learner_id, 0])
+            ay = float(self._data.xpos[learner_id, 1])
+            # Apply outward force from held object to nearby objects
+            held_bid = self._model.body(f"obj_{self._held_obj_id}").id
+            hx = float(self._data.xpos[held_bid, 0])
+            hy = float(self._data.xpos[held_bid, 1])
+            for i in range(min(self._num_objects, len(self._object_lib))):
+                if i == self._held_obj_id:
+                    continue
+                try:
+                    bid = self._model.body(f"obj_{i}").id
+                    ox = float(self._data.xpos[bid, 0])
+                    oy = float(self._data.xpos[bid, 1])
+                    d = ((hx - ox)**2 + (hy - oy)**2) ** 0.5
+                    if d < 0.25:
+                        # Push object away from held tool
+                        dx_push = (ox - hx) / max(d, 0.01) * self._action_force * 0.5
+                        dy_push = (oy - hy) / max(d, 0.01) * self._action_force * 0.5
+                        dof = self._model.body_dofadr[bid]
+                        if dof >= 0:
+                            self._data.qvel[dof] += dx_push * self._model.opt.timestep
+                            self._data.qvel[dof + 1] += dy_push * self._model.opt.timestep
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    def _sync_held_object(self) -> None:
+        """Move held object to follow agent (virtual grasp without weld constraint)."""
+        if self._held_obj_id is None or self._model is None:
+            return
+        try:
+            learner_id = self._model.body("learner").id
+            ax = float(self._data.xpos[learner_id, 0])
+            ay = float(self._data.xpos[learner_id, 1])
+            az = float(self._data.xpos[learner_id, 2])
+            held_bid = self._model.body(f"obj_{self._held_obj_id}").id
+            # Position held object just in front of agent
+            target_x = ax + 0.12
+            target_y = ay
+            target_z = az
+            dof = self._model.body_dofadr[held_bid]
+            if dof >= 0:
+                # Smoothly move toward target
+                cur_x = self._data.qpos[dof]
+                cur_y = self._data.qpos[dof + 1]
+                self._data.qpos[dof] = cur_x + (target_x - cur_x) * 0.3
+                self._data.qpos[dof + 1] = cur_y + (target_y - cur_y) * 0.3
+                # Reduce velocity to prevent flinging
+                self._data.qvel[dof] *= 0.3
+                self._data.qvel[dof + 1] *= 0.3
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------ chain tasks
+
+    def _setup_chain_task(self) -> None:
+        """Set up a chain task based on developmental age.
+
+        Developmental progression:
+        - age < 0.3: free play (no task)
+        - age 0.3-0.5: obstacle clearing (push barrier to reach target)
+        - age > 0.5: key-door (find key, grasp, bring to door)
+        """
+        if self._dev_age < 0.3:
+            self._task_type = "free_play"
+            return
+        elif self._dev_age < 0.5:
+            self._task_type = "obstacle" if self._rng.random() < 0.5 else "free_play"
+        else:
+            r = self._rng.random()
+            if r < 0.33:
+                self._task_type = "obstacle"
+            elif r < 0.66:
+                self._task_type = "key_door"
+            else:
+                self._task_type = "free_play"
+
+        # Select a target object (reward) from existing objects
+        if self._task_type == "obstacle":
+            self._task_target_body = f"obj_{min(self._num_objects - 1, 0)}"
+            self._task_barrier_body = f"obj_{min(self._num_objects - 1, 1)}"
+        elif self._task_type == "key_door":
+            self._task_target_body = f"obj_{min(self._num_objects - 1, 0)}"
+            self._task_key_body = f"obj_{min(self._num_objects - 1, 1)}"
+            self._task_door_open = False
+
+    def _update_chain_task(self, dx: float, dy: float) -> float:
+        """Update chain task progress and return bonus reward."""
+        if self._task_type == "free_play" or self._model is None:
+            return 0.0
+        bonus = 0.0
+        try:
+            learner_id = self._model.body("learner").id
+            ax = float(self._data.xpos[learner_id, 0])
+            ay = float(self._data.xpos[learner_id, 1])
+
+            if self._task_type == "obstacle" and self._task_target_body:
+                # Progress: agent reaches target (barrier was in the way)
+                tid = self._model.body(self._task_target_body).id
+                tx = float(self._data.xpos[tid, 0])
+                ty = float(self._data.xpos[tid, 1])
+                dist = ((ax - tx)**2 + (ay - ty)**2) ** 0.5
+                if dist < 0.3 and not self._task_reward_collected:
+                    bonus = 3.0
+                    self._task_reward_collected = True
+                    self._task_progress = 1.0
+                else:
+                    self._task_progress = max(0, 1.0 - dist / 3.0)
+
+            elif self._task_type == "key_door" and self._task_target_body:
+                # Phase 1: find and grasp key
+                if self._held_obj_id is not None and not self._task_door_open:
+                    # Check if agent is near target (door) with key
+                    tid = self._model.body(self._task_target_body).id
+                    tx = float(self._data.xpos[tid, 0])
+                    ty = float(self._data.xpos[tid, 1])
+                    dist = ((ax - tx)**2 + (ay - ty)**2) ** 0.5
+                    if dist < 0.5:
+                        self._task_door_open = True
+                        bonus = 1.0
+                        self._task_progress = 0.5
+                elif self._task_door_open and not self._task_reward_collected:
+                    # Phase 2: reach target (door is open)
+                    tid = self._model.body(self._task_target_body).id
+                    tx = float(self._data.xpos[tid, 0])
+                    ty = float(self._data.xpos[tid, 1])
+                    dist = ((ax - tx)**2 + (ay - ty)**2) ** 0.5
+                    if dist < 0.3:
+                        bonus = 3.0
+                        self._task_reward_collected = True
+                        self._task_progress = 1.0
+                else:
+                    # Progress toward key
+                    if self._task_key_body:
+                        kid = self._model.body(self._task_key_body).id
+                        kx = float(self._data.xpos[kid, 0])
+                        ky = float(self._data.xpos[kid, 1])
+                        dist_key = ((ax - kx)**2 + (ay - ky)**2) ** 0.5
+                        self._task_progress = max(0, 0.3 - dist_key / 3.0)
+        except Exception:
+            pass
+        return bonus
+
     def _compute_reward(self, action: int = -1) -> float:
         """Multi-component reward.
 
         - Object interaction: velocity of scene objects (learner caused movement)
-        - Exploration: visiting new locations
+        - Contact: touching objects (from MuJoCo contacts, not dead sensor)
         - Social: proximity to caregiver (safety reward)
+        - Chain task: goal-directed bonus (when dev_age > 0.3)
         """
         reward = 0.0
 
@@ -755,14 +997,23 @@ class ThreeDWorld:
                     speed = 0.0
                 reward += speed * 0.1
 
-        # Contact reward: touching objects
-        touch_sensor_name = "learner_touch"
-        if touch_sensor_name in [self._model.sensor(i).name for i in range(self._model.nsensor)]:
-            try:
-                touch_data = self._data.sensor(touch_sensor_name).data
-                reward += float(np.sum(np.abs(touch_data))) * 0.2
-            except Exception:
-                pass
+        # Contact reward: compute from MuJoCo contacts directly (fixed dead sensor)
+        try:
+            learner_bid = self._model.body("learner").id
+            contact_count = 0
+            for i in range(self._model.ncon):
+                contact = self._data.contact[i]
+                if contact.geom1 == learner_bid or contact.geom2 == learner_bid:
+                    contact_count += 1
+                # Also check if contact involves a body that is the learner
+                g1bid = self._model.geom_bodyid[contact.geom1]
+                g2bid = self._model.geom_bodyid[contact.geom2]
+                if g1bid == learner_bid or g2bid == learner_bid:
+                    contact_count += 1
+            if contact_count > 0:
+                reward += min(contact_count * 0.05, 0.5)
+        except Exception:
+            pass
 
         # Caregiver proximity reward
         try:
@@ -775,7 +1026,11 @@ class ThreeDWorld:
         except Exception:
             pass
 
-        reward += float(max(0.0, min(5.0, reward)))
+        reward = max(0.0, min(5.0, reward))
+
+        # --- Chain task bonus (developmental: unlocks at age > 0.3) ---
+        if self._dev_age > 0.3:
+            reward += self._update_chain_task(0.0, 0.0)
 
         # --- Logic bonus: reward agent for following symbolic rules ---
         if self._logic_bonus_action is not None and action >= 0 and action % 8 == self._logic_bonus_action:
@@ -784,7 +1039,7 @@ class ThreeDWorld:
         return float(max(0.0, min(10.0, reward)))
 
     def _proprio(self) -> np.ndarray:
-        """Return (12,) proprioceptive vector."""
+        """Return proprioceptive vector (12 or 16 dim depending on dev age)."""
         try:
             body = self._data.body("learner")
             pos = body.xpos[:3].copy()
@@ -806,9 +1061,24 @@ class ThreeDWorld:
                     joints[i] = float(self._data.qpos[joint_id])
                 except Exception:
                     pass
-            return np.concatenate([pos, vel, touch, joints]).astype(np.float32)
+            base = np.concatenate([pos, vel, touch, joints]).astype(np.float32)
+            # Add grasping state when unlocked
+            if self._dev_age > 0.15:
+                is_holding = np.array([1.0 if self._held_obj_id is not None else 0.0], dtype=np.float32)
+                if self._held_obj_id is not None and self._model is not None:
+                    try:
+                        hbid = self._model.body(f"obj_{self._held_obj_id}").id
+                        held_pos = self._data.xpos[hbid][:3].copy().astype(np.float32)
+                    except Exception:
+                        held_pos = np.zeros(3, dtype=np.float32)
+                else:
+                    held_pos = np.zeros(3, dtype=np.float32)
+                grasp_state = np.concatenate([is_holding, held_pos]).astype(np.float32)
+                return np.concatenate([base, grasp_state])
+            return base
         except Exception:
-            return np.zeros(12, dtype=np.float32)
+            dim = 16 if self._dev_age > 0.15 else 12
+            return np.zeros(dim, dtype=np.float32)
 
     def set_developmental_age(self, age: float) -> None:
         """Update developmental age (body grows, more objects emerge)."""
