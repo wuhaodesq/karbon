@@ -425,11 +425,12 @@ class ThreeDWorld:
 
     @property
     def action_space_n(self) -> int:
-        # 8 base locomotion actions always available.
-        # Grasping actions (8-11) unlock when developmental_age > 0.15.
-        if self._dev_age > 0.15:
-            return 12
-        return 8
+        # Always 12: grasping actions (8-11) are present from the start
+        # but only have effect when dev_age > 0.15. Before that they
+        # fall through to locomotion (action % 8). This ensures the
+        # model has 12 output heads from day 1, so checkpoints are
+        # compatible across developmental stages.
+        return 12
 
     @property
     def observation_shape(self) -> tuple[int, int, int]:
@@ -437,10 +438,9 @@ class ThreeDWorld:
 
     @property
     def proprio_dim(self) -> int:
-        # 12 base + 4 grasping (is_holding + held_obj_pos xyz) when unlocked
-        if self._dev_age > 0.15:
-            return 16
-        return 12
+        # Always 16: grasping fields (is_holding + held_pos) are zeros
+        # until dev_age > 0.15. Ensures checkpoint compatibility.
+        return 16
 
     @property
     def objects(self) -> list[dict]:
@@ -474,7 +474,8 @@ class ThreeDWorld:
         action = int(action) % self.action_space_n
         agent_name = self._agent_names[0]
 
-        # --- Grasping actions (8-11): only when dev_age > 0.15 ---
+        # --- Grasping actions (8-11): only effective when dev_age > 0.15 ---
+        # Before unlocking, actions 8-11 fall through to locomotion (action % 8)
         if action >= 8 and self._dev_age > 0.15:
             if action == 8:
                 self._grasp()
@@ -483,16 +484,17 @@ class ThreeDWorld:
             elif action == 10:
                 self._use_held_as_tool()
             elif action == 11:
-                pass  # rotate: just turn in place (no-op for now, visual exploration)
+                pass  # rotate: visual exploration
             dx, dy = 0.0, 0.0
         else:
-            # Apply force via position actuators (actions 0-7)
-            if action < 4:
+            # Apply force via position actuators (actions 0-7, or 8-11 mapped to 0-3)
+            eff_action = action % 8
+            if eff_action < 4:
                 force = self._action_force
-                dir_idx = action
+                dir_idx = eff_action
             else:
                 force = self._action_force * 2.0
-                dir_idx = action - 4
+                dir_idx = eff_action - 4
 
             dx = force * [0, 0, -1, 1][dir_idx]
             dy = force * [1, -1, 0, 0][dir_idx]

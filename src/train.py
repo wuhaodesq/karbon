@@ -98,6 +98,7 @@ from src.models.iq_boost import (
 from src.models.abstract_reasoning import MicroPrologMath, IdentityNarrative
 from src.models.tier2_cognitive import Analogizer, BeliefDepth2, MoralConnector, SurpriseHumor
 from src.models.neuro_symbolic_bridge import Causal2Prolog, Number2Math, SchemaDetector
+from src.models.symbol_backend import SymbolBackend
 from src.models.program_synthesis import ProgramSynthesizer, ActiveExperimenter, TemporalAbstractor
 from src.models.counterfactual_planner import CounterfactualPlanner
 from src.models.marginal_gains import CompositionalTester, LearningProgressTracker
@@ -1677,6 +1678,18 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         schema_detector = SchemaDetector()
         logger.info("NeuroSymbolicBridge: Causal2Prolog + Number2Math + SchemaDetector")
 
+    # --- Stage 16: Symbol Backend (kanren) ---
+    symbol_cfg = config.get("symbol_backend")
+    symbol_backend: SymbolBackend | None = None
+    if symbol_cfg and bool(symbol_cfg.get("enabled", False)):
+        symbol_backend = SymbolBackend(
+            max_facts=int(symbol_cfg.get("max_facts", 512)),
+            max_rules=int(symbol_cfg.get("max_rules", 128)),
+            max_resolution_steps=int(symbol_cfg.get("max_resolution_steps", 200)),
+        )
+        logger.info("SymbolBackend: kanren=%s facts=%d rules=%d",
+                    symbol_backend.available, symbol_backend.max_facts, symbol_backend.max_rules)
+
     # --- Program Synthesis + Active Experimentation + Temporal Abstraction ---
     synth_cfg = config.get("program_synthesis")
     program_synth: ProgramSynthesizer | None = None
@@ -1936,6 +1949,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             ("reflection_state",         reflection_loop,              None),
             # Special: symbolic state lives inside symbolic_layer.rule_memory
             ("symbolic_state",           symbolic_layer.rule_memory if symbolic_layer is not None else None, None),
+            ("symbol_backend_state",     symbol_backend,                None),
             ("self_model_state",         self_model,                   None),
             ("logic_engine_state",       logic_engine,                 None),
         ]
@@ -3366,6 +3380,26 @@ and state.step % 50000 < rollout_capacity):
                 except Exception:
                     pass
 
+            # --- Stage 16: Symbol Backend (kanren) ingestion + inference ---
+            if symbol_backend is not None:
+                try:
+                    # Feed causal edges as facts
+                    if causal_disc is not None:
+                        edges = causal_disc.get_edges() if hasattr(causal_disc, 'get_edges') else []
+                        if edges:
+                            symbol_backend.add_causal_edges(edges)
+                    # Feed induced rules
+                    if rule_engine is not None and hasattr(rule_engine, 'rules'):
+                        symbol_backend.add_induced_rules(list(rule_engine.rules.values()))
+                    # Feed symbolic layer rules
+                    if symbolic_layer is not None and hasattr(symbolic_layer, 'rule_memory'):
+                        rules_dict = {r.id: {"action": r.action, "confidence": r.confidence,
+                                             "description": r.description}
+                                      for r in symbolic_layer.rule_memory._rules.values()}
+                        symbol_backend.add_symbolic_rules(rules_dict)
+                except Exception:
+                    pass
+
             # --- Program Synthesis: active experimentation ---
             if (active_experimenter is not None and active_experimenter.should_test(state.step)
                     and causal_disc is not None and curiosity_director is not None):
@@ -3656,6 +3690,8 @@ and state.step % 50000 < rollout_capacity):
                 extra["sleep_loop_state"] = sleep_loop.state_dict()
             if symbolic_layer is not None:
                 extra["symbolic_state"] = symbolic_layer.rule_memory.state_dict()
+            if symbol_backend is not None:
+                extra["symbol_backend_state"] = symbol_backend.state_dict()
             if self_model is not None:
                 extra["self_model_state"] = self_model.state_dict()
             if logic_engine is not None:
@@ -3826,6 +3862,8 @@ and state.step % 50000 < rollout_capacity):
         logger.info("Sleep loop final: %s", sleep_loop.summary())
     if imagination_trainer is not None and imagination_last_loss:
         logger.info("Imagination trainer final: %s", imagination_last_loss)
+    if symbol_backend is not None:
+        logger.info("Symbol backend final: %s", symbol_backend.summary())
     if knowledge_gap is not None:
         logger.info("Knowledge gap final: %s", knowledge_gap.summary())
 
