@@ -418,6 +418,12 @@ class ThreeDWorld:
         self._task_progress: float = 0.0  # 0..1
         self._task_reward_collected: bool = False
 
+        # --- Grasp/carry/tool-use signal tracking (for milestone evaluation) ---
+        self._grasp_carry_events: list[dict] = []
+        self._tool_use_events: list[dict] = []
+        self._release_events: list[dict] = []
+        self._grasp_start_pos: tuple[float, float] | None = None  # agent pos when grasp started
+
         # Initial reset
         self._build_scene()
 
@@ -587,6 +593,10 @@ class ThreeDWorld:
                 "task_type": self._task_type,
                 "task_progress": self._task_progress,
                 "held_obj": self._held_obj_id,
+                "means_ends_score": self._task_progress if self._task_reward_collected else 0.0,
+                "grasp_carry_events": self._grasp_carry_events,
+                "tool_use_events": self._tool_use_events,
+                "release_events": self._release_events,
             },
             proprio=self._proprio(),
         )
@@ -666,6 +676,12 @@ class ThreeDWorld:
 
         # Reset grasping state
         self._held_obj_id = None
+        self._grasp_start_pos = None
+
+        # Reset signal trackers
+        self._grasp_carry_events = []
+        self._tool_use_events = []
+        self._release_events = []
 
         # Set up chain task based on developmental age
         self._task_reward_collected = False
@@ -790,7 +806,7 @@ class ThreeDWorld:
             sx, sy, _sz = obj.size
             obj_extent = max(float(sx), float(sy))
             agent_r = float(getattr(self, "_agent_size", 0.15))
-            return agent_r + obj_extent + 0.08
+            return agent_r + obj_extent + 0.15  # wider reach for better signal capture
         except Exception:
             return 0.35
 
@@ -820,10 +836,25 @@ class ThreeDWorld:
                 continue
         if best_idx >= 0:
             self._held_obj_id = best_idx
+            self._grasp_start_pos = (ax, ay)
 
     def _release(self) -> None:
         """Release the currently held object."""
+        if self._held_obj_id is None or self._model is None:
+            return
+        learner_id = self._model.body("learner").id
+        ax = float(self._data.xpos[learner_id, 0])
+        ay = float(self._data.xpos[learner_id, 1])
+        carry_dist = 0.0
+        if self._grasp_start_pos is not None:
+            carry_dist = ((ax - self._grasp_start_pos[0])**2 + (ay - self._grasp_start_pos[1])**2) ** 0.5
+        self._grasp_carry_events.append({
+            "obj_id": self._held_obj_id,
+            "carry_distance": carry_dist,
+        })
+        self._release_events.append({"obj_id": self._held_obj_id})
         self._held_obj_id = None
+        self._grasp_start_pos = None
 
     def _use_held_as_tool(self) -> None:
         """Use held object as a tool: apply extra force to objects in front."""
@@ -833,7 +864,6 @@ class ThreeDWorld:
             learner_id = self._model.body("learner").id
             ax = float(self._data.xpos[learner_id, 0])
             ay = float(self._data.xpos[learner_id, 1])
-            # Apply outward force from held object to nearby objects
             held_bid = self._model.body(f"obj_{self._held_obj_id}").id
             hx = float(self._data.xpos[held_bid, 0])
             hy = float(self._data.xpos[held_bid, 1])
@@ -846,13 +876,17 @@ class ThreeDWorld:
                     oy = float(self._data.xpos[bid, 1])
                     d = ((hx - ox)**2 + (hy - oy)**2) ** 0.5
                     if d < 0.25:
-                        # Push object away from held tool
                         dx_push = (ox - hx) / max(d, 0.01) * self._action_force * 0.5
                         dy_push = (oy - hy) / max(d, 0.01) * self._action_force * 0.5
                         dof = self._model.body_dofadr[bid]
                         if dof >= 0:
                             self._data.qvel[dof] += dx_push * self._model.opt.timestep
                             self._data.qvel[dof + 1] += dy_push * self._model.opt.timestep
+                        self._tool_use_events.append({
+                            "held_obj": self._held_obj_id,
+                            "affected_obj": i,
+                            "distance": d,
+                        })
                 except Exception:
                     continue
         except Exception:

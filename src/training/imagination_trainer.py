@@ -115,8 +115,21 @@ class ImaginationTrainer:
             if self._pending_optimizer_state is not None:
                 try:
                     self._optimizer.load_state_dict(self._pending_optimizer_state)
+                    for group in self._optimizer.param_groups:
+                        for p in group['params']:
+                            st = self._optimizer.state.get(p, {})
+                            for k, v in st.items():
+                                if isinstance(v, torch.Tensor) and v.shape != p.shape:
+                                    raise ValueError(
+                                        f"optimizer state shape mismatch: "
+                                        f"{k} {v.shape} vs param {p.shape}"
+                                    )
                 except (ValueError, RuntimeError) as exc:
-                    logger.warning("Could not restore imagination optimizer state: %s", exc)
+                    logger.warning("Imagination optimizer incompatible, starting fresh: %s", exc)
+                    self._optimizer = torch.optim.Adam(
+                        [p for p in actor_critic.parameters() if p.requires_grad],
+                        lr=cfg.lr,
+                    )
                 self._pending_optimizer_state = None
 
         bsz_orig = replay_sample["obs"].shape[0]

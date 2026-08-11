@@ -5,6 +5,85 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 18 · 1M 训练完成 + 评测缺陷修复 + 评测报告 (2026-08-11) 📋
+
+- Stage 18 训练 1M 步完成并封存 (`ckpt_stage18_001000000.pt`):
+  - 最终状态: rules=30, 因果图 36/512 边 (8,300 干预), skills 满 10,496,
+    coverage 100%, replay 672K/688K, EWC consolidated, 想象更新 2,445 次
+- 1M 全量评测 (watcher 自动触发): number_sense 0.325->0.600 **新通过** ✅
+  (头精度 76.7%->90%, MAE 1.633->0.7); object_permanence / ToM / systematic 未过
+- 50-ep 定基重测确认: number_sense 0.550 (20-ep 0.613 是小样本运气, 实际未过),
+  object_permanence 0.524 (真实差距 0.076, 非方差), systematic 0.374 (稳定)
+- **评测缺陷修复** (`src/eval/developmental_milestones.py` +
+  `scripts/eval/run_stage18_full_eval.py`):
+  1. systematic_reasoning 熵归一化错配: 硬编码 ln(8) 改为按实际动作空间 (12) -
+     修复前该里程碑被天花板锁死在 ~0.04, 修复后测出真实水平 **0.373**
+  2. `rule_count` 未接线: 评测从不传规则数 -> rule 项恒 0; 现从 ckpt
+     symbolic_state 传递 (30)
+  3. epsilon 0.3->0.1 + 分 curriculum task (0-4) 逐任务评测 -
+     object_permanence 0.339->0.533, ToM 0.281->0.443
+  - 新增 3 个回归测试 (带规则数可过 / 无规则数不过 / 12 动作均匀分布低分)
+- **Bug E: 反思维度不匹配** (`configs/stage16_neuro_symbolic.yaml` + `src/train.py`):
+  - 根因: `self_model_d_model: 384` 但 backbone `hidden_size: 128` ->
+    ReflectionLoop.end_episode 喂 128 维给 GRU(384) -> RuntimeError ->
+    被 `except: pass` 静默吞掉 -> 16,599 episodes 0 条反思 (count-only 空转)
+  - 附: SelfModel.auxiliary_loss 从未在 train.py 中调用 -> 权重随机初始化未训练
+  - 修复: config 384->128; 裸 except -> logger.warning (不再静默吞异常)
+- **前置 4/4 修复完成**:
+  3. SelfModel.auxiliary_loss 接线: 创建 self_model_optimizer + episode-end
+     训练块 (targets: confidence=成功/失败, familiarity=coverage_ratio,
+     progress=ep_ret vs running mean) -> SelfModel 权重不再随机
+  4. kanren 后端消费: episode-end query+feedback 循环 -> 每条规则 predict_action
+     被查询, 与实际动作比对, feedback(correct) 接入 learning-back 路径
+     -> queries > 0, accuracy 可测
+- 根因分析: task 3 独占训练 (99.95% 优先级) 导致稀疏场景 (task 0/1)
+  means_ends 崩至 0.05; kanren 后端 0 查询 / reflection 空转 / SelfModel 未训练 -
+  符号-元认知栈从未闭环; object_permanence 评测是"距离事件"非真遮挡
+- 报告: `docs/stage18_report.md` (500K vs 1M, 修复前后, 分 task 分解,
+  Bug E 根因, Stage 19 建议)
+
+### Stage 18 · 全量评测脚本 (2026-08-11) 📋
+
+- 新增 `scripts/eval/run_stage18_full_eval.py` — Stage 18 全量 3D 评测脚本:
+  - 与训练配置精确匹配: ThreeDWorld 8 物体 / 128 渲染 / 12 动作 / dev_age=0.5
+  - 从 ckpt 推断层数 (7 层), HierarchicalActorCritic 完整加载 (0 missing/0 unexpected)
+  - 评测项: 3D 发育里程碑 (est. age) / ToM 模块直测 / NumberSense 头 / 场景 slot 利用率 / 训练状态摘要
+  - `MUJOCO_GL=egl` 无头渲染
+- 500K 步全量评测结果:
+  - means_ends=1.0, intuitive_physics=1.0 (满分保留)
+  - object_permanence=0.444 (差 0.156 到阈值)
+  - ToM 行为指标 0.362, ToM 模块直测: 视角✅ 错误信念✅ 惊讶预测❌
+  - number_sense=0.325 (头精度 76.7%), systematic=0.042
+  - est. age=0.0y (object_permanence 未过阻塞年龄递增; 与之前 64x64 环境评测的 2.5y 虚高对比)
+  - 训练状态: rules=29, 因果 36 边, curiosity=1.0 drive=1.0 task=0.7567
+- 教训: 评测环境必须与训练精确匹配 (渲染尺寸/物体数/动作空间), 否则 est. age 虚高
+
+### Timeline 更新 · Stage 19-23 架构可行性评估 (2026-08-11) 📋
+
+- `docs/TIMELINE.md` 采用新 Stage 19-23 规划 (自我叙事->假设演绎->递归元认知->抽象概念->开放世界永续)
+- 完成架构可行性评估 (基于代码库实测):
+  - Stage 19 自我叙事 (10-12y): **当前架构可扩展** — IdentityNarrative + AutobiographicalMemory + InnerDialogue 已有雏形, 缺整合闭环
+  - Stage 20 假设-演绎 (12-13y): **当前架构可扩展** — HypothesisTester + ActiveExperimenter + kanren 已有雏形, 缺形式运算级闭环
+  - Stage 21 递归元认知 (13-14y): **需要新架构** — SelfModel 无法监控"思考过程"本身
+  - Stage 22 抽象概念 (14-15y): **需要新架构** — 缺概念层级结构
+  - Stage 23 开放世界永续 (15y+): **新架构整合** — extended_3d_world 已建未接入
+- 北极星鸿沟收敛: 10-12y 已从"未验证"降级为"可扩展", 13y+ 才是真正的架构分水岭
+
+### Timeline 更新 · Stage 19+ 机制展开 + 北极星差距分析 (2026-08-10) 📋
+
+- `docs/TIMELINE.md` 展开 Stage 19+ 为五个子阶段:
+  - 19A 自主目标设定 (内在动机驱动)
+  - 19B 深度语言扎根 (语言作为推理工具)
+  - 19C 抽象推理 (类比+反事实+多步逻辑链)
+  - 19D 跨领域迁移 (技能组合+零样本适应)
+  - 19E 持续自我进化 (记忆核心+架构扩展+无限稳定)
+- 新增 "北极星差距分析" 章节, 明确诚实评估:
+  - 已验证: 0 -> 3.5 岁路径可行 (感知/动作/物理/因果/符号/想象)
+  - 补上机制后预期: 8-10 岁认知水平
+  - 10-15 岁鸿沟: 需要形式运算/递归元认知/自我叙事, 未验证
+  - 6 个关键实验待跑: 5M-10M 步饱和测试 / 环境复杂度 / 自主目标 /
+    记忆整合 / 模块深度整合 / 永续稳定性
+
 ### Stage 15 · 3D 世界迁移 (2026-08-04 ~ 2026-08-05) ✅ 完成
 
 #### 核心成果：信息天花板突破

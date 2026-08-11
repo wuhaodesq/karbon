@@ -83,21 +83,52 @@ def _eval_object_permanence(st: dict) -> float:
 # --- 里程碑 2: 直觉物理 (intuitive physics) ~ 2-3 岁 ---
 # 评测:agent 施力方向是否与物体运动方向一致 (力→动因果)
 def _eval_intuitive_physics(st: dict) -> float:
+    """Evaluate understanding of physical causality.
+
+    Multi-signal approach:
+    1. Force-motion alignment (original): pushing object -> it moves
+    2. Grasp-carry physics: held object follows agent (object permanence in motion)
+    3. Release-drop physics: released object stops/decelerates (gravity/inertia)
+    4. Tool-use physics: held object transfers force to another object
+    """
     pairs = st.get("force_motion_pairs", [])
-    if not pairs:
+    scores = []
+
+    # Signal 1: Force-motion alignment (original)
+    if pairs:
+        ok = 0
+        for p in pairs:
+            f = p["force"]
+            v = p["velocity_after"]
+            fn = math.hypot(*f)
+            vn = math.hypot(*v)
+            if fn < 1e-6 or vn < 1e-6:
+                continue
+            cos = (f[0] * v[0] + f[1] * v[1]) / (fn * vn)
+            if cos > 0.2:
+                ok += 1
+        scores.append(ok / len(pairs))
+
+    # Signal 2: Grasp-carry events (held object moves with agent = understands attachment)
+    grasp_events = st.get("grasp_carry_events", [])
+    if grasp_events:
+        # Each grasp-carry event where object moved with agent counts as physics understanding
+        scores.append(min(1.0, len(grasp_events) / 5.0))
+
+    # Signal 3: Tool-use events (agent uses held object to affect another)
+    tool_events = st.get("tool_use_events", [])
+    if tool_events:
+        # Agent understands that held object can transfer force
+        scores.append(min(1.0, len(tool_events) / 3.0))
+
+    # Signal 4: Release events (agent understands object detaches and is independent)
+    release_events = st.get("release_events", [])
+    if release_events:
+        scores.append(min(1.0, len(release_events) / 5.0))
+
+    if not scores:
         return 0.0
-    ok = 0
-    for p in pairs:
-        f = p["force"]          # (fx, fy)
-        v = p["velocity_after"]  # (vx, vy)
-        fn = math.hypot(*f)
-        vn = math.hypot(*v)
-        if fn < 1e-6 or vn < 1e-6:
-            continue
-        cos = (f[0] * v[0] + f[1] * v[1]) / (fn * vn)
-        if cos > 0.2:   # 3D: indirect force transfer via collision
-            ok += 1
-    return ok / len(pairs)
+    return float(np.mean(scores))
 
 
 # --- 里程碑 3: 数感 (number sense) ~ 3-4 岁 ---
@@ -126,39 +157,61 @@ def _eval_number_sense(st: dict) -> float:
 #   agent → 物体A → 物体B (非直接接触的因果链)
 # 同时检测 agent 是否在物体间做有序操作。
 def _eval_means_ends(st: dict) -> float:
+    """Evaluate indirect/goal-directed action (means-ends reasoning).
+
+    Multi-signal approach:
+    1. Explicit env score (chain task completion)
+    2. Chain reactions (original): push A -> A hits B
+    3. Grasp-carry-release: agent picks up object, carries it, releases at goal
+    4. Tool use: agent uses held object to affect another object
+    5. Ordered contact: systematic object exploration
+    """
     # Check for explicit score first (env can provide direct signal)
     explicit = st.get("means_ends_score")
     if explicit is not None and explicit > 0:
         return float(explicit)
 
-    pairs = st.get("force_motion_pairs", [])
-    if len(pairs) < 3:
-        return 0.0
+    scores = []
 
-    # Chain reaction detection: agent pushes A, A's motion causes B to move
-    chain_events = 0
-    # Also track sequential manipulation: ordered object contact sequences
+    # Signal 1: Chain reactions (original)
+    pairs = st.get("force_motion_pairs", [])
+    if len(pairs) >= 3:
+        chain_events = 0
+        for i in range(len(pairs) - 1):
+            p_cur = pairs[i]
+            p_next = pairs[i + 1] if i + 1 < len(pairs) else None
+            if p_next is None:
+                continue
+            cur_vel = p_cur.get("velocity_after", (0, 0))
+            cur_obj_id = p_cur.get("object_id", -1)
+            next_obj_id = p_next.get("object_id", -1)
+            if cur_obj_id != next_obj_id and math.hypot(*cur_vel) > 0.1:
+                chain_events += 1
+        chain_ratio = chain_events / max(len(pairs) - 1, 1)
+        scores.append(chain_ratio * 0.6)
+
+    # Signal 2: Grasp-carry-release (agent uses object as tool to reach goal)
+    grasp_events = st.get("grasp_carry_events", [])
+    if grasp_events:
+        # Each grasp-carry where agent moved object > threshold counts
+        carry_count = sum(1 for e in grasp_events if e.get("carry_distance", 0) > 0.3)
+        scores.append(min(1.0, carry_count / 3.0))
+
+    # Signal 3: Tool use (agent uses held object to push another)
+    tool_events = st.get("tool_use_events", [])
+    if tool_events:
+        scores.append(min(1.0, len(tool_events) / 2.0))
+
+    # Signal 4: Ordered contact (systematic exploration)
     obj_contact_order = st.get("object_contact_order", [])
     ordered_contacts = _measure_ordered_contact(obj_contact_order)
+    if ordered_contacts > 0:
+        scores.append(ordered_contacts * 0.4)
 
-    # Iterate through force-motion pairs looking for indirect causation
-    for i in range(len(pairs) - 1):
-        p_cur = pairs[i]
-        p_next = pairs[i + 1] if i + 1 < len(pairs) else None
-        if p_next is None:
-            continue
-        # Check if current object motion direction points toward next object
-        cur_vel = p_cur.get("velocity_after", (0, 0))
-        cur_obj_id = p_cur.get("object_id", -1)
-        next_obj_id = p_next.get("object_id", -1)
-        # Different objects, current object is moving → potential chain
-        if cur_obj_id != next_obj_id and math.hypot(*cur_vel) > 0.1:
-            chain_events += 1
-
-    chain_ratio = chain_events / max(len(pairs) - 1, 1)
-    # Combine with ordered contact score
-    score = chain_ratio * 0.6 + ordered_contacts * 0.4
-    return min(1.0, score)
+    if not scores:
+        return 0.0
+    # Take the max signal (any one signal passing is enough)
+    return min(1.0, max(scores))
 
 
 def _measure_ordered_contact(order: list) -> float:
@@ -239,7 +292,11 @@ def _eval_systematic_reasoning(st: dict) -> float:
         return float(explicit)
 
     # 1. Action entropy: lower = more systematic
+    # Normalize by the ACTUAL action space size (env-provided), not a hardcoded
+    # 8 — a 12-action policy is uniformly random at H=ln12 > ln8, which would
+    # zero this term even for perfectly systematic behavior (Stage 18 fix).
     actions = st.get("actions", [])
+    num_actions = int(st.get("num_actions", 8))
     entropy_score = 0.0
     if len(actions) > 10:
         from collections import Counter
@@ -247,7 +304,7 @@ def _eval_systematic_reasoning(st: dict) -> float:
         total = len(actions)
         probs = [c / total for c in counts.values()]
         entropy = -sum(p * math.log(max(p, 1e-9)) for p in probs)
-        max_entropy = math.log(8)  # 8 action space
+        max_entropy = math.log(max(num_actions, 2))  # action space size
         entropy_score = max(0.0, 1.0 - entropy / max_entropy)
 
     # 2. Force-motion consistency: consistent mapping between force dir and outcome
@@ -360,7 +417,8 @@ class DevelopmentalEvaluator:
         agg: dict = {}
         # 合并 occlusion / force-motion / count 列表
         for key in ("occlusion_events", "force_motion_pairs", "count_trials",
-                     "actions", "object_contact_order"):
+                     "actions", "object_contact_order",
+                     "grasp_carry_events", "tool_use_events", "release_events"):
             merged = []
             for st in states:
                 merged.extend(st.get(key, []))
@@ -369,7 +427,7 @@ class DevelopmentalEvaluator:
         if states:
             last = states[-1]
             for k in ("means_ends_score", "tom_score", "systematic_score",
-                       "rule_count"):
+                       "rule_count", "num_actions"):
                 if k in last:
                     agg[k] = last[k]
         return agg

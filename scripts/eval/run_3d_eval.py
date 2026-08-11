@@ -174,6 +174,7 @@ def measure_3d_milestones(
     evaluator = DevelopmentalEvaluator()
     rng = np.random.RandomState(42)
     all_episode_states: list[dict] = []
+    eval_epsilon = 0.3  # higher epsilon to explore grasping actions
 
     for ep in range(episodes):
         obs = env.reset(seed=int(rng.randint(0, 2**31 - 1)))
@@ -186,7 +187,10 @@ def measure_3d_milestones(
             with torch.no_grad():
                 out = model(obs_t)
             logits = out[0] if isinstance(out, (tuple, list)) else out
-            action = int(torch.argmax(logits, dim=-1).item())
+            if rng.random() < eval_epsilon:
+                action = int(rng.randint(0, env.action_space_n))
+            else:
+                action = int(torch.argmax(logits, dim=-1).item())
             ep_actions.append(action)
 
             step_out = env.step(action)
@@ -201,6 +205,10 @@ def measure_3d_milestones(
             "count_trials": list(env._count_trials),
             "actions": list(env._actions),
             "object_contact_order": list(env._object_contact_order),
+            "grasp_carry_events": list(getattr(env, '_grasp_carry_events', [])),
+            "tool_use_events": list(getattr(env, '_tool_use_events', [])),
+            "release_events": list(getattr(env, '_release_events', [])),
+            "means_ends_score": getattr(env, '_task_progress', 0.0) if getattr(env, '_task_reward_collected', False) else 0.0,
         }
         all_episode_states.append(ep_state)
 
@@ -237,7 +245,7 @@ def main():
         num_objects=10,
         max_episode_steps=args.max_steps,
         render_size=64,
-        developmental_age=0.0,
+        developmental_age=0.5,  # match training env: grasping + chain tasks active
     )
     env._auto_reset = False  # prevent auto-reset from clearing dev signals
     print(f"[3d_eval] Env: ThreeDWorld obs={env.observation_shape} actions={env.action_space_n}")

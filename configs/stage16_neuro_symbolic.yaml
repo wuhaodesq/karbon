@@ -10,8 +10,8 @@
 # 2. 想象训练是否提升样本效率 (vs 纯真实数据)
 # 3. 因果图是否指导想象 (想象中遵循物理因果)
 
-stage: 16
-name: "stage16_neuro_symbolic"
+stage: 18
+name: "stage18_compositional"
 
 model:
   hidden_size: 128
@@ -37,7 +37,7 @@ env:
   max_episode_steps: 300
   render_size: 128
   action_force: 50.0
-  developmental_age: 0.0              # start from infant, grow with training
+  developmental_age: 0.5              # toddler: grasping + obstacle + key-door all active
   num_envs: 1
 
 # --- LLM Fusion (disabled) ---
@@ -58,8 +58,9 @@ cognitive:
   symbolic_max_rules: 64
   symbolic_bias_weight: 0.5
   self_model_enabled: true
-  self_model_d_model: 384
+  self_model_d_model: 128              # must match model.hidden_size (was 384 -> dim mismatch silently killed reflection all stage)
   self_model_hidden: 64
+  self_model_lr: 1.0e-4
   logic_engine_enabled: true
   logic_max_rules: 64
   logic_max_variables: 16
@@ -68,14 +69,14 @@ cognitive:
   reflection_every_episodes: 200
 
 theory_of_mind:
-  enabled: false
+  enabled: true               # Stage 18: activate ToM for 4.0y milestone
 
 creativity:
   enabled: true
-  trigger_every_steps: 20000
+  trigger_every_steps: 10000   # Stage 18: more frequent creativity (was 20000)
   divergent_generator_enabled: true
   transformational_enabled: true
-  transformational_max: 32
+  transformational_max: 64     # Stage 18: double capacity (was 32)
 
 # --- Stage 16: Symbol Backend (kanren) ---
 symbol_backend:

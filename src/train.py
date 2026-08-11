@@ -1162,6 +1162,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # --- Stage 7+: Cognitive modules (SelfModel, NeuralSymbolic, LogicEngine, etc.) ---
     cognitive_cfg = config.get("cognitive")
     self_model: Any = None
+    self_model_optimizer: torch.optim.Optimizer | None = None
     symbolic_layer: Any = None
     logic_engine: Any = None
     reflection_loop: Any = None
@@ -1173,11 +1174,16 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         if bool(cognitive_cfg.get("self_model_enabled", False)):
             from src.models.metacognition import SelfModel
             self_model = SelfModel(
-                d_model=int(cognitive_cfg.get("self_model_d_model", 384)),
+                d_model=int(cognitive_cfg.get("self_model_d_model", 128)),
                 hidden=int(cognitive_cfg.get("self_model_hidden", 64)),
                 temporal=True,
             ).to(device)
-            logger.info("SelfModel enabled (metacognition)")
+            self_model_optimizer = torch.optim.Adam(
+                self_model.parameters(),
+                lr=float(cognitive_cfg.get("self_model_lr", 1e-4)),
+            )
+            logger.info("SelfModel enabled (metacognition, d_model=%d)",
+                        int(cognitive_cfg.get("self_model_d_model", 128)))
 
         # NeuralSymbolicLayer (rule extraction + override)
         if bool(cognitive_cfg.get("symbolic_enabled", False)):
@@ -1922,7 +1928,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             ("rnd_state",                rnd,                          None),
             ("coverage_state",           coverage,                     None),
             ("wm_state",                 wm,                           None),
-            ("wm_optim_state",           wm_optimizer,                 None),
+            # Skip wm_optim_state restore: WM may be reset for new action_dim
             # Skip curriculum restore on cross-stage: new stage has different env/tasks
             ("curriculum_state",         None if _is_cross_stage else curriculum, None),
             ("ewc_state",                ewc,                          None),
@@ -2566,7 +2572,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 # VRAM snapshot (cuda only) — folds memory into the PROF line so
                 # the A#11 Stage-6 memory/throughput measurement is one glance.
                 _vram_gb = 0.0
-                if is_cuda():
+                if device.type == 'cuda':
                     _vram_gb = torch.cuda.memory_allocated(device) / (1024.0 ** 3)
                 logger.info(
                     "PROF per_step=%.1fms env=%.1f(%.0f%%) model=%.1f(%.0f%%) cog=%.1f(%.0f%%) buf=%.1f(%.0f%%) other=%.1f(%.0f%%) vram=%.2fGB",
@@ -2690,6 +2696,27 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     except Exception as _e:
                         logger.warning("[symbolic] rule extraction failed (ep_ret=%.1f): %s", ep_ret, str(_e))
 
+                # --- Symbol backend: query + feedback (close the loop) ---
+                if symbol_backend is not None and symbol_backend._rule_count > 0:
+                    try:
+                        actual_actions = set(rollout_actions) if rollout_actions else set()
+                        for rule in symbol_backend._rules_db:
+                            if rule["then"][0] != "action":
+                                continue
+                            result = symbol_backend.predict_action(rule["if"])
+                            if result.answers:
+                                predicted = result.answers[0][1][0] if len(result.answers[0][1]) > 0 else -1
+                                correct = predicted in actual_actions
+                                symbol_backend.feedback(
+                                    len(symbol_backend._inference_buffer) - 1, correct)
+                        if symbol_backend._total_queries % 1000 < len(symbol_backend._rules_db):
+                            logger.info("[symbol] queries=%d correct=%d acc=%.3f",
+                                        symbol_backend._total_queries,
+                                        symbol_backend._correct_predictions,
+                                        symbol_backend._correct_predictions / max(1, symbol_backend._total_queries))
+                    except Exception as _se:
+                        logger.warning("[symbol] query failed: %s", _se)
+
                 # --- Stage 7: reflection after episode ---
                 if reflection_loop is not None:
                     try:
@@ -2697,7 +2724,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         if rollout_trajectory:
                             for i, t_step in enumerate(rollout_trajectory[-32:]):
                                 idx = max(0, len(rollout_hidden_states) - 32 + i) if rollout_hidden_states else 0
-                                h = rollout_hidden_states[min(idx, len(rollout_hidden_states) - 1)] if rollout_hidden_states else torch.randn(384)
+                                h = rollout_hidden_states[min(idx, len(rollout_hidden_states) - 1)] if rollout_hidden_states else torch.randn(128)
                                 if i < len(rollout_hidden_states):
                                     h = rollout_hidden_states[max(0, len(rollout_hidden_states) - 32 + i)]
                                 reflection_loop.record_step(
@@ -2724,8 +2751,30 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                         logger.info("[llm_refl] %s", lesson)
                                 except Exception:
                                     pass
-                    except Exception:
-                        pass
+                    except Exception as _re:
+                        logger.warning("[reflection] end_episode failed: %s", _re)
+
+                # --- SelfModel auxiliary training (episode end) ---
+                if (self_model is not None and self_model_optimizer is not None
+                        and len(rollout_hidden_states) > 0):
+                    try:
+                        hiddens = torch.stack([
+                            h.reshape(-1) if isinstance(h, torch.Tensor) else torch.zeros(128)
+                            for h in rollout_hidden_states[-32:]
+                        ]).to(device)
+                        cov_ratio = coverage.coverage_ratio() if coverage is not None else 0.5
+                        _n = hiddens.shape[0]
+                        targets = {
+                            "confidence": torch.full((_n, 1), 1.0 if ep_ret > 0 else 0.3, device=device),
+                            "familiarity": torch.full((_n, 1), cov_ratio, device=device),
+                            "progress": torch.full((_n, 1), 1.0 if ep_ret > last_curr_mean_ret else 0.0, device=device),
+                        }
+                        sm_loss = self_model.auxiliary_loss(hiddens, targets)
+                        self_model_optimizer.zero_grad()
+                        sm_loss.backward()
+                        self_model_optimizer.step()
+                    except Exception as _sme:
+                        logger.warning("[self_model] auxiliary training failed: %s", _sme)
 
                 # Clear per-episode trajectory buffers
                 rollout_hidden_states.clear()
@@ -3134,7 +3183,7 @@ and state.step % 50000 < rollout_capacity):
             and replay is not None
             and len(replay) >= replay_min_size
             and wm_update_every > 0
-            and state.step % wm_update_every < rollout_capacity
+            and state.step % wm_update_every == 0
         ):
             try:
                 wm_seq_len = wm.config.max_rollout_steps
@@ -3170,7 +3219,7 @@ and state.step % 50000 < rollout_capacity):
                     ),
                 }
             except (ValueError, IndexError, RuntimeError) as exc:
-                logger.debug("world model update skipped: %s", exc)
+                logger.info("world model update skipped: %s", exc)
 
         # --- Phase 1+: Dreamer-style imagination training ---
         if (
