@@ -61,8 +61,9 @@ class _FakeSymbolBackend:
         action = if_preds[0][1][0]
         for rule in self._rules_db:
             if rule["if"][0][1][0] == action:
+                # Real SymbolBackend.predict_action returns ("action", int)
                 return type("R", (), {
-                    "answers": [("action", rule["then"][1])],
+                    "answers": [("action", rule["then"][1][0])],
                     "confidence": rule["confidence"],
                 })()
         return type("R", (), {"answers": [], "confidence": 0.0})()

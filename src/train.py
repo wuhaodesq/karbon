@@ -2745,7 +2745,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                 continue
                             result = symbol_backend.predict_action(rule["if"])
                             if result.answers:
-                                predicted = result.answers[0][1][0] if len(result.answers[0][1]) > 0 else -1
+                                # predict_action answers are ("action", int)
+                                predicted = result.answers[0][1]
                                 correct = predicted in actual_actions
                                 symbol_backend.feedback(
                                     len(symbol_backend._inference_buffer) - 1, correct)

@@ -205,8 +205,9 @@ class NarrativeLoopController(nn.Module):
                     continue
                 result = self.symbol_backend.predict_action(rule["if"])
                 if result.answers:
-                    a = result.answers[0][1][0] if len(result.answers[0][1]) > 0 else -1
-                    if a >= 0 and result.confidence > best_conf:
+                    # predict_action answers are ("action", int)
+                    a = result.answers[0][1]
+                    if isinstance(a, int) and a >= 0 and result.confidence > best_conf:
                         best_action = a
                         best_conf = result.confidence
             if best_action >= 0:
