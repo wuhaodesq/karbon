@@ -362,6 +362,27 @@ class IdentityNarrative(nn.Module):
             "event_count": len(life_events),
         }
 
+    def trait_auxiliary_loss(
+        self,
+        hidden_states: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> torch.Tensor:
+        """Train the trait projector from behavioral statistics.
+
+        Args:
+            hidden_states: (B, d_model) recent hidden states (CPU/GPU).
+            targets: (B, 5) Big Five targets in [0, 1], derived from
+                episode behavior (exploration rate, success rate, etc).
+
+        Returns:
+            MSE loss on the sigmoid output of trait_projector.
+        """
+        if hidden_states is None or hidden_states.shape[0] == 0:
+            return torch.tensor(0.0, dtype=torch.float32)
+        pred = torch.sigmoid(self.trait_projector(hidden_states))  # (B, 5)
+        t = targets.to(pred.dtype).to(pred.device)
+        return torch.nn.functional.mse_loss(pred, t)
+
     def summary(self) -> str:
         return "IdentityNarrative: reads AutobiographicalMemory, outputs Big Five + narrative."
 

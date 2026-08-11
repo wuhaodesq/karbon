@@ -195,6 +195,12 @@ class HierarchicalActorCritic(nn.Module):
         self.num_actions = num_actions
         self.obs_shape = tuple(obs_shape)
 
+        # Stage 19: symbol-bias callback (set by train.py after the
+        # NarrativeLoopController is created). Returns a (num_actions,)
+        # logit bias tensor or None. Keeps the model decoupled from the
+        # narrative module (no circular import, no ckpt pollution).
+        self._symbol_bias_fn: "Any | None" = None
+
         # Encoder (reuse the same encoder variants as HybridActorCritic)
         self.use_slots = use_slot_attention
         self.use_vision = use_vision_encoder
@@ -305,6 +311,16 @@ class HierarchicalActorCritic(nn.Module):
 
         action_logits, worker_value = self.worker(h, sg)
 
+        # Stage 19: apply kanren symbol bias (detached, no grad)
+        if self._symbol_bias_fn is not None:
+            try:
+                _bias = self._symbol_bias_fn()
+                if _bias is not None:
+                    action_logits = action_logits + _bias.to(action_logits.device)
+            except Exception as _sb:
+                # Never let a broken bias hook break the forward pass
+                pass
+
         if return_hidden:
             return action_logits, worker_value, h
         return action_logits, worker_value
@@ -315,6 +331,10 @@ class HierarchicalActorCritic(nn.Module):
         if self._last_manager_value is None:
             return torch.zeros(1, device=self._cached_sub_goal.device)
         return self._last_manager_value.detach()
+
+    def set_symbol_bias_fn(self, fn: "Any | None") -> None:
+        """Attach the Stage 19 symbol-bias callback (from train.py)."""
+        self._symbol_bias_fn = fn
 
     @property
     def current_sub_goal(self) -> torch.Tensor:

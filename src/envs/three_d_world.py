@@ -160,6 +160,7 @@ class SceneBuilder:
         self._camera_fovy = camera_fovy
         self._objects: list[dict] = []
         self._agents: list[dict] = []
+        self._occluders: list[dict] = []
         self._sun_angle: float = 0.0  # radians
 
     def add_agent(
@@ -182,6 +183,21 @@ class SceneBuilder:
         self._objects.append({
             "def": obj,
             "pos": position,
+        })
+
+    def add_occluder(
+        self,
+        position: tuple[float, float, float],
+        size: tuple[float, float, float] = (0.5, 0.05, 0.6),
+    ) -> None:
+        """Add a static wall that can occlude objects from the agent's view.
+
+        Kinematic (no joint), does not participate in dynamics — it only
+        blocks the line of sight for the true occlusion probe.
+        """
+        self._occluders.append({
+            "pos": position,
+            "size": size,
         })
 
     def set_sun_angle(self, radians: float) -> None:
@@ -263,6 +279,15 @@ class SceneBuilder:
 
     <!-- Spread objects on floor, table, shelf -->
 """
+        # Occluder walls (static, block line of sight for occlusion probe)
+        for oi, occ in enumerate(self._occluders):
+            sx, sy, sz = occ["size"]
+            px, py, pz = occ["pos"]
+            xml += (f'    <body name="occluder_{oi}" pos="{px} {py} {pz}">\n'
+                    f'      <geom type="box" size="{sx} {sy} {sz}" pos="0 0 0" '
+                    f'rgba="0.3 0.3 0.35 1.0" mass="0"/>\n'
+                    f'    </body>\n')
+
         # Place objects — each wrapped in its own body for physics tracking
         for i, obj_data in enumerate(self._objects):
             obj = obj_data["def"]
@@ -363,6 +388,7 @@ class ThreeDWorld:
         developmental_age: float = 0.0,  # 0=infant, 1=child
         camera_pos: tuple[float, float, float] = (0.0, -1.0, 0.8),
         camera_fovy: float = 60.0,
+        num_occluders: int = 0,  # Stage 19: true occlusion probe walls
     ) -> None:
         if not _mj_available:
             raise ImportError("mujoco is required for ThreeDWorld. Run: pip install mujoco")
@@ -375,6 +401,7 @@ class ThreeDWorld:
         self._dev_age = developmental_age
         self._camera_pos = camera_pos
         self._camera_fovy = camera_fovy
+        self._num_occluders = int(num_occluders)
         self._rng = np.random.RandomState(seed)
 
         # Object library
@@ -607,6 +634,16 @@ class ThreeDWorld:
         """Build MuJoCo scene from scratch."""
         builder = SceneBuilder(camera_pos=self._camera_pos, camera_fovy=self._camera_fovy)
 
+        # Occluder walls: place them between the center and random ring
+        # positions so they can actually block line of sight (Stage 19).
+        for _oi in range(self._num_occluders):
+            ang = self._rng.uniform(0.0, 2 * np.pi)
+            rad = self._rng.uniform(0.6, 1.4)
+            builder.add_occluder(
+                position=(float(rad * np.cos(ang)), float(rad * np.sin(ang)), 0.35),
+                size=(0.55, 0.05, 0.6),
+            )
+
         # Agent size grows with developmental age
         agent_size = 0.12 + self._dev_age * 0.08  # 0.12 (infant) → 0.20 (child)
         self._agent_size = agent_size
@@ -758,17 +795,22 @@ class ThreeDWorld:
                 ox = float(self._data.xpos[body_id, 0])
                 oy = float(self._data.xpos[body_id, 1])
                 dist = ((ax - ox)**2 + (ay - oy)**2) ** 0.5
-                if dist > 0.8:  # object is not immediately reachable
+                # True occlusion: line of sight blocked by an occluder wall.
+                # Falls back to distance-only (>0.8) when no occluders exist
+                # (backward compatible with pre-Stage-19 behavior).
+                truly_occluded = self._line_of_sight_blocked(ax, ay, ox, oy)
+                if (truly_occluded or self._num_occluders == 0) and dist > 0.8:
                     # Track per-object trajectory over multiple steps
                     key = f"occ_{i}"
                     if key not in self._active_occlusions_3d:
                         self._active_occlusions_3d[key] = {
                             "last_known": (ox, oy),
                             "agent_traj_during_occ": [],
+                            "truly_occluded": bool(truly_occluded),
                         }
                     self._active_occlusions_3d[key]["agent_traj_during_occ"].append((ax, ay))
                 else:
-                    # Object became reachable — finalize and emit event
+                    # Object became reachable (or visible) — finalize and emit event
                     key = f"occ_{i}"
                     if key in self._active_occlusions_3d:
                         ev = self._active_occlusions_3d.pop(key)
@@ -791,6 +833,58 @@ class ThreeDWorld:
                     self._object_contact_order.append(i)
             except Exception:
                 continue
+
+    def _line_of_sight_blocked(
+        self, ax: float, ay: float, ox: float, oy: float,
+    ) -> bool:
+        """True if the 2D segment (agent -> object) crosses an occluder wall.
+
+        Occluders are modeled as thin vertical boxes (extent in x, thin in
+        y, tall in z). For the line-of-sight check we use the segment-AABB
+        intersection in the x-y plane (2D), which is sufficient since all
+        occluders sit on the floor and the objects are at similar heights.
+        """
+        if self._model is None or self._data is None or self._num_occluders == 0:
+            return False
+        for oi in range(self._num_occluders):
+            try:
+                body_id = self._model.body(f"occluder_{oi}").id
+                cx = float(self._data.xpos[body_id, 0])
+                cy = float(self._data.xpos[body_id, 1])
+            except Exception:
+                continue
+            # Occluder half-extents (matches SceneBuilder default 0.55 x 0.025)
+            hx, hy = 0.55, 0.025
+            if self._segment_hits_aabb(ax, ay, ox, oy, cx, cy, hx, hy):
+                return True
+        return False
+
+    @staticmethod
+    def _segment_hits_aabb(
+        ax: float, ay: float, bx: float, by: float,
+        cx: float, cy: float, hx: float, hy: float,
+    ) -> bool:
+        """Segment (A->B) vs AABB (center C, half-extents hx,hy) in 2D."""
+        # Clip segment to the AABB using the slab method
+        dx, dy = bx - ax, by - ay
+        # AABB bounds
+        x0, x1 = cx - hx, cx + hx
+        y0, y1 = cy - hy, cy + hy
+        t0, t1 = 0.0, 1.0
+        for p, d, lo, hi in ((ax, dx, x0, x1), (ay, dy, y0, y1)):
+            if abs(d) < 1e-9:
+                if p < lo or p > hi:
+                    return False
+            else:
+                t_lo = (lo - p) / d
+                t_hi = (hi - p) / d
+                if t_lo > t_hi:
+                    t_lo, t_hi = t_hi, t_lo
+                t0 = max(t0, t_lo)
+                t1 = min(t1, t_hi)
+                if t0 > t1:
+                    return False
+        return True
 
     def _contact_reach(self, obj_idx: int) -> float:
         """Geometry-based contact detection radius.

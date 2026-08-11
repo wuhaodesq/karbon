@@ -99,6 +99,7 @@ from src.models.abstract_reasoning import MicroPrologMath, IdentityNarrative
 from src.models.tier2_cognitive import Analogizer, BeliefDepth2, MoralConnector, SurpriseHumor
 from src.models.neuro_symbolic_bridge import Causal2Prolog, Number2Math, SchemaDetector
 from src.models.symbol_backend import SymbolBackend
+from src.models.narrative_loop import NarrativeLoopController
 from src.models.program_synthesis import ProgramSynthesizer, ActiveExperimenter, TemporalAbstractor
 from src.models.counterfactual_planner import CounterfactualPlanner
 from src.models.marginal_gains import CompositionalTester, LearningProgressTracker
@@ -1254,6 +1255,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     divergent_gen: Any = None
     transformational: Any = None
     thought_action: Any = None
+    narrative_loop: NarrativeLoopController | None = None
+    narrative_trait_optimizer: torch.optim.Optimizer | None = None
     model_grower: Any = None
     language_encoder: Any = None
     language_generator: Any = None
@@ -1696,6 +1699,33 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         logger.info("SymbolBackend: kanren=%s facts=%d rules=%d",
                     symbol_backend.available, symbol_backend.max_facts, symbol_backend.max_rules)
 
+    # --- Stage 19: Narrative Loop Controller (memory->narrative->policy) ---
+    narrative_cfg = config.get("narrative")
+    if (narrative_cfg and bool(narrative_cfg.get("enabled", False))
+            and memory_manager is not None and symbol_backend is not None):
+        narrative_loop = NarrativeLoopController(
+            d_model=int(model_cfg.get("hidden_size", 128)),
+            num_actions=env.action_space_n if hasattr(env, "action_space_n") else 12,
+            autobiographical=memory_manager.autobiographical,
+            identity_narrative=identity_narrative,
+            symbol_backend=symbol_backend,
+            thought_loop=thought_action if thought_action is not None else None,
+            narrative_every_episodes=int(narrative_cfg.get("narrative_every_episodes", 10)),
+            symbol_bias_weight=float(narrative_cfg.get("symbol_bias_weight", 0.1)),
+        )
+        narrative_loop.to(device)
+        # Wire the symbol-bias callback into the policy (detached logit bias)
+        if hasattr(model, "set_symbol_bias_fn"):
+            model.set_symbol_bias_fn(narrative_loop.get_symbol_bias)
+        if bool(narrative_cfg.get("trait_learning_enabled", True)) and identity_narrative is not None:
+            narrative_trait_optimizer = torch.optim.Adam(
+                identity_narrative.trait_projector.parameters(),
+                lr=float(narrative_cfg.get("trait_lr", 1e-4)),
+            )
+        health.register("narrative_loop", narrative_loop)
+        logger.info("NarrativeLoopController enabled (every %d episodes, symbol_bias=%.2f)",
+                    narrative_loop._every, narrative_loop._symbol_bias_weight)
+
     # --- Program Synthesis + Active Experimentation + Temporal Abstraction ---
     synth_cfg = config.get("program_synthesis")
     program_synth: ProgramSynthesizer | None = None
@@ -1958,6 +1988,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             ("symbol_backend_state",     symbol_backend,                None),
             ("self_model_state",         self_model,                   None),
             ("logic_engine_state",       logic_engine,                 None),
+            ("narrative_loop_state",     narrative_loop,               None),
         ]
         for key, module, _opt in _restore_map:
             if module is not None and key in _extra:
@@ -2202,6 +2233,15 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 action = dist.sample()              # (N,)
                 logprob = dist.log_prob(action)     # (N,)
             t_model_end = time.perf_counter()
+
+            # --- Stage 19: narrative step hook (FiLM thought, no grad) ---
+            if narrative_loop is not None and n_envs == 1:
+                try:
+                    narrative_loop.step_hook(
+                        hidden.squeeze(0).detach() if hidden.dim() == 2 else hidden.detach(),
+                    )
+                except Exception as _nsh:
+                    logger.warning("[narrative] step_hook failed: %s", _nsh)
 
             # --- Phase 0: collect slot output for number sense + rule predicates
             # (single-env only; per-env predicate buffers are not maintained for vec) ---
@@ -2775,6 +2815,49 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         self_model_optimizer.step()
                     except Exception as _sme:
                         logger.warning("[self_model] auxiliary training failed: %s", _sme)
+
+                # --- Stage 19: narrative loop (memory -> narrative -> bias) ---
+                if narrative_loop is not None:
+                    try:
+                        task_tag = curr_active_task.tag if curr_active_task else "sandbox"
+                        description = (f"Completed {task_tag}: return={ep_ret:.2f}"
+                                       if ep_ret > 0.5 else f"Explored {task_tag}")
+                        lesson = (f"Learned to navigate {task_tag}" if ep_ret > 0.7
+                                  else f"Explored {task_tag}")
+                        narrative_loop.episode_end_hook(
+                            step=state.step,
+                            ep_ret=float(ep_ret),
+                            ep_id=int(env.summary().get("episodes", 0)),
+                            description=description,
+                            lesson=lesson,
+                        )
+                    except Exception as _nl:
+                        logger.warning("[narrative] episode_end_hook failed: %s", _nl)
+
+                # --- Stage 19: trait projector auxiliary training ---
+                if (narrative_trait_optimizer is not None and identity_narrative is not None
+                        and narrative_loop is not None and len(rollout_hidden_states) > 0):
+                    try:
+                        hiddens = torch.stack([
+                            h.reshape(-1) if isinstance(h, torch.Tensor) else torch.zeros(128)
+                            for h in rollout_hidden_states[-32:]
+                        ]).to(device)
+                        _n = hiddens.shape[0]
+                        # Behavioral targets: exploration rate (openness),
+                        # success rate (conscientiousness), progress (extraversion)
+                        openness_t = 1.0 if len(rollout_actions) > 8 else 0.3
+                        consc_t = 1.0 if ep_ret > 0.3 else 0.2
+                        extra_t = 1.0 if ep_ret > last_curr_mean_ret else 0.3
+                        targets = torch.tensor(
+                            [[openness_t, consc_t, extra_t, 0.5, 0.5]] * _n,
+                            dtype=torch.float32, device=device,
+                        )
+                        t_loss = identity_narrative.trait_auxiliary_loss(hiddens, targets)
+                        narrative_trait_optimizer.zero_grad()
+                        t_loss.backward()
+                        narrative_trait_optimizer.step()
+                    except Exception as _tl:
+                        logger.warning("[narrative] trait training failed: %s", _tl)
 
                 # Clear per-episode trajectory buffers
                 rollout_hidden_states.clear()
@@ -3743,6 +3826,8 @@ and state.step % 50000 < rollout_capacity):
                 extra["symbol_backend_state"] = symbol_backend.state_dict()
             if self_model is not None:
                 extra["self_model_state"] = self_model.state_dict()
+            if narrative_loop is not None:
+                extra["narrative_loop_state"] = narrative_loop.state_dict()
             if logic_engine is not None:
                 extra["logic_engine_state"] = logic_engine.state_dict()
             if reflection_loop is not None:

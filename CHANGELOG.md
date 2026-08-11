@@ -5,6 +5,28 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 19 · 自我叙事引擎 设计 + 核心实现 (2026-08-11) 📋
+
+- 设计文档: `docs/stage19_design.md` — 记忆->叙事->策略调制闭环
+- 新模块: `src/models/narrative_loop.py` — NarrativeLoopController:
+  - episode_end_hook: 自传记忆存储 + 周期身份叙事 + kanren symbol bias 刷新
+  - step_hook: 委托 ThoughtActionLoop (FiLM 调制, 可选)
+  - get_symbol_bias: 由 kanren 最高置信规则推导 (num_actions,) logit 偏置
+  - 有界: 单叙事字符串 + 5 维 trait + (num_actions,) 张量
+- `hierarchical_policy.py`: `set_symbol_bias_fn` 回调 + forward 中注入
+  detached logit bias (模型与叙事模块解耦)
+- `abstract_reasoning.py`: IdentityNarrative 新增 `trait_auxiliary_loss`
+  (启用未用的 trait_projector, 用行为统计做监督)
+- `three_d_world.py`: 新增 occluder 遮挡墙 (num_occluders) + 真遮挡
+  线段-AABB 检测 (`_line_of_sight_blocked`) — object_permanence 从
+  "距离事件" 变为 "真遮挡事件"
+- `train.py`: 接入 NarrativeLoopController (创建/回调/hook/训练/状态),
+  trait projector 优化器 + episode-end 训练
+- 配置: `configs/stage19_self_narrative.yaml` (narrative 段 + num_occluders=2
+  + curriculum 20K 加速轮转)
+- 测试: `tests/test_narrative_loop.py` 7 例 (事件存储/周期叙事/symbol bias/
+  step hook/有界/降级/状态往返)
+
 ### Stage 18 · 1M 训练完成 + 评测缺陷修复 + 评测报告 (2026-08-11) 📋
 
 - Stage 18 训练 1M 步完成并封存 (`ckpt_stage18_001000000.pt`):
