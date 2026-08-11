@@ -373,7 +373,8 @@ def main():
     for key in ["symbolic_state", "symbol_backend_state", "logic_engine_state",
                 "self_model_state", "reflection_state", "creativity_state",
                 "imagination_trainer_state", "curriculum_active_task_id",
-                "causal_discovery_state", "sleep_loop_state"]:
+                "causal_discovery_state", "sleep_loop_state",
+                "narrative_loop_state"]:
         v = extra.get(key)
         if isinstance(v, dict):
             safe = {}

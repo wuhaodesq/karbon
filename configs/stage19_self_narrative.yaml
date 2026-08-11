@@ -42,6 +42,17 @@ narrative:
   trait_learning_enabled: true     # 启用学习式 trait 提取 (trait_projector)
   trait_lr: 1.0e-4
 
+# --- Developmental Memory (AutobiographicalMemory 源) ---
+# 注意: memory_manager 的创建条件是这个段 (不是 external_memory)
+# Stage 18 漏配此段 -> memory_manager 从未创建 -> IdentityNarrative 从未运行
+developmental_memory:
+  enabled: true
+  episodic_max: 10000
+  semantic_max: 1000
+  autobiographical_max: 100
+  surprise_threshold: 0.01
+  consolidation_every_steps: 50000
+
 # --- 3D Environment (MuJoCo) ---
 env:
   id: "ThreeDWorld"

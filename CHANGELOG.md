@@ -5,6 +5,22 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 19 · 运行修复: developmental_memory 段缺失 + 评测脚本读取 narrative (2026-08-11) 🔧
+
+- **Bug F (配置接线)**: `memory_manager` 创建条件需要 `developmental_memory.enabled`,
+  但 Stage 18/19 配置都缺该段 -> memory_manager 从未创建 -> NarrativeLoopController
+  创建条件静默失败 -> AutobiographicalMemory 不存在 -> 叙事从未产出
+  (也解释了 Stage 18 `[identity]` 计数 0 的谜底: IdentityNarrative 依赖 memory_manager)
+- 修复: `stage19_self_narrative.yaml` 增加 `developmental_memory` 段 (episodic=10000,
+  semantic=1000, autobiographical=100); 重启训练 (resume 自 51.2K ckpt)
+- 验证: 训练日志出现 `MemoryManager enabled` + `NarrativeLoopController enabled`
+- 评测脚本: summary 白名单加入 `narrative_loop_state` (读取叙事状态)
+- Stage 19 @ 51.2K 首次全量评测 (v2 脚本, 5 tasks × 20 eps):
+  - object_permanence 0.583 (↑ vs S18 1M 0.533, 最接近闸门 0.6)
+  - reflection len=6 ✅ / kanren queries=21,760 ✅ (闭环修复验证)
+  - means_ends 0.50 / physics 0.78 / number 0.51 (跨阶段 resume 回退, 符合预期)
+  - est. age=0.0y
+
 ### Stage 19 · 自我叙事引擎 设计 + 核心实现 (2026-08-11) 📋
 
 - 设计文档: `docs/stage19_design.md` — 记忆->叙事->策略调制闭环
