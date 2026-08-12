@@ -27,6 +27,7 @@ import argparse
 import logging
 import math
 import time
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -125,7 +126,15 @@ def _maybe_compile(module: nn.Module, device: torch.device, name: str = "") -> n
     Unlike ``torch.compile(module)``, compiling only ``.forward`` leaves the
     ``nn.Module`` wrapper untouched — ``state_dict()`` / ``load_state_dict()``
     keys are unchanged and checkpoint save/restore works normally.
+
+    Set ``DEVAGI_NO_COMPILE=1`` to disable (Stage 19 fix: torch.compile
+    recompiles endlessly when the model sees both 4-D rollout observations
+    and 5-D training batches — e.g. slot_attention's 4-length permute on a
+    rank-5 tensor — causing multi-minute freezes + CUDA memory growth).
     """
+    if os.environ.get("DEVAGI_NO_COMPILE", "0") == "1":
+        logger.info("JIT: torch.compile disabled via DEVAGI_NO_COMPILE")
+        return module
     if not is_cuda():
         return module
     try:
@@ -2612,7 +2621,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 # VRAM snapshot (cuda only) — folds memory into the PROF line so
                 # the A#11 Stage-6 memory/throughput measurement is one glance.
                 _vram_gb = 0.0
-                if device.type == 'cuda':
+                if device.type == 'cuda':  # BOUNDS-OK: device-type probe, not a cuda() call
                     _vram_gb = torch.cuda.memory_allocated(device) / (1024.0 ** 3)
                 logger.info(
                     "PROF per_step=%.1fms env=%.1f(%.0f%%) model=%.1f(%.0f%%) cog=%.1f(%.0f%%) buf=%.1f(%.0f%%) other=%.1f(%.0f%%) vram=%.2fGB",
@@ -2821,16 +2830,37 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 if narrative_loop is not None:
                     try:
                         task_tag = curr_active_task.tag if curr_active_task else "sandbox"
-                        description = (f"Completed {task_tag}: return={ep_ret:.2f}"
-                                       if ep_ret > 0.5 else f"Explored {task_tag}")
-                        lesson = (f"Learned to navigate {task_tag}" if ep_ret > 0.7
-                                  else f"Explored {task_tag}")
+                        # Event-type diversification (Stage 19 fix): failed and
+                        # exploratory episodes get a baseline importance so they
+                        # survive autobiographical eviction; IdentityNarrative
+                        # counts traits by event_type instead of keyword luck.
+                        if ep_ret > 0.5:
+                            etype = "success"
+                            importance = float(ep_ret)
+                            description = f"Completed {task_tag}: return={ep_ret:.2f}"
+                            lesson = f"Learned to navigate {task_tag}"
+                        elif ep_ret > 0.05:
+                            etype = "failure"
+                            importance = 8.0
+                            description = f"Failed to reach goal in {task_tag}"
+                            lesson = f"Goal not reached in {task_tag}"
+                        else:
+                            etype = "exploration"
+                            importance = 4.0
+                            description = f"Explored {task_tag} without clear reward"
+                            lesson = f"Probed unknown scene {task_tag}"
+                        n_last_hidden = (
+                            rollout_hidden_states[-1].detach()
+                            if rollout_hidden_states else None)
                         narrative_loop.episode_end_hook(
                             step=state.step,
                             ep_ret=float(ep_ret),
                             ep_id=int(env.summary().get("episodes", 0)),
                             description=description,
                             lesson=lesson,
+                            importance=importance,
+                            event_type=etype,
+                            hidden_state=n_last_hidden,
                         )
                     except Exception as _nl:
                         logger.warning("[narrative] episode_end_hook failed: %s", _nl)

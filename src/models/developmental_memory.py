@@ -372,6 +372,7 @@ class LifeEvent:
     emotional_weight: float       # how impactful was this?
     related_episodes: list[int] = field(default_factory=list)
     lesson_learned: str = ""
+    event_type: str = "success"   # success / failure / exploration
 
 
 class AutobiographicalMemory:
@@ -411,6 +412,7 @@ class AutobiographicalMemory:
         importance: float,
         episode_id: int,
         lesson: str = "",
+        event_type: str = "success",
     ) -> LifeEvent | None:
         """Promote an important episode to a life event.
 
@@ -425,6 +427,7 @@ class AutobiographicalMemory:
             emotional_weight=importance,
             related_episodes=[episode_id],
             lesson_learned=lesson,
+            event_type=event_type,
         )
 
         if len(self._events) >= self._max:
@@ -558,6 +561,7 @@ class MemoryManager(nn.Module):
         importance: float,
         episode_id: int,
         lesson: str = "",
+        event_type: str = "success",
     ) -> None:
         """Promote an important episode to autobiographical memory."""
         result = self.autobiographical.add_event(
@@ -566,6 +570,7 @@ class MemoryManager(nn.Module):
             importance=importance,
             episode_id=episode_id,
             lesson=lesson,
+            event_type=event_type,
         )
         if result is not None:
             self._total_promoted += 1
@@ -678,6 +683,7 @@ class MemoryManager(nn.Module):
                     "timestamp_step": e.timestamp_step,
                     "description": e.description,
                     "emotional_weight": e.emotional_weight,
+                    "event_type": e.event_type,
                 }
                 for e in self.autobiographical._events
             ],

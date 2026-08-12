@@ -250,6 +250,42 @@ def test_identity_narrative_extracts_traits():
     assert "explore" in inv.generate_narrative(traits)
 
 
+def test_identity_narrative_counts_by_event_type():
+    """Stage 19 fix: structured event_type counting (not keyword luck)."""
+    inv = IdentityNarrative(d_model=D, min_events_for_identity=5)
+    ev = [SimpleNamespace(description="x", lesson_learned="", event_type=t)
+          for t in ["success"] * 15 + ["failure"] * 6 + ["exploration"] * 3]
+    traits = inv.extract_traits(ev)
+    assert traits["conscientiousness"] == 0.62  # round(15/24, 2)
+    assert traits["neuroticism"] == 0.25        # 6/24
+    assert traits["openness"] == 0.12           # round(3/24, 2)
+    narr = inv.generate_narrative(traits)
+    assert "persists" in narr and "cautious" in narr
+
+
+def test_identity_narrative_blends_projector():
+    """Stage 19 fix: learned trait projector must actually influence
+    the narrative (was trained but never consumed before)."""
+    import torch as _t
+    inv = IdentityNarrative(d_model=8, min_events_for_identity=1)
+    ev = [SimpleNamespace(description="x", lesson_learned="", event_type="success")
+          for _ in range(3)]
+    out_no_hidden = inv(ev)
+    assert "persists" in out_no_hidden["narrative"]  # stats-only: consc=1.0
+    with _t.no_grad():
+        inv.trait_projector[0].weight.zero_()
+        inv.trait_projector[0].bias.zero_()
+        inv.trait_projector[2].weight.zero_()
+        inv.trait_projector[2].bias.zero_()
+    out_blend = inv(ev, hidden_state=_t.ones(8), blend=1.0)
+    # Projector forced to zero output -> sigmoid(0)=0.5 -> neutral traits,
+    # narrative must NOT be the pure-stats "persists..." line.
+    assert out_blend["traits"]["openness"] == 0.5
+    assert "persists" not in out_blend["narrative"]
+    # Different blend result than stats-only run.
+    assert out_blend["traits"]["conscientiousness"] != out_no_hidden["traits"]["conscientiousness"]
+
+
 # --------------------------------------------------------------------------
 # developmental_memory: AutobiographicalMemory
 # --------------------------------------------------------------------------

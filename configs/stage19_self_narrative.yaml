@@ -62,7 +62,7 @@ env:
   action_force: 50.0
   developmental_age: 0.5              # toddler: grasping + obstacle + key-door all active
   num_envs: 1
-  num_occluders: 2                    # Stage 19: 真遮挡探针 (object_permanence)
+  num_occluders: 3                    # Stage 19: 真遮挡探针 (object_permanence); 3=更多遮挡练习
 
 # --- LLM Fusion (disabled) ---
 llm_fusion:
@@ -111,6 +111,11 @@ symbol_backend:
 
 # --- Neuro-Symbolic Bridge ---
 neuro_symbolic_bridge:
+  enabled: true
+
+# --- Abstract Reasoning (IdentityNarrative 依赖此段) ---
+# Bug G 修复: Stage 19 曾缺此段 -> identity_narrative=None -> 叙事永不生成
+abstract_reasoning:
   enabled: true
 
 # --- 3D Curriculum (加速轮转, 打破 task-3 垄断) ---

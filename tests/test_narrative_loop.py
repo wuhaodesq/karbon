@@ -20,9 +20,11 @@ class _FakeAuto:
     def __len__(self) -> int:
         return len(self._events)
 
-    def add_event(self, step, description, importance, episode_id, lesson=""):
+    def add_event(self, step, description, importance, episode_id, lesson="",
+                  event_type="success"):
         self._events.append({
             "step": step, "description": description, "importance": importance,
+            "event_type": event_type,
         })
         return self._events[-1]
 
@@ -31,9 +33,11 @@ class _FakeIdentity:
     def __init__(self) -> None:
         self._min_events = 1
         self._calls = 0
+        self._last_hidden = None
 
-    def __call__(self, events):
+    def __call__(self, events, hidden_state=None):
         self._calls += 1
+        self._last_hidden = hidden_state
         return {
             "traits": {"openness": 0.8, "conscientiousness": 0.2,
                        "extraversion": 0.5, "agreeableness": 0.5,
@@ -184,3 +188,35 @@ def test_narrative_loop_state_dict_roundtrip():
     assert nl2._last_narrative == nl._last_narrative
     if nl.get_symbol_bias() is not None:
         assert torch.equal(nl2.get_symbol_bias(), nl.get_symbol_bias())
+
+
+def test_narrative_loop_passes_importance_and_type():
+    """Stage 19 fix: failed/exploratory episodes survive eviction and
+    are labeled so IdentityNarrative can count traits by type."""
+    auto = _FakeAuto()
+    ident = _FakeIdentity()
+    nl = NarrativeLoopController(d_model=128, num_actions=12,
+                                 autobiographical=auto,
+                                 identity_narrative=ident,
+                                 symbol_backend=_FakeSymbolBackend(),
+                                 narrative_every_episodes=2)
+    nl.episode_end_hook(100, 0.03, 1, description="Failed",
+                        importance=8.0, event_type="failure")
+    nl.episode_end_hook(200, 0.03, 2, description="Failed",
+                        importance=8.0, event_type="failure")
+    assert auto._events[0]["event_type"] == "failure"
+    assert auto._events[0]["importance"] == 8.0
+    assert nl._narrative_count == 1
+
+
+def test_narrative_loop_passes_hidden_state():
+    """Hidden state flows to IdentityNarrative for projector blending."""
+    ident = _FakeIdentity()
+    nl = NarrativeLoopController(d_model=128, num_actions=12,
+                                 autobiographical=_FakeAuto(),
+                                 identity_narrative=ident,
+                                 symbol_backend=_FakeSymbolBackend(),
+                                 narrative_every_episodes=1)
+    h = torch.randn(128)
+    nl.episode_end_hook(100, 0.8, 1, hidden_state=h)
+    assert ident._last_hidden is h

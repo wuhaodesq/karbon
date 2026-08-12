@@ -128,19 +128,32 @@ class NarrativeLoopController(nn.Module):
         ep_id: int,
         description: str = "",
         lesson: str = "",
+        importance: float | None = None,
+        event_type: str = "success",
+        hidden_state: torch.Tensor | None = None,
     ) -> None:
-        """Call at episode end: store life event + periodic narrative + bias."""
+        """Call at episode end: store life event + periodic narrative + bias.
+
+        ``importance`` overrides the default (``ep_ret``) so failed /
+        exploratory episodes can keep a baseline presence in
+        autobiographical memory instead of being evicted immediately.
+        ``event_type`` labels the kind of life event (success / failure /
+        exploration) so IdentityNarrative can count traits structurally.
+        ``hidden_state`` (optional) lets the learned trait projector
+        modulate the narrative, making it evolve with behavior.
+        """
         self._episode_count += 1
 
         # 1. Store significant episode in autobiographical memory
-        if self.autobiographical is not None and ep_ret > 0:
+        if self.autobiographical is not None and (ep_ret > 0 or importance is not None):
             try:
                 self.autobiographical.add_event(
                     step=step,
                     description=description or f"Episode {ep_id}: return={ep_ret:.2f}",
-                    importance=float(ep_ret),
+                    importance=float(ep_ret if importance is None else importance),
                     episode_id=ep_id,
                     lesson=lesson,
+                    event_type=event_type,
                 )
             except Exception as _e:
                 logger.warning("[narrative] add_event failed: %s", _e)
@@ -153,7 +166,7 @@ class NarrativeLoopController(nn.Module):
                 events = self.autobiographical._events
                 min_events = getattr(self.identity_narrative, "_min_events", 20)
                 if len(events) >= min_events:
-                    self._generate_narrative(events)
+                    self._generate_narrative(events, hidden_state)
             except Exception as _e:
                 logger.warning("[narrative] narrative generation failed: %s", _e)
 
@@ -162,9 +175,12 @@ class NarrativeLoopController(nn.Module):
 
     # -------------------------------------------------------------- internals
 
-    def _generate_narrative(self, events: list[Any]) -> None:
+    def _generate_narrative(
+        self, events: list[Any],
+        hidden_state: torch.Tensor | None = None,
+    ) -> None:
         """Run IdentityNarrative and cache the result (+ optional FiLM)."""
-        out = self.identity_narrative(events)
+        out = self.identity_narrative(events, hidden_state=hidden_state)
         self._last_traits = dict(out.get("traits", {}))
         self._last_narrative = str(out.get("narrative", ""))
         self._narrative_count += 1

@@ -5,6 +5,69 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 19 · 回滚 approach reward (400K 回归确认有害) (2026-08-12) ⚠️
+
+- **400K 评测 (approach 训练 51K 步后)**: object_permanence 0.556->0.17,
+  means_ends 1.0->0.02, ToM 0.46->0.20 全面崩溃; number_sense 反而升到 0.78
+  -> approach 动机让 agent 变成"到处接近物体"的无头苍蝇, 淹没目标导向信号
+- **回滚**: `three_d_world.py` 加 `approach_reward_weight` 参数 (默认 0.0),
+  从 300K ckpt (健康基线) 恢复训练; 叙事修复保留 (250K 证明有效)
+- **教训**: 通用动机奖励 (approach) 在物体多的 3D 场景里每步累积多物体
+  奖励, 淹没任务信号 —— 需去重/上限机制才可能再试
+- **最终判断 (Stage 19 收尾记录)**:
+  - approach_reward_weight 能用, 但不能用现有 0.2 泛化版本 (对场景内
+    所有物体每步累积, 8-16 物体时信号淹没)
+  - 当前保持 0.0; 代码保留门控 (weight>0 才启用), 便于后续情境化改造
+  - **去重版方向 (Stage 20 假设-演绎阶段候选)**: 情境限定为 occluder
+    遮挡事件中的 last_known 目标 —— 仅当物体刚被遮挡时才给 approach
+    信号, 且每次遮挡只对单个目标生效 (去重 + 上限)
+  - 发育路线判定: 定向/情境版 approach 是"内在动机 + 任务感知"的自然
+    延伸, 符合发育路线 (非外部干预, 非特异性奖励植入)
+
+### Stage 19 · 云端训练必须 `--preset cloud_24g` — 默认 local_smoke 强制 CPU (2026-08-12) ⚠️
+
+- **事故**: 云端启动命令未传 `--preset`, 落默认 `local_smoke`
+  (`device_preferred: cpu`) -> 模型建在 CPU, 3.3 步/s 慢速训练,
+  日志间隔 90s-10min 被误判为"卡死" (4 次误判 + 数小时排查)
+- **铁律**: 云端跑训练必须显式 `--preset cloud_24g` (GPU);
+  评测脚本 `run_stage18_full_eval.py` 默认已是 cloud_24g, 不受影响
+- **佐证**: 切换后 3.3 -> 6.8 步/s, 显存 4MiB -> 2.2GB, GPU 正常占用
+- 附带: `DEVAGI_NO_COMPILE=1` 避免 torch.compile recompile 抖动
+  (5 维训练 batch 触发 slot_attention permute 编译失败, 每次卡 2-4 分钟)
+
+### Stage 19 · approach reward: 通用接近动机打通 遮挡→追踪→重现 因果链 (2026-08-12) 🔧
+
+- **根因 (reward 结构审查)**: `ThreeDWorld._compute_reward` 无 approach 组件
+  (只有推物/接触/caregiver 接近), 而 `physics_sandbox` 有 (prev-dist)*0.2。
+  遮挡期间 agent 走向 last_known 无任何内在回报 -> 永不学"跟踪被遮挡物"
+- **修复 (环境反馈增强, 非特异性植入)**: `_compute_reward` 增加 approach
+  reward (与 physics_sandbox 完全同款); 这是环境对"接近物体"的自然反馈,
+  非针对 object_permanence 探针的奖励 —— 符合发育路线 (不对行为特异性奖励,
+  只恢复环境该有的反馈)。遮挡→追踪→重现→接触 的因果链得以训练中自然涌现
+- 配套: `_prev_obj_dist` 有界 (num_objects 固定, reset 精确重建);
+  config `num_occluders` 2->3 (更多遮挡练习情境)
+- 评测无影响 (评测 rollout 不看 reward)
+
+### Stage 19 · 叙事去模板化: 事件分型 + trait 投影接入 + 分档文案 (2026-08-12) 🔧
+
+- **根因 (200K dump 确诊)**: 100 条 life events 全为成功事件 (失败/探索
+  return≈0.03 被 importance 淘汰) -> traits 恒 (0,1,0,0,0) -> 叙事恒同
+  "persists through challenges to achieve goals." -> symbol bias 恒定 act=2 ->
+  策略不被调制, object_permanence 100K->200K 停滞/回落
+- **修复 1 (事件分型)**: `developmental_memory.py` LifeEvent 增加 `event_type`
+  (success/failure/exploration) 字段 + add_event/promote_to_life_event 透传 +
+  state_dict 序列化; `train.py` 事件构造分档 (success: importance=return /
+  failure: 保底 8.0 / exploration: 保底 4.0), 失败与探索事件不再被挤出记忆
+- **修复 2 (投影接入)**: `abstract_reasoning.py` `extract_traits` 优先按
+  event_type 结构计数 (关键词降级为 fallback, 兼容旧事件);
+  `forward(life_events, hidden_state, blend)` 混合统计 traits 与
+  trait_projector 投影 (blend=0.5) — 叙事随行为演化, projector 不再只训练不消费;
+  narrative_loop 与 train.py 透传 episode 末 hidden_state
+- **修复 3 (分档文案)**: `generate_narrative` 从 5 个固定 if 升级为连续分数
+  分档变体 (开放/尽责/外向/宜人/神经质 各有 2 档句式)
+- 测试: test_narrative_loop.py +2 (importance/event_type 透传, hidden 传递),
+  test_cognitive_landing.py +2 (event_type 计数, projector 混合)
+
 ### Stage 19 · 运行修复: developmental_memory 段缺失 + 评测脚本读取 narrative (2026-08-11) 🔧
 
 - **Bug F (配置接线)**: `memory_manager` 创建条件需要 `developmental_memory.enabled`,

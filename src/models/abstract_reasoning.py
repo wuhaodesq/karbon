@@ -294,16 +294,34 @@ class IdentityNarrative(nn.Module):
     ) -> dict[str, float]:
         """Extract Big Five from life event descriptions.
 
-        Simplified mapping based on event content:
-        - Openness: events tagged with "探索"/"explore"/"novel"
-        - Conscientiousness: events with "完成"/"succeeded"/"goal"
-        - Extraversion: events with "社交"/"caregiver"/"sibling"
-        - Agreeableness: events with "帮助"/"模仿"/"learned"
-        - Neuroticism: events with "danger"/"scared"/"failed"
+        Two signal paths:
+        1. Structured ``event_type`` (success / failure / exploration) counts —
+           reliable, used when events carry the field.
+        2. Keyword fallback on description/lesson text — kept for backward
+           compatibility with legacy events that lack the field.
+
+        Mapping:
+        - Openness: exploration events
+        - Conscientiousness: success events
+        - Extraversion: events tagged with "社交"/"caregiver"/"sibling"
+        - Agreeableness: events tagged with "帮助"/"模仿"/"learned"
+        - Neuroticism: failure events
         """
         if len(life_events) < self._min_events:
             return {t: 0.5 for t in ["openness", "conscientiousness", "extraversion",
                                        "agreeableness", "neuroticism"]}
+
+        n = len(life_events)
+        has_types = any(str(getattr(e, "event_type", "") or "") for e in life_events)
+        if has_types:
+            types = [str(getattr(e, "event_type", "success")) for e in life_events]
+            return {
+                "openness": round(types.count("exploration") / n, 2),
+                "conscientiousness": round(types.count("success") / n, 2),
+                "extraversion": 0.0,
+                "agreeableness": 0.0,
+                "neuroticism": round(types.count("failure") / n, 2),
+            }
 
         openness_kw = ["探索", "explore", "novel", "discover", "new", "unknown"]
         consc_kw = ["完成", "succeed", "goal", "achieved", "learned", "master"]
@@ -315,7 +333,6 @@ class IdentityNarrative(nn.Module):
             desc = getattr(e, "description", "") + getattr(e, "lesson_learned", "")
             return any(kw.lower() in desc.lower() for kw in kws)
 
-        n = len(life_events)
         openness = sum(1 for e in life_events if _match(e, openness_kw)) / n
         conscientiousness = sum(1 for e in life_events if _match(e, consc_kw)) / n
         extraversion = sum(1 for e in life_events if _match(e, extra_kw)) / n
@@ -331,19 +348,29 @@ class IdentityNarrative(nn.Module):
         }
 
     def generate_narrative(self, traits: dict[str, float]) -> str:
-        """Generate a self-description from trait scores."""
+        """Generate a self-description from trait scores (graded variants)."""
         parts: list[str] = ["I am someone who"]
 
-        if traits["openness"] > 0.3:
-            parts.append("explores often and seeks novelty")
-        if traits["conscientiousness"] > 0.3:
+        if traits["openness"] > 0.5:
+            parts.append("explores new scenes and novel challenges")
+        elif traits["openness"] > 0.25:
+            parts.append("gets curious when the world looks unfamiliar")
+        if traits["conscientiousness"] > 0.5:
             parts.append("persists through challenges to achieve goals")
-        if traits["extraversion"] > 0.2:
-            parts.append("engages with others")
-        if traits["agreeableness"] > 0.2:
+        elif traits["conscientiousness"] > 0.25:
+            parts.append("works with focus when a goal matters")
+        if traits["extraversion"] > 0.4:
+            parts.append("engages eagerly with others")
+        elif traits["extraversion"] > 0.2:
+            parts.append("interacts with others when nearby")
+        if traits["agreeableness"] > 0.4:
             parts.append("learns from and cooperates with others")
-        if traits["neuroticism"] > 0.3:
-            parts.append("sometimes feels anxious near danger")
+        elif traits["agreeableness"] > 0.2:
+            parts.append("follows others' lead to learn")
+        if traits["neuroticism"] > 0.4:
+            parts.append("feels anxious when goals slip away")
+        elif traits["neuroticism"] > 0.2:
+            parts.append("grows cautious after setbacks")
 
         if len(parts) == 1:
             return "I am still discovering who I am."
@@ -351,10 +378,32 @@ class IdentityNarrative(nn.Module):
         return " and ".join(parts[1:]) + "."
 
     def forward(
-        self, life_events: list[Any],
+        self,
+        life_events: list[Any],
+        hidden_state: torch.Tensor | None = None,
+        blend: float = 0.5,
     ) -> dict[str, Any]:
-        """Full identity pipeline: traits + narrative."""
-        traits = self.extract_traits(life_events)
+        """Full identity pipeline: traits + narrative.
+
+        If ``hidden_state`` is provided, the final traits blend the
+        keyword/type statistics (life memory) with the learned trait
+        projector's prediction of the current latent state — so the
+        narrative can actually *evolve* as behavior changes (Stage 19
+        root-cause fix: projector was trained but never consumed).
+        """
+        stats = self.extract_traits(life_events)
+        traits = dict(stats)
+        if hidden_state is not None and self._d_model > 0:
+            h = torch.as_tensor(hidden_state, dtype=torch.float32)
+            h = h.reshape(-1)
+            if h.shape[0] >= self._d_model:
+                h = h[: self._d_model].unsqueeze(0)  # (1, d_model)
+                with torch.no_grad():
+                    pred = torch.sigmoid(self.trait_projector(h))[0]  # (5,)
+                names = list(stats.keys())
+                for i, name in enumerate(names):
+                    traits[name] = round(blend * float(pred[i])
+                                         + (1.0 - blend) * float(stats[name]), 2)
         narrative = self.generate_narrative(traits)
         return {
             "traits": traits,

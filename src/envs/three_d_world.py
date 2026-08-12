@@ -389,6 +389,7 @@ class ThreeDWorld:
         camera_pos: tuple[float, float, float] = (0.0, -1.0, 0.8),
         camera_fovy: float = 60.0,
         num_occluders: int = 0,  # Stage 19: true occlusion probe walls
+        approach_reward_weight: float = 0.0,  # 0=off (default); see 400K regression
     ) -> None:
         if not _mj_available:
             raise ImportError("mujoco is required for ThreeDWorld. Run: pip install mujoco")
@@ -402,6 +403,7 @@ class ThreeDWorld:
         self._camera_pos = camera_pos
         self._camera_fovy = camera_fovy
         self._num_occluders = int(num_occluders)
+        self._approach_reward_weight = float(approach_reward_weight)
         self._rng = np.random.RandomState(seed)
 
         # Object library
@@ -428,6 +430,8 @@ class ThreeDWorld:
         self._contacted: set[int] = set()
         self._last_force_3d: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._active_occlusions_3d: dict[str, dict] = {}
+        # Per-object previous distance for approach reward (bounded: num_objects)
+        self._prev_obj_dist: list[float] = []
         # Logic task context (set by train.py for symbolic reward)
         self._logic_bonus_action: int | None = None
         self._logic_bonus_weight: float = 0.3
@@ -710,6 +714,7 @@ class ThreeDWorld:
         self._object_contact_order = []
         self._contacted = set()
         self._active_occlusions_3d = {}
+        self._prev_obj_dist = [0.0] * self._num_objects
 
         # Reset grasping state
         self._held_obj_id = None
@@ -1155,6 +1160,26 @@ class ThreeDWorld:
             reward += max(0, (1.0 - dist_caregiver)) * 0.05
         except Exception:
             pass
+
+        # Approach reward: reducing distance to any object (physics_sandbox
+        # parity). 400K regression: weight>0 in the 3D scene (many objects)
+        # drowns goal-directed signals -> object_permanence/means_ends/ToM
+        # collapse. Disabled by default (weight=0.0).
+        if self._approach_reward_weight > 0.0:
+            try:
+                lx = float(self._data.body("learner").xpos[0])
+                ly = float(self._data.body("learner").xpos[1])
+                for i in range(self._num_objects):
+                    body_id = self._model.body(f"obj_{i}").id
+                    ox = float(self._data.xpos[body_id, 0])
+                    oy = float(self._data.xpos[body_id, 1])
+                    dist = math.hypot(lx - ox, ly - oy)
+                    prev = self._prev_obj_dist[i]
+                    self._prev_obj_dist[i] = dist
+                    if dist < prev:
+                        reward += (prev - dist) * self._approach_reward_weight
+            except Exception:
+                pass
 
         reward = max(0.0, min(5.0, reward))
 
