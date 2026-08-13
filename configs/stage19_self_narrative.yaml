@@ -62,7 +62,7 @@ env:
   action_force: 50.0
   developmental_age: 0.5              # toddler: grasping + obstacle + key-door all active
   num_envs: 1
-  num_occluders: 3                    # Stage 19: 真遮挡探针 (object_permanence); 3=更多遮挡练习
+  num_occluders: 2                    # Stage 19: 真遮挡探针 (object_permanence); 2=250K/300K 时代环境
 
 # --- LLM Fusion (disabled) ---
 llm_fusion:

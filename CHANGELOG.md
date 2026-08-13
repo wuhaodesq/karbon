@@ -5,6 +5,20 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 19 · 修复叙事 device bug + 训练环境回归 occluder=2 (2026-08-13) 🔧
+
+- **叙事 device bug** (cloud_24g 切换引入): `rollout_hidden_states` 存 CPU
+  tensor (2291 行 .cpu()), 而 trait_projector 在 GPU (cloud_24g) ->
+  300K->550K 全程 `narrative generation failed` (device 不匹配), 叙事投影
+  混合从未生效; 修复: `n_last_hidden = ... .to(device)`; 验证 #65 正常
+  (extraversion 0.38 投影真实生效)
+- **训练环境回归**: `num_occluders` 3->2 (250K/300K 时代环境)。550K 评测
+  object_permanence 0.333 远低于 300K 0.556 —— 嫌疑: 训练 3 墙环境与评测
+  无墙不匹配, agent 学会绕墙行为在无墙评测下退化
+- **磁盘满事故**: replay SSD shards 14GB 写满 30G 盘 -> torch.save 失败
+  训练崩溃 (600K ckpt 损坏 128B); 清理 shards 后从 550K 恢复;
+  教训: replay 冷层 shards 是孤儿数据 (ckpt 不序列化), 可安全删除
+
 ### Stage 19 · 回滚 approach reward (400K 回归确认有害) (2026-08-12) ⚠️
 
 - **400K 评测 (approach 训练 51K 步后)**: object_permanence 0.556->0.17,

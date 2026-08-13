@@ -2850,7 +2850,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                             description = f"Explored {task_tag} without clear reward"
                             lesson = f"Probed unknown scene {task_tag}"
                         n_last_hidden = (
-                            rollout_hidden_states[-1].detach()
+                            rollout_hidden_states[-1].detach().to(device)
                             if rollout_hidden_states else None)
                         narrative_loop.episode_end_hook(
                             step=state.step,
