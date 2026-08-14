@@ -161,6 +161,7 @@ class SceneBuilder:
         self._objects: list[dict] = []
         self._agents: list[dict] = []
         self._occluders: list[dict] = []
+        self._trace_marker_xml: list[str] = []
         self._sun_angle: float = 0.0  # radians
 
     def add_agent(
@@ -199,6 +200,21 @@ class SceneBuilder:
             "pos": position,
             "size": size,
         })
+
+    def add_trace_markers(self, n: int) -> None:
+        """Add hidden ground markers (visual occlusion traces).
+
+        Developmental feedback: when an object is occluded, the env moves a
+        marker to the object's last-known position so the agent can learn
+        "occluded -> trace -> find" from environment feedback (not rewards).
+        Markers start at y=100 (hidden); the env repositions them at runtime.
+        """
+        for i in range(n):
+            self._trace_marker_xml.append(
+                f'    <geom name="trace_marker_{i}" type="cylinder" '
+                f'size="0.09 0.006" pos="0 0 100" '
+                f'rgba="1.0 0.85 0.1 1.0" contype="0" conaffinity="0"/>\n'
+            )
 
     def set_sun_angle(self, radians: float) -> None:
         self._sun_angle = radians
@@ -328,6 +344,8 @@ class SceneBuilder:
         # follows movement while keeping the scene in view).
         cam_pos = self._camera_pos
         cam_fovy = self._camera_fovy
+        for marker in self._trace_marker_xml:
+            xml += marker
         xml += f"""
     <camera name="ego" mode="targetbody" target="learner"
             pos="{cam_pos[0]} {cam_pos[1]} {cam_pos[2]}" fovy="{cam_fovy}"/>
@@ -390,6 +408,8 @@ class ThreeDWorld:
         camera_fovy: float = 60.0,
         num_occluders: int = 0,  # Stage 19: true occlusion probe walls
         approach_reward_weight: float = 0.0,  # 0=off (default); see 400K regression
+        occluder_trace: bool = False,  # dev feedback: marker at last-known pos
+        occluder_target_reward: float = 0.0,  # situational single-target guidance
     ) -> None:
         if not _mj_available:
             raise ImportError("mujoco is required for ThreeDWorld. Run: pip install mujoco")
@@ -404,6 +424,9 @@ class ThreeDWorld:
         self._camera_fovy = camera_fovy
         self._num_occluders = int(num_occluders)
         self._approach_reward_weight = float(approach_reward_weight)
+        self._occluder_trace = bool(occluder_trace)
+        self._occluder_target_reward = float(occluder_target_reward)
+        self._trace_geom_ids: list[int] = []  # parallel to objects
         self._rng = np.random.RandomState(seed)
 
         # Object library
@@ -648,6 +671,11 @@ class ThreeDWorld:
                 size=(0.55, 0.05, 0.6),
             )
 
+        # Visual occlusion traces (developmental feedback, training only):
+        # hidden ground markers moved to last-known positions during occlusion.
+        if self._occluder_trace:
+            builder.add_trace_markers(min(self._num_objects, 24))
+
         # Agent size grows with developmental age
         agent_size = 0.12 + self._dev_age * 0.08  # 0.12 (infant) → 0.20 (child)
         self._agent_size = agent_size
@@ -704,6 +732,13 @@ class ThreeDWorld:
             self._model, height=self._render_size, width=self._render_size,
         )
 
+        # Record trace-marker geom ids (parallel to objects)
+        self._trace_geom_ids = []
+        if self._occluder_trace:
+            for i in range(min(self._num_objects, 24)):
+                gid = self._model.geom(f"trace_marker_{i}").id
+                self._trace_geom_ids.append(gid)
+                self._model.geom_pos[gid] = [0.0, 0.0, 100.0]  # hidden
         mujoco.mj_forward(self._model, self._data)
 
         # Reset developmental trackers on scene rebuild
@@ -714,6 +749,8 @@ class ThreeDWorld:
         self._object_contact_order = []
         self._contacted = set()
         self._active_occlusions_3d = {}
+        for gid in self._trace_geom_ids:
+            self._model.geom_pos[gid] = [0.0, 0.0, 100.0]
         self._prev_obj_dist = [0.0] * self._num_objects
 
         # Reset grasping state
@@ -813,12 +850,17 @@ class ThreeDWorld:
                             "agent_traj_during_occ": [],
                             "truly_occluded": bool(truly_occluded),
                         }
+                        # Dev feedback: show ground marker at last-known pos
+                        if self._occluder_trace and i < len(self._trace_geom_ids):
+                            self._model.geom_pos[self._trace_geom_ids[i]] = [ox, oy, 0.01]
                     self._active_occlusions_3d[key]["agent_traj_during_occ"].append((ax, ay))
                 else:
                     # Object became reachable (or visible) — finalize and emit event
                     key = f"occ_{i}"
                     if key in self._active_occlusions_3d:
                         ev = self._active_occlusions_3d.pop(key)
+                        if self._occluder_trace and i < len(self._trace_geom_ids):
+                            self._model.geom_pos[self._trace_geom_ids[i]] = [0.0, 0.0, 100.0]
                         if len(ev["agent_traj_during_occ"]) >= 3:
                             self._occlusion_events.append(ev)
             except Exception:
@@ -1178,6 +1220,27 @@ class ThreeDWorld:
                     self._prev_obj_dist[i] = dist
                     if dist < prev:
                         reward += (prev - dist) * self._approach_reward_weight
+            except Exception:
+                pass
+
+        # Occluder-target reward (situational, single-target): while an
+        # object is occluded (in _active_occlusions_3d), reward the agent
+        # for moving toward that object's last-known position. Unlike the
+        # blanket approach reward (all objects, all steps), this fires only
+        # for the occluded object during the occlusion window — a
+        # context-limited behavior-guidance signal aligned 1:1 with the
+        # object_permanence eval metric. Default off (weight=0.0).
+        if self._occluder_target_reward > 0.0:
+            try:
+                ax = float(self._data.body("learner").xpos[0])
+                ay = float(self._data.body("learner").xpos[1])
+                for key, occ in list(self._active_occlusions_3d.items()):
+                    lk = occ["last_known"]
+                    dist = math.hypot(ax - lk[0], ay - lk[1])
+                    prev = occ.get("prev_agent_dist", dist)
+                    occ["prev_agent_dist"] = dist
+                    if dist < prev:
+                        reward += (prev - dist) * self._occluder_target_reward
             except Exception:
                 pass
 

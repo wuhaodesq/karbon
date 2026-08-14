@@ -686,6 +686,9 @@ def _build_env_from_spec(spec: dict[str, Any], env_cfg: dict[str, Any]):
             action_force=float(spec.get("action_force", env_cfg.get("action_force", 50.0))),
             camera_pos=tuple(env_cfg.get("camera_pos", [0.0, -1.0, 0.8])),
             camera_fovy=float(env_cfg.get("camera_fovy", 60.0)),
+            num_occluders=int(env_cfg.get("num_occluders", 0)),
+            occluder_trace=bool(env_cfg.get("occluder_trace", False)),
+            occluder_target_reward=float(env_cfg.get("occluder_target_reward", 0.0)),
         )
     return MiniGridWrapper(
         env_id=env_id,
@@ -3826,6 +3829,26 @@ and state.step % 50000 < rollout_capacity):
                 )
             except Exception:
                 logger.exception("[eval] independent evaluator failed")
+
+        # --- Disk guard: keep <70% so ckpt save never hits ENOSPC (Stage 19:
+        # replay cold shards filled the 30G system disk twice, crashing
+        # training mid-save with a corrupt 128-byte ckpt). Cold shards are
+        # orphan data (not serialized in ckpt) — safe to delete.
+        if state.step % 5000 < rollout_capacity:
+            try:
+                _du = shutil.disk_usage(str(Path(data_dir()).resolve()))
+                if _du.used / max(_du.total, 1) > 0.70:
+                    _removed = 0
+                    for _p in (Path(data_dir()) / "replay").glob("shard_*.pkl"):
+                        try:
+                            _p.unlink()
+                            _removed += 1
+                        except OSError:
+                            pass
+                    if _removed > 0:
+                        logger.warning("[disk] cleaned %d replay shards (disk >70%% full)", _removed)
+            except Exception:
+                pass
 
         if (state.step // ckpt_every) > (max(0, state.step - rollout_capacity) // ckpt_every):
             extra: dict[str, Any] = {"preset": config.get("preset"), "run_id": run_id}

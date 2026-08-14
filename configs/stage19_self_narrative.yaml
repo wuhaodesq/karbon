@@ -62,7 +62,9 @@ env:
   action_force: 50.0
   developmental_age: 0.5              # toddler: grasping + obstacle + key-door all active
   num_envs: 1
-  num_occluders: 2                    # Stage 19: 真遮挡探针 (object_permanence); 2=250K/300K 时代环境
+  num_occluders: 2                    # Stage 19: 真遮挡探针 (object_permanence); 训练/评测一致
+occluder_trace: false               # 痕迹已弃 (950K 证明 agent 只学"找标记"不学遮挡推理)
+occluder_target_reward: 0.3         # 情境限定单目标引导: 遮挡时朝 last_known 靠近给奖励
 
 # --- LLM Fusion (disabled) ---
 llm_fusion:
@@ -273,7 +275,7 @@ intrinsic:
 replay:
   hot_capacity: 16384
   warm_capacity: 131072
-  cold_max_shards: 32
+  cold_max_shards: 6               # ~10GB cap: 30G system disk must survive (was 32 -> ENOSPC)
   cold_shard_size: 16384
   per_alpha: 0.6
   min_size_to_sample: 256
@@ -293,7 +295,7 @@ train:
   value_coef: 0.5
   gamma: 0.99
   gae_lambda: 0.95
-  total_steps: 1000000             # full training
+  total_steps: 1400000             # 1M sealed + 400K 遮挡目标引导训练
   ckpt_every_steps: 50000
 
 independent_eval:

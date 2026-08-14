@@ -76,15 +76,16 @@ def build_model(obs_shape, num_actions, model_cfg, device, n_layers):
 
 
 def measure_milestones(model, env, device, episodes=20, max_steps=300, epsilon=0.1,
-                       rule_count=0):
+                       rule_count=0, seed=42):
     """Rollout in 3D env, collect dev signals, score milestones.
 
     ``rule_count`` (from ckpt symbolic state) is passed through to the
     systematic_reasoning milestone; without it that term is always 0 and the
     milestone can never reach its 0.6 threshold (Stage 18 eval fix).
+    ``seed`` controls the rollout RNG (multi-seed eval for stability checks).
     """
     evaluator = DevelopmentalEvaluator()
-    rng = np.random.RandomState(42)
+    rng = np.random.RandomState(seed)
     all_states = []
     env._auto_reset = False  # prevent auto-reset from clearing dev signals
     for ep in range(episodes):
@@ -247,6 +248,8 @@ def main():
     ap.add_argument("--episodes", type=int, default=20)
     ap.add_argument("--max-steps", type=int, default=300)
     ap.add_argument("--epsilon", type=float, default=0.1)
+    ap.add_argument("--seed", type=int, default=42,
+                    help="rollout RNG seed (multi-seed stability eval)")
     ap.add_argument("--out", type=str, default="/root/stage18_500k_full_eval.json")
     ap.add_argument("--tasks", type=str, default="all",
                     help="comma list of curriculum task ids to evaluate, or 'all'")
@@ -266,6 +269,10 @@ def main():
             render_size=int(cfg["env"].get("render_size", 128)),
             action_force=float(action_force),
             developmental_age=float(cfg["env"].get("developmental_age", 0.5)),
+            num_occluders=int(cfg["env"].get("num_occluders", 0)),
+            # occluder_trace intentionally NOT forwarded: eval must measure
+            # true memory-based tracking without trace feedback (train/eval
+            # env parity fix, 2026-08-13).
         )
 
     env = make_env(cfg["env"].get("num_objects", 8),
@@ -308,7 +315,7 @@ def main():
               f"{spec.get('num_objects')} objects, force={spec.get('action_force')} ...")
         rep = measure_milestones(model, env, device, episodes=args.episodes,
                                  max_steps=args.max_steps, epsilon=args.epsilon,
-                                 rule_count=rule_count)
+                                 rule_count=rule_count, seed=args.seed)
         per_task[str(tid)] = {
             "tag": spec.get("tag"),
             "num_objects": spec.get("num_objects"),

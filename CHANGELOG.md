@@ -5,6 +5,57 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 19 · 收尾: 引导奖励无效, op=0.1 记录为已知瓶颈 (2026-08-14) 📋
+
+- **1.1M/1.2M/1.3M 真遮挡评测 (occluder_target_reward=0.3 引导 300K 步)**:
+  object_permanence 0.119 -> 0.089 -> 0.089 -> 0.100 —— **引导奖励完全无效**
+  (真遮挡 op 全程稳定 ~0.1); number_sense 升到 0.713 ✅
+- **根因 (已验证)**: 遮挡事件稀疏 (2 随机墙 × 8 物体, agent 很少处于
+  "刚目睹物体被墙挡"状态) + 0.3 权重稀疏奖励学不动
+- **双稳态确认**: 距离遮挡 op 在 0.51-0.56 (好态) 与 0.33 (坏态) 间摆动,
+  真遮挡 op 稳定 0.1 —— 之前 0.51 是评测口径宽松的假象
+- **停止 Stage 19 训练** (1.3M sealed), 记录:
+  - 通过: means_ends / intuitive_physics / number_sense (多次, 0.61-0.71)
+  - 未过: object_permanence (真遮挡 0.1) / ToM (0.09-0.43) / systematic (0.37)
+- **Stage 20 解决路径 (已确认)**:
+  1. 遮挡事件密集化 (occluder 2->4 + 物体频繁穿越墙后)
+  2. 物体追踪作为假设-演绎推理子任务 (推理任务自然提供练习)
+  3. 训练-评测完全一致 (真墙一致, 评测不传 reward)
+  4. 引导奖励保留 (0.3 + 密集事件 -> 可学得动)
+  5. 双稳态稳定化 (工具使用连贯性任务)
+- **基础设施修复 (本次)**: 数据重定向到数据盘 `/root/autodl-tmp/karbon/data`
+  (DEVAGI_DATA_DIR, /dev/sdb 125G 可写) + replay cold_max_shards 32->6
+  + 训练内部磁盘守卫 (>70% 清 shards) —— 30G 系统盘不再被 replay 撑爆
+
+### Stage 19 · occluder_trace 视觉痕迹反馈 (发育式干预, 2026-08-13) 🔧
+
+- **多 seed 评测确认坏态**: 800K 在 seed 42/7/123 下综合分数完全相同
+  (op 0.333 / means_ends 0.333 / physics 1.0 / number 0.625 / ToM 0.291) ——
+  非评测噪声, 策略稳定锁定"无目标行为"态; 600K 好态 (0.514/1.0) 未再现
+- **发育式干预 (B 方案)**: `three_d_world.py` 加 `occluder_trace` 参数 —
+  遮挡发生时在 last_known 地面显示黄色标记 (预埋 geom, 初始隐藏),
+  解除时隐藏; 这是"环境反馈增强" (类比物体掉落有声音), 非行为奖励植入
+- **训练/评测分离**: 训练 config 开 `occluder_trace: true`, 评测脚本
+  不传 (默认 false) —— 评测验证真实记忆追踪, 不被痕迹污染
+- **发现**: train.py env 构造从未传 num_occluders (默认 0) —— 训练环境
+  一直无真墙, config 的 occluder 数从未生效; 已修复 (传 num_occluders +
+  occluder_trace)
+- **教训**: 600K 好态 ckpt 被滚动覆盖删除 (ckpt 只保留最近几个);
+  误杀 900K 健康训练想换 600K, 结果 600K 已不在 -> 从 901K 重启
+- 验证: 标记创建/隐藏 OK; 训练 resume 901K 运行中
+
+### Stage 19 · 600K 评测: 修复验证成功, 回到健康轨迹 (2026-08-13) ✅
+
+- **600K 评测** (device bug 修复 + occluder=2 后 50K 步):
+  - means_ends 0.333->**1.0 ✅** (恢复), object_permanence 0.333->**0.514**,
+    ToM 0.291->**0.429** 全面回升
+  - **600K 与 200K 分数完全一致** (0.5135/1.0/1.0/0.35/0.4285/0.3736) ——
+    策略回到 approach 污染前的健康目标导向状态, 修复彻底
+- **number_sense 头本身完美** (acc 1.0/MAE 0.0), 评测任务内子项低是
+  环境变化 (occluder 3->2) 引起的行为不匹配, 非真实退化
+- object_permanence 0.514 是唯一活跃闸门 (差 0.086, task0 0.60 已过线);
+  决策 A: 继续观察 700K/800K 自然恢复 (参考 200K->250K 曾 0.513->0.556)
+
 ### Stage 19 · 修复叙事 device bug + 训练环境回归 occluder=2 (2026-08-13) 🔧
 
 - **叙事 device bug** (cloud_24g 切换引入): `rollout_hidden_states` 存 CPU
