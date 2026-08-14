@@ -410,6 +410,7 @@ class ThreeDWorld:
         approach_reward_weight: float = 0.0,  # 0=off (default); see 400K regression
         occluder_trace: bool = False,  # dev feedback: marker at last-known pos
         occluder_target_reward: float = 0.0,  # situational single-target guidance
+        object_crossing_every: int = 0,  # Stage 20: 物体穿越墙周期 (0=off)
     ) -> None:
         if not _mj_available:
             raise ImportError("mujoco is required for ThreeDWorld. Run: pip install mujoco")
@@ -426,6 +427,10 @@ class ThreeDWorld:
         self._approach_reward_weight = float(approach_reward_weight)
         self._occluder_trace = bool(occluder_trace)
         self._occluder_target_reward = float(occluder_target_reward)
+        self._object_crossing_every = int(object_crossing_every)
+        self._occ_signal_active: list[tuple[int, float, float]] = []  # (obj_id, lk_x, lk_y)
+        self._occ_signal_just_occluded: list[tuple[int, float, float]] = []
+        self._occ_signal_just_revealed: list[int] = []
         self._trace_geom_ids: list[int] = []  # parallel to objects
         self._rng = np.random.RandomState(seed)
 
@@ -514,6 +519,30 @@ class ThreeDWorld:
             "last_return": returns[-1] if returns else 0.0,
         }
 
+    def get_occlusion_signal(self) -> dict:
+        """Return one-step occlusion signals for the hypothesis-deduction loop.
+
+        Returns:
+            {
+              "active": [(obj_id, lk_x, lk_y), ...],   # currently occluded
+              "just_occluded": [(obj_id, lk_x, lk_y), ...],  # new this step
+              "just_revealed": [obj_id, ...],           # revealed this step
+            }
+        """
+        active = [
+            (int(k.split("_")[1]), float(v["last_known"][0]), float(v["last_known"][1]))
+            for k, v in self._active_occlusions_3d.items()
+            if v.get("truly_occluded", False)
+        ]
+        sig = {
+            "active": active,
+            "just_occluded": list(self._occ_signal_just_occluded),
+            "just_revealed": list(self._occ_signal_just_revealed),
+        }
+        self._occ_signal_just_occluded = []
+        self._occ_signal_just_revealed = []
+        return sig
+
     def close(self) -> None:
         if self._renderer is not None:
             self._renderer.close()
@@ -598,6 +627,34 @@ class ThreeDWorld:
         # --- Developmental signal tracking (Stage 8+) ---
         self._actions.append(action)
         self._track_3d_developmental_signals(dx, dy)
+
+        # --- Stage 20: object crossing (dense occlusion practice) ---
+        # Every object_crossing_every steps, mirror one random object across
+        # an occluder wall so the agent repeatedly witnesses occlusion ->
+        # reveal events (hypothesis-deduction training material).
+        if self._object_crossing_every > 0 and self._num_occluders > 0 \
+                and self._step_count % self._object_crossing_every == 0:
+            try:
+                _ci = int(self._rng.randint(0, self._num_objects))
+                _bid = self._model.body(f"obj_{_ci}").id
+                _occ_id = self._model.body(f"occluder_{int(self._rng.randint(0, self._num_occluders))}").id
+                _ocx = float(self._data.xpos[_occ_id, 0])
+                _ocy = float(self._data.xpos[_occ_id, 1])
+                _px = float(self._data.xpos[_bid, 0])
+                _py = float(self._data.xpos[_bid, 1])
+                # Mirror position across the wall (keep z)
+                self._model.body_pos[_bid] = np.array([
+                    2.0 * _ocx - _px, 2.0 * _ocy - _py,
+                    float(self._data.xpos[_bid, 2]),
+                ])
+                # Also snap any active occlusion record for this object closed
+                _key = f"occ_{_ci}"
+                if _key in self._active_occlusions_3d:
+                    _ev = self._active_occlusions_3d.pop(_key)
+                    if len(_ev["agent_traj_during_occ"]) >= 3:
+                        self._occlusion_events.append(_ev)
+            except Exception:
+                pass
 
         if done:
             # Finalize count trial: count objects within agent's awareness radius
@@ -749,6 +806,9 @@ class ThreeDWorld:
         self._object_contact_order = []
         self._contacted = set()
         self._active_occlusions_3d = {}
+        self._occ_signal_active = []
+        self._occ_signal_just_occluded = []
+        self._occ_signal_just_revealed = []
         for gid in self._trace_geom_ids:
             self._model.geom_pos[gid] = [0.0, 0.0, 100.0]
         self._prev_obj_dist = [0.0] * self._num_objects
@@ -853,6 +913,9 @@ class ThreeDWorld:
                         # Dev feedback: show ground marker at last-known pos
                         if self._occluder_trace and i < len(self._trace_geom_ids):
                             self._model.geom_pos[self._trace_geom_ids[i]] = [ox, oy, 0.01]
+                        # Stage 20: occlusion signal (hypothesis-deduction input)
+                        if truly_occluded:
+                            self._occ_signal_just_occluded.append((i, float(ox), float(oy)))
                     self._active_occlusions_3d[key]["agent_traj_during_occ"].append((ax, ay))
                 else:
                     # Object became reachable (or visible) — finalize and emit event
@@ -863,6 +926,8 @@ class ThreeDWorld:
                             self._model.geom_pos[self._trace_geom_ids[i]] = [0.0, 0.0, 100.0]
                         if len(ev["agent_traj_during_occ"]) >= 3:
                             self._occlusion_events.append(ev)
+                        # Stage 20: reveal signal (verification feedback)
+                        self._occ_signal_just_revealed.append(i)
             except Exception:
                 continue
 

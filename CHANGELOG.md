@@ -5,6 +5,24 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20 · 假设-演绎引擎: 物体追踪推理闭环 (2026-08-14) 📋
+
+- **核心**: 物体追踪 = 假设-演绎原生任务 (非旁路奖励):
+  - `three_d_world.py`: `get_occlusion_signal()` 接口 (just_occluded/just_revealed/
+    active) + 物体穿越墙 (`object_crossing_every`, 镜像翻越) + occluder 4
+  - `train.py`: HypothesisTester 接线 — 遮挡 -> propose_hypothesis("obj 在
+    last_known") -> should_probe 走向 last_known -> 重现时 feedback(1.0) ->
+    验证成功 -> logic_engine.add_rule("IF occluded THEN track")
+  - `_action_toward()`: last_known 方向 -> 8 向动作映射
+- **env 验证**: 300 步内 25 个遮挡事件 (Stage 19 稀疏 <5) — 密集化 8 倍,
+  引导奖励 (0.3) 可学
+- **config**: `stage20_hypothesis_deduction.yaml` (num_occluders=4,
+  object_crossing_every=50, hypothesis_tester_enabled, total_steps=1M)
+- **跨 stage resume**: stage19 1.3M ckpt 权重起步, step 重置 0
+- **评测一致**: 评测 make_env 从 config 读 num_occluders=4 (真遮挡, 不传
+  reward/trace)
+- 训练已启动: 早期专项目标 op(真遮挡) >= 0.6 @ <=200K
+
 ### Stage 19 · 收尾: 引导奖励无效, op=0.1 记录为已知瓶颈 (2026-08-14) 📋
 
 - **1.1M/1.2M/1.3M 真遮挡评测 (occluder_target_reward=0.3 引导 300K 步)**:

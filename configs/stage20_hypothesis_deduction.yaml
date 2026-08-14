@@ -1,0 +1,312 @@
+# Stage 20 · 假设-演绎引擎 (Hypothesis-Deduction Engine)
+# 基于 Stage 19 1.3M ckpt。核心交付: 假设->实验->反馈->规则 形式运算闭环
+#
+# 关键变化 vs Stage 19:
+# 1. 物体追踪 = 假设-演绎原生任务 (遮挡->假设->走向 last_known 验证->kanren 规则)
+# 2. env 密集遮挡: occluder 2->4 + 物体穿越墙 (object_crossing_every=50)
+# 3. HypothesisTester 接线 (train.py: propose/probe/feedback + logic rule hook)
+# 4. 训练/评测完全一致 (4 墙真遮挡, 评测不传 reward/trace)
+# 5. 早期专项 (<=200K): object_permanence 真遮挡 >= 0.6
+#
+# Stage 19 教训 (stage20_design.md §2):
+#   - 引导奖励 (0.3) 因事件稀疏无效 -> 密集化 + 推理闭环
+#   - 距离遮挡 op 0.51 是宽松假象, 真遮挡 op=0.1 才是真实能力
+
+stage: 20
+name: "stage20_hypothesis_deduction"
+
+model:
+  hidden_size: 128
+  use_hierarchical: true
+  use_hybrid_backbone: false
+  hybrid_n_layers: 7
+  hybrid_n_heads: 4
+  hybrid_swa_window: 16
+  hybrid_ttt_mini_batch: 8
+  hybrid_ffn_hidden_mult: 4
+  hybrid_dropout: 0.0
+  use_slot_attention: true
+  slot_num_slots: 7
+  slot_dim: 128
+  slot_num_iterations: 3
+  use_vision_encoder: false
+  sub_goal_every: 10
+
+# --- Stage 19: Narrative Loop (记忆->叙事->策略调制) ---
+narrative:
+  enabled: true
+  narrative_every_episodes: 10     # 每 10 episodes 生成一次身份叙事
+  symbol_bias_weight: 0.1          # kanren 动作 logit 偏置权重 (0.1 起步)
+  trait_learning_enabled: true     # 启用学习式 trait 提取 (trait_projector)
+  trait_lr: 1.0e-4
+
+# --- Developmental Memory (AutobiographicalMemory 源) ---
+# 注意: memory_manager 的创建条件是这个段 (不是 external_memory)
+# Stage 18 漏配此段 -> memory_manager 从未创建 -> IdentityNarrative 从未运行
+developmental_memory:
+  enabled: true
+  episodic_max: 10000
+  semantic_max: 1000
+  autobiographical_max: 100
+  surprise_threshold: 0.01
+  consolidation_every_steps: 50000
+
+# --- 3D Environment (MuJoCo) ---
+env:
+  id: "ThreeDWorld"
+  num_objects: 8
+  max_episode_steps: 300
+  render_size: 128
+  action_force: 50.0
+  developmental_age: 0.5              # toddler: grasping + obstacle + key-door all active
+  num_envs: 1
+  num_occluders: 4                    # Stage 20: 密集遮挡 (训练/评测一致)
+  occluder_trace: false               # 痕迹已弃
+  occluder_target_reward: 0.3         # 保留 (密集事件下可学)
+  object_crossing_every: 50           # Stage 20: 物体穿越墙周期 (密集遮挡练习)
+
+# --- LLM Fusion (disabled) ---
+llm_fusion:
+  enabled: false
+
+# --- Advanced Cognition ---
+advanced:
+  counterfactual_enabled: true
+  counterfactual_max_steps: 5
+  counterfactual_every_steps: 250
+  behavior_cloning_enabled: false
+  meta_learner_enabled: false
+  hypothesis_tester_enabled: true      # Stage 20: 遮挡->假设->验证 闭环
+  hypothesis_max: 64                   # 遮挡事件多, 更多假设容量
+  hypothesis_probe_epsilon: 0.15       # 探针频率 (低: 只在假设活跃时探)
+
+# --- Cognitive Modules ---
+cognitive:
+  symbolic_enabled: true
+  symbolic_max_rules: 64
+  symbolic_bias_weight: 0.5
+  self_model_enabled: true
+  self_model_d_model: 128              # = hidden_size (Bug E 修复)
+  self_model_hidden: 64
+  self_model_lr: 1.0e-4
+  logic_engine_enabled: true
+  logic_max_rules: 64
+  logic_max_variables: 16
+  reflection_enabled: true
+  reflection_max: 256
+  reflection_every_episodes: 10        # 与叙事同步
+
+theory_of_mind:
+  enabled: true
+
+creativity:
+  enabled: true
+  trigger_every_steps: 10000
+  divergent_generator_enabled: true
+  transformational_enabled: true
+  transformational_max: 64
+
+# --- Stage 16: Symbol Backend (kanren) ---
+symbol_backend:
+  enabled: true
+  max_facts: 512
+  max_rules: 128
+  max_resolution_steps: 200
+
+# --- Neuro-Symbolic Bridge ---
+neuro_symbolic_bridge:
+  enabled: true
+
+# --- Abstract Reasoning (IdentityNarrative 依赖此段) ---
+# Bug G 修复: Stage 19 曾缺此段 -> identity_narrative=None -> 叙事永不生成
+abstract_reasoning:
+  enabled: true
+
+# --- 3D Curriculum (加速轮转, 打破 task-3 垄断) ---
+curriculum:
+  max_tasks: 5
+  lp_window_size: 32
+  lp_min_samples: 8
+  exploration_epsilon: 0.3
+  mode: sequential
+  switch_every_steps: 20000            # Stage 18 是 50000; 20K 更快轮转
+  report_every_steps: 500
+  tasks:
+    - {id: 0, num_objects: 3,  action_force: 70.0, difficulty: 0.1, tag: "3d-sparse"}
+    - {id: 1, num_objects: 5,  action_force: 60.0, difficulty: 0.3, tag: "3d-few"}
+    - {id: 2, num_objects: 8,  action_force: 50.0, difficulty: 0.5, tag: "3d-base"}
+    - {id: 3, num_objects: 12, action_force: 45.0, difficulty: 0.7, tag: "3d-many"}
+    - {id: 4, num_objects: 16, action_force: 40.0, difficulty: 0.9, tag: "3d-crowded"}
+
+# --- Core modules (carry-forward from Stage 18) ---
+continual:
+  ewc_lambda: 50.0
+  ewc_gamma: 0.99
+  ewc_anchor_mode: "replace"
+  ewc_anchor_ema_alpha: 0.9
+  ewc_consolidate_every_steps: 50000
+  ewc_consolidate_num_batches: 32
+  ewc_batch_size: 32
+  gr_enabled: true
+  gr_latent_dim: 64
+  gr_hidden: 128
+  gr_lr: 1.0e-3
+  gr_kl_weight: 1.0
+  gr_update_every_steps: 16
+  gr_batch_size: 32
+  gr_rehearsal_batch_size: 32
+  gr_inject_every_steps: 5000
+  sleep_warmup_steps: 1000
+  sleep_replay_trim_every: 25000
+  sleep_skills_merge_every: 50000
+  sleep_ttt_distill_every: 50000
+
+core_knowledge_loss:
+  enabled: true
+  coef_object_permanence: 0.1
+  coef_intuitive_physics: 0.1
+  coef_number_sense: 0.1
+
+# --- External Memory System ---
+external_memory:
+  enabled: true
+
+  surprise_detector:
+    rnd_weight: 0.3
+    rssm_weight: 0.3
+    coverage_weight: 0.2
+    rnd_embed_dim: 128
+    rnd_hidden_dim: 256
+    rnd_lr: 1.0e-4
+    rnd_gamma: 0.99
+    surprise_threshold: 0.5
+    cooldown_steps: 100
+
+  episodic_memory:
+    capacity: 4096
+    embed_dim: 128
+    similarity_threshold: 0.7
+    lr: 1.0e-4
+
+  semantic_memory:
+    capacity: 512
+    embed_dim: 128
+    lr: 5.0e-5
+
+  procedural_memory:
+    capacity: 256
+    embed_dim: 128
+    lr: 1.0e-4
+
+# --- Causal Discovery (carry-forward) ---
+causal_discovery:
+  enabled: true
+  mode: "experience"
+  buffer_capacity: 8192
+  intervene_every: 250
+  max_edges: 512
+  min_intervention_effect: 0.005
+  min_strength: 0.005
+
+# --- Number Sense ---
+number_sense:
+  enabled: true
+  max_count: 20
+  hidden: 32
+  lr: 3.0e-4
+
+# --- Rule Induction ---
+rule_induction:
+  enabled: true
+  max_rules: 128
+  max_chain_depth: 5
+  min_confidence: 0.3
+  induction_min_positive: 3
+
+# --- Skills (carry-forward) ---
+skills:
+  skill_d_out: 128
+  skill_d_in: 128
+  skill_rank: 8
+  gpu_capacity: 256
+  cpu_capacity: 2048
+  ssd_max_shards: 64
+  ssd_shard_size: 128
+  merge_similarity_threshold: 0.9
+  score_alpha: 1.0
+  score_beta: 0.5
+  score_gamma: 0.1
+  archive_subdir: "skills"
+
+# --- World Model ---
+world_model:
+  z_dim: 32
+  h_dim: 64
+  embed_dim: 64
+  hidden: 128
+  max_rollout_steps: 10
+  kl_free_nats: 0.0
+  recon_loss_weight: 1.0
+  recon_pixel_weight: 200.0
+  next_loss_coef: 2.0
+  update_every_steps: 4
+  lr: 5.0e-4
+  wm_loss_coef: 1.0
+  log_every_steps: 2000
+
+# --- Imagination Training ---
+imagination:
+  enabled: true
+  imagination_horizon: 10
+  imagination_batch: 32
+  discount: 0.99
+  actor_entropy_scale: 0.01
+  critic_loss_scale: 0.5
+  update_every_steps: 4
+  min_replay_size: 64
+  lambda_gae: 0.95
+  lr: 3.0e-4
+
+intrinsic:
+  embed_dim: 128
+  lr: 1.0e-4
+  reward_clip: 5.0
+  reward_coef: 0.5
+  update_every_steps: 1
+
+replay:
+  hot_capacity: 16384
+  warm_capacity: 131072
+  cold_max_shards: 6               # ~10GB cap: 30G system disk must survive (was 32 -> ENOSPC)
+  cold_shard_size: 16384
+  per_alpha: 0.6
+  min_size_to_sample: 256
+  sample_every_steps: 4
+  batch_size_offpolicy: 128
+  archive_subdir: "replay"
+
+coverage:
+  num_buckets: 16384
+  log_every_steps: 10000
+
+# --- Training (full: 1M steps) ---
+train:
+  ppo_clip: 0.2
+  ppo_epochs: 4
+  entropy_coef: 0.04
+  value_coef: 0.5
+  gamma: 0.99
+  gae_lambda: 0.95
+  total_steps: 1000000             # Stage 20 独立预算: 1M 步 (早期 <=200K 专项 op)
+  ckpt_every_steps: 50000
+
+independent_eval:
+  eval_every_steps: 50000
+  eval_weights: [2.0, 1.0, 2.0]
+  episodes_per_task: 5
+  max_steps_per_ep: 200
+  eval_epsilon: 0.05
+  eval_seed: 42
+
+viz:
+  frame_every_steps: 10000

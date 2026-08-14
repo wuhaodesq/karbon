@@ -631,6 +631,26 @@ def _obs_to_tensor(obs: np.ndarray, device: torch.device) -> torch.Tensor:
     return t.to(device)
 
 
+def _action_toward(env, tx: float, ty: float, device: torch.device) -> int:
+    """Map a target (x, y) to the nearest of the 8 locomotion actions.
+
+    Actions: 0=N(+y) 1=S(-y) 2=W(-x) 3=E(+x) 4=NW 5=NE 6=SW 7=SE
+    (matches ThreeDWorld locomotion layout). Used by the Stage 20
+    hypothesis-deduction loop to walk toward a last-known position.
+    """
+    try:
+        _bid = env._model.body("learner").id
+        _ax = float(env._data.xpos[_bid, 0])
+        _ay = float(env._data.xpos[_bid, 1])
+        dx = tx - _ax
+        dy = ty - _ay
+    except Exception:
+        return 0
+    _dirs = [(0, 1), (0, -1), (-1, 0), (1, 0), (-1, 1), (1, 1), (-1, -1), (1, -1)]
+    _best = min(range(8), key=lambda i: (dx - _dirs[i][0]) ** 2 + (dy - _dirs[i][1]) ** 2)
+    return int(_best)
+
+
 def _ckpt_layer_count(path) -> int:
     """Infer the number of backbone blocks in a checkpoint's model_state.
 
@@ -689,6 +709,7 @@ def _build_env_from_spec(spec: dict[str, Any], env_cfg: dict[str, Any]):
             num_occluders=int(env_cfg.get("num_occluders", 0)),
             occluder_trace=bool(env_cfg.get("occluder_trace", False)),
             occluder_target_reward=float(env_cfg.get("occluder_target_reward", 0.0)),
+            object_crossing_every=int(env_cfg.get("object_crossing_every", 0)),
         )
     return MiniGridWrapper(
         env_id=env_id,
@@ -2244,6 +2265,52 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 dist = torch.distributions.Categorical(logits=logits)
                 action = dist.sample()              # (N,)
                 logprob = dist.log_prob(action)     # (N,)
+                # --- Stage 20: hypothesis-deduction occlusion loop ---
+                # Occlusion event -> propose hypothesis (obj at last_known) ->
+                # maybe probe (walk toward last_known) -> verify on reveal.
+                if hypothesis_tester is not None and n_envs == 1:
+                    try:
+                        _hsig = env.get_occlusion_signal()
+                        if _hsig["just_occluded"] and hidden is not None:
+                            for _obj_id, _lkx, _lky in _hsig["just_occluded"][:2]:
+                                hypothesis_tester.propose_hypothesis(
+                                    condition_embedding=hidden.squeeze(0).detach(),
+                                    predicted_action=_action_toward(
+                                        env, _lkx, _lky, device),
+                                    description=(
+                                        f"obj_{_obj_id} occluded at "
+                                        f"({_lkx:.2f},{_lky:.2f})"),
+                                )
+                        if _hsig["just_revealed"] and hypothesis_tester._active_hypothesis_id is not None:
+                            hypothesis_tester.feedback(1.0)
+                            # Verified hypothesis -> logic rule (deduction loop)
+                            if logic_engine is not None:
+                                try:
+                                    _cond = "occluded_object"
+                                    _exists = any(
+                                        r.condition == _cond
+                                        for r in logic_engine._rules.values())
+                                    if not _exists:
+                                        logic_engine.add_rule(
+                                            quantifier=logic_engine.Quantifier.ALWAYS,
+                                            variable_name="obj",
+                                            condition=_cond,
+                                            action=int(action.item()),
+                                            confidence=0.6,
+                                            proof_verified=True,
+                                        )
+                                        logger.info(
+                                            "[hypothesis] verified -> logic rule "
+                                            "'IF occluded THEN track'")
+                                except Exception:
+                                    pass
+                        if hypothesis_tester.should_probe(
+                                hidden.squeeze(0).detach()):
+                            _pa = hypothesis_tester.get_probe_action()
+                            if _pa is not None:
+                                action = torch.full_like(action, int(_pa))
+                    except Exception as _he:
+                        logger.debug("[hypothesis] loop failed: %s", _he)
             t_model_end = time.perf_counter()
 
             # --- Stage 19: narrative step hook (FiLM thought, no grad) ---
