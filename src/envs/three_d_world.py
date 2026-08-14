@@ -411,6 +411,7 @@ class ThreeDWorld:
         occluder_trace: bool = False,  # dev feedback: marker at last-known pos
         occluder_target_reward: float = 0.0,  # situational single-target guidance
         object_crossing_every: int = 0,  # Stage 20: 物体穿越墙周期 (0=off)
+        object_crossing_hold_steps: int = 0,  # Stage 20: 穿越后停在墙后步数 (0=off)
     ) -> None:
         if not _mj_available:
             raise ImportError("mujoco is required for ThreeDWorld. Run: pip install mujoco")
@@ -428,6 +429,12 @@ class ThreeDWorld:
         self._occluder_trace = bool(occluder_trace)
         self._occluder_target_reward = float(occluder_target_reward)
         self._object_crossing_every = int(object_crossing_every)
+        self._object_crossing_hold_steps = int(object_crossing_hold_steps)
+        # Objects parked behind a wall after crossing (bounded: num_objects).
+        # obj_id -> remaining hold steps; while held the object is reported
+        # as truly_occluded so the occlusion event lasts long enough for the
+        # object_permanence eval metric (end<0.7*start) to measure tracking.
+        self._crossing_hold: dict[int, int] = {}
         self._occ_signal_active: list[tuple[int, float, float]] = []  # (obj_id, lk_x, lk_y)
         self._occ_signal_just_occluded: list[tuple[int, float, float]] = []
         self._occ_signal_just_revealed: list[int] = []
@@ -636,6 +643,8 @@ class ThreeDWorld:
                 and self._step_count % self._object_crossing_every == 0:
             try:
                 _ci = int(self._rng.randint(0, self._num_objects))
+                if _ci in self._crossing_hold:
+                    _ci = int(self._rng.randint(0, self._num_objects))
                 _bid = self._model.body(f"obj_{_ci}").id
                 _occ_id = self._model.body(f"occluder_{int(self._rng.randint(0, self._num_occluders))}").id
                 _ocx = float(self._data.xpos[_occ_id, 0])
@@ -647,14 +656,33 @@ class ThreeDWorld:
                     2.0 * _ocx - _px, 2.0 * _ocy - _py,
                     float(self._data.xpos[_bid, 2]),
                 ])
-                # Also snap any active occlusion record for this object closed
-                _key = f"occ_{_ci}"
-                if _key in self._active_occlusions_3d:
-                    _ev = self._active_occlusions_3d.pop(_key)
-                    if len(_ev["agent_traj_during_occ"]) >= 3:
-                        self._occlusion_events.append(_ev)
-                    # Crossing = object re-appeared: emit reveal signal
-                    self._occ_signal_just_revealed.append(_ci)
+                # Keep the object behind the wall for hold steps so the
+                # occlusion persists long enough to be measured by the eval
+                # metric (previously the event closed within 1-2 steps and
+                # trajectories <3 points were dropped -> op measured ~0).
+                if self._object_crossing_hold_steps > 0:
+                    self._crossing_hold[_ci] = int(self._object_crossing_hold_steps)
+                    # Regenerate the occlusion record fresh (it may have
+                    # already been closed by an earlier reveal).
+                    _key = f"occ_{_ci}"
+                    if _key not in self._active_occlusions_3d:
+                        self._active_occlusions_3d[_key] = {
+                            "last_known": (2.0 * _ocx - _px, 2.0 * _ocy - _py),
+                            "agent_traj_during_occ": [(float(self._data.body("learner").xpos[0]),
+                                                       float(self._data.body("learner").xpos[1]))],
+                            "truly_occluded": True,
+                        }
+                    self._occ_signal_just_occluded.append(
+                        (_ci, 2.0 * _ocx - _px, 2.0 * _ocy - _py))
+                else:
+                    # Legacy instant-crossing: snap any active occlusion record
+                    _key = f"occ_{_ci}"
+                    if _key in self._active_occlusions_3d:
+                        _ev = self._active_occlusions_3d.pop(_key)
+                        if len(_ev["agent_traj_during_occ"]) >= 3:
+                            self._occlusion_events.append(_ev)
+                        # Crossing = object re-appeared: emit reveal signal
+                        self._occ_signal_just_revealed.append(_ci)
             except Exception:
                 pass
 
@@ -808,6 +836,7 @@ class ThreeDWorld:
         self._object_contact_order = []
         self._contacted = set()
         self._active_occlusions_3d = {}
+        self._crossing_hold = {}
         self._occ_signal_active = []
         self._occ_signal_just_occluded = []
         self._occ_signal_just_revealed = []
@@ -899,13 +928,23 @@ class ThreeDWorld:
                 ox = float(self._data.xpos[body_id, 0])
                 oy = float(self._data.xpos[body_id, 1])
                 dist = ((ax - ox)**2 + (ay - oy)**2) ** 0.5
-                # True occlusion: line of sight blocked by an occluder wall.
-                # Falls back to distance-only (>0.8) when no occluders exist
-                # (backward compatible with pre-Stage-19 behavior).
-                truly_occluded = self._line_of_sight_blocked(ax, ay, ox, oy)
+                # Stage 20: a crossing object parked behind the wall stays
+                # "truly_occluded" for its remaining hold steps so the event
+                # persists (eval op metric needs a multi-step trajectory).
+                key = f"occ_{i}"
+                held = self._crossing_hold.get(i, 0)
+                if held > 0:
+                    truly_occluded = True
+                    if held <= 1:
+                        # Last held step: park ends -> object re-appears
+                        self._crossing_hold.pop(i, None)
+                        self._occ_signal_just_revealed.append(i)
+                    else:
+                        self._crossing_hold[i] = held - 1
+                else:
+                    truly_occluded = self._line_of_sight_blocked(ax, ay, ox, oy)
                 if (truly_occluded or self._num_occluders == 0) and dist > 0.8:
                     # Track per-object trajectory over multiple steps
-                    key = f"occ_{i}"
                     if key not in self._active_occlusions_3d:
                         self._active_occlusions_3d[key] = {
                             "last_known": (ox, oy),

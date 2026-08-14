@@ -710,6 +710,7 @@ def _build_env_from_spec(spec: dict[str, Any], env_cfg: dict[str, Any]):
             occluder_trace=bool(env_cfg.get("occluder_trace", False)),
             occluder_target_reward=float(env_cfg.get("occluder_target_reward", 0.0)),
             object_crossing_every=int(env_cfg.get("object_crossing_every", 0)),
+            object_crossing_hold_steps=int(env_cfg.get("object_crossing_hold_steps", 0)),
         )
     return MiniGridWrapper(
         env_id=env_id,

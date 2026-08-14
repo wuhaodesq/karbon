@@ -62,8 +62,9 @@ env:
   num_envs: 1
   num_occluders: 4                    # Stage 20: 密集遮挡 (训练/评测一致)
   occluder_trace: false               # 痕迹已弃
-  occluder_target_reward: 0.3         # 保留 (密集事件下可学)
+  occluder_target_reward: 1.0         # 遮挡期间朝 last_known 的 PPO 梯度 (600K 观测: 0.3 太弱)
   object_crossing_every: 50           # Stage 20: 物体穿越墙周期 (密集遮挡练习)
+  object_crossing_hold_steps: 8       # 穿越后停墙后 8 步: 遮挡持续, op 评测可测
 
 # --- LLM Fusion (disabled) ---
 llm_fusion:
