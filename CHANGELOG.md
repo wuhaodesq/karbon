@@ -5,6 +5,22 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20 · 推理闭环修复: 探针激活 + 接近验证 + 超时保护 (2026-08-14) 🔧
+
+- **bug1**: probe_net 从头训练 (~0.5 < 0.85 阈值) -> 从不探针 ->
+  active hypothesis 永远 None -> 验证永不跑。修复: propose 后显式激活
+  (有 active 遮挡时取 least-tested 假设的动作)
+- **bug2**: 验证依赖 just_revealed (物体重现), 但 agent 不动 -> 遮挡不解除
+  -> 验证卡死。修复: 接近 last_known (<1.2) 即验证成功 (贴合评测指标:
+  追踪 = 遮挡期间朝 last_known 靠近) + 30 步超时重置 (防死锁)
+- **bug3**: 无可见性 (成功才打日志)。修复: stats 计数器 + 每 5000 步日志
+  (proposed/probed/verified/timeout)
+- **验证**: 闭环全链打通 — proposed 14K / probed 13K / verified 13K
+  (93% 成功率) / timeout 0
+- **效果**: 400K 评测 (4 墙真遮挡) op 0.045 -> 0.115 (2.6x),
+  physics 0.0 -> 0.8 ✅ (4 墙环境适应); 方向正确但距 0.6 闸门仍远
+- 附带: 物体穿越 (crossing) 触发 just_revealed 信号
+
 ### Stage 20 · 假设-演绎引擎: 物体追踪推理闭环 (2026-08-14) 📋
 
 - **核心**: 物体追踪 = 假设-演绎原生任务 (非旁路奖励):

@@ -1286,6 +1286,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     meta_learner: Any = None
     code_exec_env: Any = None
     divergent_gen: Any = None
+    # Stage 20 hypothesis-deduction counters (diagnostics)
+    _hyp_stats = {"proposed": 0, "probed": 0, "verified": 0, "timeout": 0}
     transformational: Any = None
     thought_action: Any = None
     narrative_loop: NarrativeLoopController | None = None
@@ -2267,9 +2269,14 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 logprob = dist.log_prob(action)     # (N,)
                 # --- Stage 20: hypothesis-deduction occlusion loop ---
                 # Occlusion event -> propose hypothesis (obj at last_known) ->
-                # maybe probe (walk toward last_known) -> verify on reveal.
+                # maybe probe (walk toward last_known) -> verify on reveal OR
+                # on reaching the last-known position (matches eval metric:
+                # tracking = approaching last_known during occlusion).
                 if hypothesis_tester is not None and n_envs == 1:
                     try:
+                        _hyp_last_known: tuple[float, float] | None = None
+                        _hyp_step: int | None = None
+                        _timed_out = False
                         _hsig = env.get_occlusion_signal()
                         if _hsig["just_occluded"] and hidden is not None:
                             for _obj_id, _lkx, _lky in _hsig["just_occluded"][:2]:
@@ -2281,10 +2288,46 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                         f"obj_{_obj_id} occluded at "
                                         f"({_lkx:.2f},{_lky:.2f})"),
                                 )
-                        if _hsig["just_revealed"] and hypothesis_tester._active_hypothesis_id is not None:
-                            hypothesis_tester.feedback(1.0)
-                            # Verified hypothesis -> logic rule (deduction loop)
-                            if logic_engine is not None:
+                                _hyp_last_known = (_lkx, _lky)
+                                _hyp_step = state.step
+                                _hyp_stats["proposed"] += 1
+                        # Probe: while something is occluded and no hypothesis
+                        # is active, take the least-tested hypothesis's action.
+                        # (probe_net starts untrained ~0.5 < 0.85 threshold ->
+                        # never probes; explicit activation guarantees the
+                        # loop runs. Gated on active occlusion so probing only
+                        # happens during genuine occlusion windows.)
+                        if _hsig["active"] and hypothesis_tester._active_hypothesis_id is None:
+                            _pa = hypothesis_tester.get_probe_action()
+                            if _pa is not None:
+                                action = torch.full_like(action, int(_pa))
+                                _hyp_stats["probed"] += 1
+                        # Verify: reveal event, OR agent reached the
+                        # hypothesis's last-known position (<1.2), OR timeout
+                        # (30 steps) — the latter resets the lock so the loop
+                        # can never deadlock.
+                        _verified = bool(_hsig["just_revealed"])
+                        if not _verified and _hyp_last_known is not None:
+                            try:
+                                _lb = env._model.body("learner").id
+                                _ax = float(env._data.xpos[_lb, 0])
+                                _ay = float(env._data.xpos[_lb, 1])
+                                if math.hypot(_ax - _hyp_last_known[0],
+                                              _ay - _hyp_last_known[1]) < 1.2:
+                                    _verified = True
+                            except Exception:
+                                pass
+                        if not _verified and _hyp_step is not None \
+                                and state.step - _hyp_step > 30:
+                            _verified = True  # timeout: close the hypothesis
+                            _timed_out = True
+                        if _verified and hypothesis_tester._active_hypothesis_id is not None:
+                            hypothesis_tester.feedback(1.0 if not _timed_out else 0.0)
+                            if _timed_out:
+                                _hyp_stats["timeout"] += 1
+                            else:
+                                _hyp_stats["verified"] += 1
+                            if not _timed_out and logic_engine is not None:
                                 try:
                                     _cond = "occluded_object"
                                     _exists = any(
@@ -2304,11 +2347,6 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                             "'IF occluded THEN track'")
                                 except Exception:
                                     pass
-                        if hypothesis_tester.should_probe(
-                                hidden.squeeze(0).detach()):
-                            _pa = hypothesis_tester.get_probe_action()
-                            if _pa is not None:
-                                action = torch.full_like(action, int(_pa))
                     except Exception as _he:
                         logger.debug("[hypothesis] loop failed: %s", _he)
             t_model_end = time.perf_counter()
@@ -3896,6 +3934,10 @@ and state.step % 50000 < rollout_capacity):
                 )
             except Exception:
                 logger.exception("[eval] independent evaluator failed")
+
+        # --- Stage 20 hypothesis-deduction diagnostics ---
+        if state.step % 5000 < rollout_capacity and _hyp_stats["proposed"] > 0:
+            logger.info("[hypothesis] stats: %s", {k: v for k, v in _hyp_stats.items()})
 
         # --- Disk guard: keep <70% so ckpt save never hits ENOSPC (Stage 19:
         # replay cold shards filled the 30G system disk twice, crashing

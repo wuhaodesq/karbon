@@ -653,6 +653,8 @@ class ThreeDWorld:
                     _ev = self._active_occlusions_3d.pop(_key)
                     if len(_ev["agent_traj_during_occ"]) >= 3:
                         self._occlusion_events.append(_ev)
+                    # Crossing = object re-appeared: emit reveal signal
+                    self._occ_signal_just_revealed.append(_ci)
             except Exception:
                 pass
 
