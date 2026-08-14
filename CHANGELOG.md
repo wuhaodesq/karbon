@@ -5,6 +5,20 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20 · 评测有效性修复: 遮挡持留 + 奖励强化 (2026-08-15) 🔧
+
+- **根因**: op 600K=0.0 非退化——评测度量需要多步遮挡轨迹
+  (end<0.7*start), 但 crossing 把物体瞬间 teleport 过墙 → 事件 1-2 步
+  结束 → 轨迹 <3 点被丢弃 → op 测 ~0 (400K 的 0.115 是 chance 波动)
+- **fix1**: `object_crossing_hold_steps=8` — 穿越后物体停在墙后 8 步,
+  期间强制 truly_occluded, 遮挡持续可测; reveal 信号在 hold 结束时发
+- **fix2**: `occluder_target_reward` 0.3 → 1.0 — 遮挡期间朝 last_known
+  的 PPO 梯度显著化 (0.3 相对 intrinsic 太弱)
+- **验证**: 修复后 651K ckpt 12 eps 事件 6→19 (全有效轨迹), 
+  op 测得真实能力 ~0.05 (修复前真能力被噪声掩盖)
+- **状态**: 训练从 651K 恢复 (train_s20b.log), 评测链 v2 只跑 800K/1M
+- 附带: 远端 reflection device-mismatch 警告为既有问题 (与本次无关)
+
 ### Stage 20 · 推理闭环修复: 探针激活 + 接近验证 + 超时保护 (2026-08-14) 🔧
 
 - **bug1**: probe_net 从头训练 (~0.5 < 0.85 阈值) -> 从不探针 ->
