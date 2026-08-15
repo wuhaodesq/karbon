@@ -5,6 +5,21 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20c · 塑形解锁 op 冷启动 (2026-08-15) 🧭
+
+- **背景**: 20b 纯 focus (只留距离差 occluder 奖励) 训练 300K 步 (1100K-1300K)
+  评测 op 恒为 0 —— 机制验证: agent 从不朝 last_known 移动 (random walk 单调
+  远离), 距离差奖励 `dist<prev` 永不成立 → 零梯度陷阱; 且 occluder_trace=false
+  (评测一致性) 使 agent 纯靠 RNN 记忆 8 物体位置, 冷启动失败
+- **方案**: `occluder_shaping_weight=0.3` — 遮挡窗口内奖励朝 last_known 方向的
+  速度分量 (dot>0)。密集即时, 不依赖 agent 已靠近, 教 "物体消失→走向它最后
+  位置"; 只用 pre-occlusion 记忆 (last_known), 无评测实体信息泄露
+- **架构**: `_occluder_only_reward()` 内新增塑形分量, 与距离差并存; focus 锁
+  不变; 评测 make_env 不读塑造参数, 评测纯净
+- **config**: 同一 `stage20b_focus_op.yaml` 增 `occluder_shaping_weight`
+- **验证**: pytest (含 env 相关) + check-bounds 通过
+- **状态**: 从 1300K ckpt 续训, 1400K 评测验证塑形是否催生 op 梯度
+
 ### Stage 20b · 课程固化: 专训物体恒存 (2026-08-15) 🎯
 
 - **背景**: S18/S19/S20 连续三 stage 卡 op 瓶颈 800K op=0.11 -> 1M op=0
