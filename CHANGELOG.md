@@ -5,6 +5,22 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20c · 根因修复: occluder 奖励从未生效 (import math) 🔥 (2026-08-15)
+
+- **根因** (op 瓶颈的真正症结): `three_d_world.py` 从未 `import math`,
+  而 `_occluder_only_reward` 与 occluder_target_reward 用 `math.hypot`
+  → 每次调用抛 `NameError: name 'math' is not defined`, 被裸 `except`
+  吞掉恒定返回 0.0。**该奖励自 Stage 20 起从未给过任何梯度**
+  (0.3→1.0 的强化/20b 聚焦/20c 塑形全部默默无效)
+- **证据链**: 模块顶部字节码/源码一致; 诊断脚本自行 import math 才"成功"
+  (掩盖真相); 把 except 改成打印 traceback 后立刻暴露 NameError。
+  800K op=0.11 是 means_ends 接近行为恰好经过 last_known 的巧合,
+  不是奖励驱动的学习
+- **修复**: 模块顶部 `import math` (1 行). 远端验证: `_occluder_only_reward`
+  OFFICIAL 由 0.0000 → 0.3003 (塑形真给梯度)
+- **状态**: 已 push (`8b6c818`). 训练从 1301K ckpt 重启 (pid 882822),
+  这是 focus 锁 + 距离差(1.5) + 塑形(0.3) 三者首次真正生效的训练
+
 ### Stage 20c · 塑形解锁 op 冷启动 (2026-08-15) 🧭
 
 - **背景**: 20b 纯 focus (只留距离差 occluder 奖励) 训练 300K 步 (1100K-1300K)
