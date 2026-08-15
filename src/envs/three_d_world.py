@@ -412,6 +412,7 @@ class ThreeDWorld:
         occluder_target_reward: float = 0.0,  # situational single-target guidance
         object_crossing_every: int = 0,  # Stage 20: 物体穿越墙周期 (0=off)
         object_crossing_hold_steps: int = 0,  # Stage 20: 穿越后停在墙后步数 (0=off)
+        focus_op_only: bool = False,  # Stage 20b: 课程固化 - 封闭其他目标, 专训 op
     ) -> None:
         if not _mj_available:
             raise ImportError("mujoco is required for ThreeDWorld. Run: pip install mujoco")
@@ -430,6 +431,7 @@ class ThreeDWorld:
         self._occluder_target_reward = float(occluder_target_reward)
         self._object_crossing_every = int(object_crossing_every)
         self._object_crossing_hold_steps = int(object_crossing_hold_steps)
+        self._focus_op_only = bool(focus_op_only)
         # Objects parked behind a wall after crossing (bounded: num_objects).
         # obj_id -> remaining hold steps; while held the object is reported
         # as truly_occluded so the occlusion event lasts long enough for the
@@ -1256,6 +1258,31 @@ class ThreeDWorld:
             pass
         return bonus
 
+    def _occluder_only_reward(self) -> float:
+        """Stage 20b: reward ONLY occlusion tracking (object permanence).
+
+        Mirrors the occluder_target_reward block: while an object is in
+        ``_active_occlusions_3d`` the agent is rewarded for reducing the
+        distance to that object's last-known position. Used in focus_op_only
+        mode so means-ends / mobility rewards cannot crowd it out.
+        """
+        if self._occluder_target_reward <= 0.0:
+            return 0.0
+        try:
+            ax = float(self._data.body("learner").xpos[0])
+            ay = float(self._data.body("learner").xpos[1])
+            r = 0.0
+            for key, occ in list(self._active_occlusions_3d.items()):
+                lk = occ["last_known"]
+                dist = math.hypot(ax - lk[0], ay - lk[1])
+                prev = occ.get("prev_agent_dist", dist)
+                occ["prev_agent_dist"] = dist
+                if dist < prev:
+                    r += (prev - dist) * self._occluder_target_reward
+            return float(r)
+        except Exception:
+            return 0.0
+
     def _compute_reward(self, action: int = -1) -> float:
         """Multi-component reward.
 
@@ -1265,6 +1292,24 @@ class ThreeDWorld:
         - Chain task: goal-directed bonus (when dev_age > 0.3)
         """
         reward = 0.0
+
+        # --- Stage 20b curriculum lock: focus ONLY on object permanence ---
+        # While enabled, every non-op reward component is gated off so the
+        # ONLY meaningful extrinsic gradient is approaching last_known during
+        # occlusion (occluder_target_reward). Means-ends / object mobility /
+        # contact / caregiver rewards are frozen; the agent still gets
+        # intrinsic curiosity, so behavior doesn't collapse, but the policy
+        # can no longer trade op against them.
+        if self._focus_op_only:
+            reward = self._occluder_only_reward()
+            reward = max(0.0, min(5.0, reward))
+            # Chain task & logic bonus stay so hypothesis-deduction circuits
+            # keep a thin extrinsic tie to the loop (not a competing goal).
+            if self._dev_age > 0.3:
+                reward += self._update_chain_task(0.0, 0.0)
+            if self._logic_bonus_action is not None and action >= 0 and action % 8 == self._logic_bonus_action:
+                reward += self._logic_bonus_weight
+            return float(max(0.0, min(10.0, reward)))
 
         # Object movement reward
         for i in range(self._model.ngeom):

@@ -5,6 +5,20 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20b · 课程固化: 专训物体恒存 (2026-08-15) 🎯
+
+- **背景**: S18/S19/S20 连续三 stage 卡 op 瓶颈 800K op=0.11 -> 1M op=0
+  (means_ends 0.01 -> 1.00) —— 目标是奖励竞争而非训练技巧
+- **方案**: `focus_op_only` env 开关 — 训练时封闭 means_ends/物体移动/
+  接触/caregiver 等全部非-op extrinsic 回报, 唯一剩余 extrinsic 梯度 =
+  occluder_target_reward (1.0 -> 1.5)。intrinsic 好奇保留 (探索燃料),
+  PPO 对 intrinsic 的梯度是探索性的, 不构成目标竞争
+- **架构**: `_occluder_only_reward()` 抽取遮挡追踪奖励; 评测侧不受影响
+  (make_env 不读 focus 参数, 评测纯净)
+- **config**: `stage20b_focus_op.yaml` (新, stage20 派生, 1M 独立预算)
+- **验证**: pytest + check-bounds 通过
+- **状态**: 从 1M ckpt 恢复, op 到 0.6 后再开放多目标 (Stage 20c)
+
 ### Stage 20 · 评测有效性修复: 遮挡持留 + 奖励强化 (2026-08-15) 🔧
 
 - **根因**: op 600K=0.0 非退化——评测度量需要多步遮挡轨迹
