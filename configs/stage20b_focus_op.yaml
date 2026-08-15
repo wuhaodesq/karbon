@@ -57,8 +57,9 @@ env:
   developmental_age: 0.5              # toddler: grasping + obstacle + key-door all active
   num_envs: 1
   num_occluders: 4                    # 训练/评测一致 (真遮挡)
-  occluder_trace: false               # 痕迹已弃
-  occluder_target_reward: 1.5         # 唯一 extrinsic 信号 (focus 模式下可更强)
+  occluder_trace: false               # 痕迹已弃 (评测一致性: 训练也不给 marker)
+  occluder_target_reward: 1.5         # 遮挡时逼近 last_known 的距离差奖励
+  occluder_shaping_weight: 0.3        # Stage 20c: 朝 last_known 方向速度分量的塑形奖励
   object_crossing_every: 50           # 物体穿越墙周期 (密集遮挡练习)
   object_crossing_hold_steps: 8       # 遮挡持续 8 步, op 评测可测
   focus_op_only: true                 # Stage 20b: 封闭 means_ends/物体操控, 专训 op

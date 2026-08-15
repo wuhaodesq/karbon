@@ -410,6 +410,7 @@ class ThreeDWorld:
         approach_reward_weight: float = 0.0,  # 0=off (default); see 400K regression
         occluder_trace: bool = False,  # dev feedback: marker at last-known pos
         occluder_target_reward: float = 0.0,  # situational single-target guidance
+        occluder_shaping_weight: float = 0.0,  # Stage 20c: direction-to-last-known shaping
         object_crossing_every: int = 0,  # Stage 20: 物体穿越墙周期 (0=off)
         object_crossing_hold_steps: int = 0,  # Stage 20: 穿越后停在墙后步数 (0=off)
         focus_op_only: bool = False,  # Stage 20b: 课程固化 - 封闭其他目标, 专训 op
@@ -429,6 +430,7 @@ class ThreeDWorld:
         self._approach_reward_weight = float(approach_reward_weight)
         self._occluder_trace = bool(occluder_trace)
         self._occluder_target_reward = float(occluder_target_reward)
+        self._occluder_shaping_weight = float(occluder_shaping_weight)
         self._object_crossing_every = int(object_crossing_every)
         self._object_crossing_hold_steps = int(object_crossing_hold_steps)
         self._focus_op_only = bool(focus_op_only)
@@ -1265,8 +1267,14 @@ class ThreeDWorld:
         ``_active_occlusions_3d`` the agent is rewarded for reducing the
         distance to that object's last-known position. Used in focus_op_only
         mode so means-ends / mobility rewards cannot crowd it out.
+
+        Stage 20c: optional direction shaping — reward velocity components
+        pointing toward ``last_known``. Denser than pure distance reduction
+        (which needs the agent to already be approaching), so the policy
+        learns "object disappeared -> move where it was" faster. Uses only
+        last_known (pre-occlusion memory); no eval-only information leaks.
         """
-        if self._occluder_target_reward <= 0.0:
+        if self._occluder_target_reward <= 0.0 and self._occluder_shaping_weight <= 0.0:
             return 0.0
         try:
             ax = float(self._data.body("learner").xpos[0])
@@ -1279,6 +1287,20 @@ class ThreeDWorld:
                 occ["prev_agent_dist"] = dist
                 if dist < prev:
                     r += (prev - dist) * self._occluder_target_reward
+                if self._occluder_shaping_weight > 0.0:
+                    dx, dy = lk[0] - ax, lk[1] - ay
+                    dlen = math.hypot(dx, dy)
+                    if dlen > 1e-6:
+                        # learner velocity toward last_known (component)
+                        bid = self._model.body("learner").id
+                        dof = self._model.body_dofadr[bid]
+                        if dof >= 0:
+                            vx = float(self._data.qvel[dof])
+                            vy = float(self._data.qvel[dof + 1])
+                            vlen = math.hypot(vx, vy) + 1e-9
+                            dot = (vx * dx + vy * dy) / (vlen * dlen)
+                            if dot > 0.0:
+                                r += dot * self._occluder_shaping_weight
             return float(r)
         except Exception:
             return 0.0
