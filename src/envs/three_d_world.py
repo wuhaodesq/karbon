@@ -428,6 +428,8 @@ class ThreeDWorld:
         occluder_trace: bool = False,  # dev feedback: marker at last-known pos
         occluder_target_reward: float = 0.0,  # situational single-target guidance
         occluder_shaping_weight: float = 0.0,  # Stage 20c: direction-to-last-known shaping
+        occluder_reveal_bonus: float = 0.0,  # Stage 20d: 揭示归因奖励 (找到=因果)
+        occluder_reveal_ratio: float = 0.7,  # Stage 20d: 归因阈值 end_d < ratio*start_d
         object_crossing_every: int = 0,  # Stage 20: 物体穿越墙周期 (0=off)
         object_crossing_hold_steps: int = 0,  # Stage 20: 穿越后停在墙后步数 (0=off)
         focus_op_only: bool = False,  # Stage 20b: 课程固化 - 封闭其他目标, 专训 op
@@ -448,6 +450,14 @@ class ThreeDWorld:
         self._occluder_trace = bool(occluder_trace)
         self._occluder_target_reward = float(occluder_target_reward)
         self._occluder_shaping_weight = float(occluder_shaping_weight)
+        self._occluder_reveal_bonus = float(occluder_reveal_bonus)
+        self._occluder_reveal_ratio = float(occluder_reveal_ratio)
+        # Stage 20d: reveal-attribution bonus pending delivery to the next
+        # reward step (capacity 1 float, consumed once in _occluder_only_reward).
+        # Reveals are detected in _track_3d_developmental_signals (which runs
+        # AFTER reward), so the bonus is attributed one step later — a 1-frame
+        # delay, invisible to PPO's GAE.
+        self._reveal_bonus_pending = 0.0
         self._object_crossing_every = int(object_crossing_every)
         self._object_crossing_hold_steps = int(object_crossing_hold_steps)
         self._focus_op_only = bool(focus_op_only)
@@ -959,6 +969,7 @@ class ThreeDWorld:
                     if held <= 1:
                         # Last held step: park ends -> object re-appears
                         self._crossing_hold.pop(i, None)
+                        self._maybe_reveal_bonus(key)
                         self._occ_signal_just_revealed.append(i)
                     else:
                         self._crossing_hold[i] = held - 1
@@ -983,6 +994,7 @@ class ThreeDWorld:
                     # Object became reachable (or visible) — finalize and emit event
                     key = f"occ_{i}"
                     if key in self._active_occlusions_3d:
+                        self._maybe_reveal_bonus(key)
                         ev = self._active_occlusions_3d.pop(key)
                         if self._occluder_trace and i < len(self._trace_geom_ids):
                             self._model.geom_pos[self._trace_geom_ids[i]] = [0.0, 0.0, 100.0]
@@ -1007,6 +1019,37 @@ class ThreeDWorld:
                     self._object_contact_order.append(i)
             except Exception:
                 continue  # legit: per-object loop, obj_ may be gone
+
+    def _maybe_reveal_bonus(self, key: str) -> None:
+        """Stage 20d: attribute a large bonus when an occlusion REVEALS.
+
+        The causal frame the dense distance/shaping rewards cannot teach:
+        "I tracked the hidden object and it reappeared where I was looking."
+        Mirrors the eval op metric exactly (end_d < ratio*start_d and >= 3
+        trajectory points), so the training signal is the same quantity the
+        eval measures — a true success attribution, not a shortcut.
+
+        Delivery: sets a single pending float (capacity 1) consumed by the
+        NEXT call to _occluder_only_reward (reveals fire after reward in the
+        step's signal tracking). 1-frame delay is invisible to PPO's GAE.
+        """
+        if self._occluder_reveal_bonus <= 0.0:
+            return
+        ev = self._active_occlusions_3d.get(key)
+        if not ev:
+            return
+        traj = ev.get("agent_traj_during_occ")
+        if not traj or len(traj) < 3:
+            return  # same validity gate as the eval metric
+        lk = ev["last_known"]
+        ax = float(self._data.body("learner").xpos[0])
+        ay = float(self._data.body("learner").xpos[1])
+        sx, sy = traj[0]
+        d0 = math.hypot(sx - lk[0], sy - lk[1])
+        d_now = math.hypot(ax - lk[0], ay - lk[1])
+        if d0 >= 1e-6 and d_now < self._occluder_reveal_ratio * d0:
+            self._reveal_bonus_pending = max(
+                self._reveal_bonus_pending, self._occluder_reveal_bonus)
 
     def _line_of_sight_blocked(
         self, ax: float, ay: float, ox: float, oy: float,
@@ -1295,9 +1338,11 @@ class ThreeDWorld:
         if self._occluder_target_reward <= 0.0 and self._occluder_shaping_weight <= 0.0:
             return 0.0
         try:
+            bonus = self._reveal_bonus_pending  # Stage 20d: reveal attribution
+            self._reveal_bonus_pending = 0.0    # consumed once
             ax = float(self._data.body("learner").xpos[0])
             ay = float(self._data.body("learner").xpos[1])
-            r = 0.0
+            r = bonus
             for key, occ in list(self._active_occlusions_3d.items()):
                 lk = occ["last_known"]
                 dist = math.hypot(ax - lk[0], ay - lk[1])

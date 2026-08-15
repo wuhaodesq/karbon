@@ -713,6 +713,8 @@ def _build_env_from_spec(spec: dict[str, Any], env_cfg: dict[str, Any]):
             object_crossing_hold_steps=int(env_cfg.get("object_crossing_hold_steps", 0)),
             focus_op_only=bool(env_cfg.get("focus_op_only", False)),
             occluder_shaping_weight=float(env_cfg.get("occluder_shaping_weight", 0.0)),
+            occluder_reveal_bonus=float(env_cfg.get("occluder_reveal_bonus", 0.0)),
+            occluder_reveal_ratio=float(env_cfg.get("occluder_reveal_ratio", 0.7)),
         )
     return MiniGridWrapper(
         env_id=env_id,

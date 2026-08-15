@@ -60,6 +60,8 @@ env:
   occluder_trace: false               # 痕迹已弃 (评测一致性: 训练也不给 marker)
   occluder_target_reward: 1.5         # 遮挡时逼近 last_known 的距离差奖励
   occluder_shaping_weight: 0.3        # Stage 20c: 朝 last_known 方向速度分量的塑形奖励
+  occluder_reveal_bonus: 1.0          # Stage 20d: 揭示归因奖励 (成功追踪=大额因果)
+  occluder_reveal_ratio: 0.7          # Stage 20d: 归因阈值 end_d < 0.7*start_d (与评测一致)
   object_crossing_every: 50           # 物体穿越墙周期 (密集遮挡练习)
   object_crossing_hold_steps: 8       # 遮挡持续 8 步, op 评测可测
   focus_op_only: true                 # Stage 20b: 封闭 means_ends/物体操控, 专训 op

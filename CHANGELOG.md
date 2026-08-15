@@ -5,6 +5,24 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20d · reveal 归因奖励: 给"成功追踪"显式因果 (2026-08-15) 🎯
+
+- **背景**: 1500K 评测 op=0.05 与 1400K 一模一样 → 奖励通路已通
+  (diag 0.30 实测) 但 200K 步零增长。诊断: 随机遮挡目标 (20 选 1)
+  + 随机行走奖励陷阱 (dist/dot 触发率 ~50%, 正负对称) + 缺归因帧
+  (8 步 hold 揭示时无"找到"奖励) → 稠密随机信号淹没过因果信号
+- **方案**: `occluder_reveal_bonus=1.0` — 遮挡揭示瞬间若
+  `end_d < 0.7*start_d` 且轨迹 ≥3 点 → 发大额归因奖励。度量子与
+  评测 op 指标完全同构 (同一 quantity), 纯训练信号, 评测 make_env
+  不读任何 occluder 参数 (已验证只转发 num_occluders)
+- **架构**: `_maybe_reveal_bonus(key)` 挂在两条 reveal 路径 (hold
+  结束 / 物体变可见); 通过 `_reveal_bonus_pending` (容量 1 浮点)
+  延迟 1 帧交给 `_occluder_only_reward` 消费 (读取后清零, 一次);
+  与距离差/塑形并存, focus 锁不变
+- **验证**: 远端 pytest 4/4 (归因/不归因/短轨迹/关闭开关); 本地
+  py_compile; check-bounds 无新结构
+- **状态**: 从最新 ckpt 重启, 1600K 评测验证归因是否破对称性
+
 ### Stage 20c · 关键路径异常暴露改造 (2026-08-15) 🛡️
 
 - **背景**: import math 灾祸证明"裸 except 静默吞错"= 慢性毒药 ——
