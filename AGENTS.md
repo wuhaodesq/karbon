@@ -241,3 +241,34 @@ it incorrectly — don't add compensating hacks elsewhere.** Ask:
 The same philosophy applies to all the Stage 11 bugs — each was solved by
 finding the exact line where the contract was violated, not by adding
 workarounds.
+
+## 14. Stage 20c lesson / 教训 — 关键路径绝不静默吞异常
+
+The op bottleneck (occluder reward dead for three stages) was caused by a
+single swallowed exception: the module never `import math`, so
+`math.hypot` raised `NameError` on EVERY call, and a bare
+`except Exception: return 0.0` turned it into "reward always 0".
+Every "verification" script "passed" because the diagnostic script
+itself had imported math — silent swallowing actively hid the truth.
+
+**Rule / 铁律:**
+
+1. **Never silently swallow exceptions on critical paths.** Reward
+   computation, occlusion/event generation, observation construction
+   (`_proprio`), and the training loop must expose errors. Use
+   `_expose_exc("where")` in `three_d_world.py` (prints full traceback,
+   still returns the safe fallback so training survives) — a loud log
+   line beats a silent `return 0.0`.
+2. **Bare `except: pass / continue / return 0` is only allowed for
+   per-object loop tolerance** where the exception source is expected
+   (a body may not exist) — and it MUST carry a `# legit: ...` comment
+   explaining why it is safe. Anything else gets `_expose_exc`.
+3. **When a diagnostic script "works" but production doesn't**, check
+   what the script imports that the module doesn't. A diagnostic that
+   changes the module's global namespace is lying to you.
+4. **Every new `try/except` must answer**: *what is the expected
+   exception here, and if it happens, who sees it?* If the answer is
+   "nobody", rewrite the code.
+5. `check_bounded.py` is not the only guard — grep for bare
+   `except Exception` on critical paths before committing changes to
+   envs/training code.

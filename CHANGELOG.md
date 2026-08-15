@@ -5,6 +5,23 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20c · 关键路径异常暴露改造 (2026-08-15) 🛡️
+
+- **背景**: import math 灾祸证明"裸 except 静默吞错"= 慢性毒药 ——
+  检查点丢失/奖励失效可以默默存在三个 Stage。
+  回填: 关键路径 (奖励计算/遮挡事件生成/观测构造/穿越 teleport)
+  全部改为 `_expose_exc(where)` (打印完整 traceback + 安全回退,
+  训练不崩但日志可见); per-object 循环容错保留但必须带 `# legit:`
+  注释说明为何安全
+- **改造范围** (three_d_world.py): `_occluder_only_reward`,
+  `occluder_target_reward`, contact/caregiver/approach 奖励, crossing
+  teleport, `_proprio`, `_sync_held_object`, `_contact_reach`,
+  `_update_chain_task`, count_finalize, `_use_held_as_tool`
+- **验证**: 远程 diag OFFICIAL=0.3003 依旧 (异常暴露改造不影响正常路径);
+  pytest env 相关通过
+- **规则已固化**: 写进 AGENTS.md §14 (铁律: 关键路径绝不静默吞异常;
+  新 try/except 必须回答 "异常是谁预期的, 出事后谁看见")
+
 ### Stage 20c · 根因修复: occluder 奖励从未生效 (import math) 🔥 (2026-08-15)
 
 - **根因** (op 瓶颈的真正症结): `three_d_world.py` 从未 `import math`,

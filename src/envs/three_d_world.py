@@ -31,6 +31,22 @@ from typing import Any
 
 import numpy as np
 
+
+def _expose_exc(where: str) -> None:
+    """Surface an exception instead of silently swallowing it.
+
+    Training-critical paths MUST NOT swallow errors: a bare
+    ``except Exception: pass / return 0.0`` hid the missing ``import
+    math`` and killed the occluder reward since Stage 20 (op bottleneck
+    root cause). We still return a safe fallback to keep the process
+    alive, but ALWAYS print the full traceback so any silent degradation
+    shows up immediately in the training log.
+    """
+    import traceback  # lazy: this helper is only hit on the error path
+    traceback.print_exc()
+    print(f"[env-EXC] exception in {where}: see traceback above (NOT swallowed)", flush=True)
+
+
 # MuJoCo is the physics backend; renderer uses its offscreen context.
 # All imports are lazy to allow graceful fallback on systems without MuJoCo.
 _mj_available = False
@@ -609,7 +625,7 @@ class ThreeDWorld:
                 self._data.qvel[dof_addr] += dx * self._model.opt.timestep
                 self._data.qvel[dof_addr + 1] += dy * self._model.opt.timestep
         except Exception:
-            pass
+            pass  # legit: agent body may not exist for this name
         # For agents with actuators, also set control targets
         try:
             act_x_id = self._model.actuator(f"{agent_name}_act_x").id
@@ -617,7 +633,7 @@ class ThreeDWorld:
             self._data.ctrl[act_x_id] = self._data.qpos[self._model.jnt_qposadr[self._model.joint(f"{agent_name}_x").id]] + dx * 0.01
             self._data.ctrl[act_y_id] = self._data.qpos[self._model.jnt_qposadr[self._model.joint(f"{agent_name}_y").id]] + dy * 0.01
         except Exception:
-            pass
+            pass  # legit: velocity-controlled agents have no actuators
 
         # Advance day/night
         self._sun_angle = (self._step_count % self._day_cycle) / self._day_cycle * 2 * np.pi
@@ -688,8 +704,8 @@ class ThreeDWorld:
                             self._occlusion_events.append(_ev)
                         # Crossing = object re-appeared: emit reveal signal
                         self._occ_signal_just_revealed.append(_ci)
-            except Exception:
-                pass
+            except Exception as _e:
+                _expose_exc("object_crossing_teleport")
 
         if done:
             # Finalize count trial: count objects within agent's awareness radius
@@ -707,13 +723,13 @@ class ThreeDWorld:
                         if ((ax - ox)**2 + (ay - oy)**2) ** 0.5 < 3.0:
                             nearby += 1
                     except Exception:
-                        continue
+                        continue  # legit: per-object loop, obj_ may be gone
                 self._count_trials.append({
                     "true_count": self._num_objects,
                     "estimated_count": max(nearby, len(self._contacted)),
                 })
-            except Exception:
-                pass
+            except Exception as _e:
+                _expose_exc("count_finalize")
 
         if done:
             self._episode_returns.append(self._current_return)
@@ -921,7 +937,7 @@ class ThreeDWorld:
                             "object_id": i,
                         })
                 except Exception:
-                    continue
+                    continue  # legit: per-object loop, obj_ may be gone
 
         # --- occlusion_events (3D: far objects with multi-step agent trajectory) ---
         learner_id = self._model.body("learner").id
@@ -975,7 +991,7 @@ class ThreeDWorld:
                         # Stage 20: reveal signal (verification feedback)
                         self._occ_signal_just_revealed.append(i)
             except Exception:
-                continue
+                continue  # legit: per-object loop, obj_ may be gone
 
         # --- object contact tracking ---
         for i in range(self._num_objects):
@@ -990,7 +1006,7 @@ class ThreeDWorld:
                     self._contacted.add(i)
                     self._object_contact_order.append(i)
             except Exception:
-                continue
+                continue  # legit: per-object loop, obj_ may be gone
 
     def _line_of_sight_blocked(
         self, ax: float, ay: float, ox: float, oy: float,
@@ -1010,7 +1026,7 @@ class ThreeDWorld:
                 cx = float(self._data.xpos[body_id, 0])
                 cy = float(self._data.xpos[body_id, 1])
             except Exception:
-                continue
+                continue  # legit: per-occluder loop, occluder may be gone
             # Occluder half-extents (matches SceneBuilder default 0.55 x 0.025)
             hx, hy = 0.55, 0.025
             if self._segment_hits_aabb(ax, ay, ox, oy, cx, cy, hx, hy):
@@ -1059,7 +1075,8 @@ class ThreeDWorld:
             obj_extent = max(float(sx), float(sy))
             agent_r = float(getattr(self, "_agent_size", 0.15))
             return agent_r + obj_extent + 0.15  # wider reach for better signal capture
-        except Exception:
+        except Exception as _e:
+            _expose_exc("_contact_reach")
             return 0.35
 
     # ------------------------------------------------------------------ grasping
@@ -1085,7 +1102,7 @@ class ThreeDWorld:
                     best_dist = d
                     best_idx = i
             except Exception:
-                continue
+                continue  # legit: per-object loop, obj_ may be gone
         if best_idx >= 0:
             self._held_obj_id = best_idx
             self._grasp_start_pos = (ax, ay)
@@ -1140,9 +1157,9 @@ class ThreeDWorld:
                             "distance": d,
                         })
                 except Exception:
-                    continue
-        except Exception:
-            pass
+                    continue  # legit: per-object loop, affected object may be gone
+        except Exception as _e:
+            _expose_exc("_use_held_as_tool")
 
     def _sync_held_object(self) -> None:
         """Move held object to follow agent (virtual grasp without weld constraint)."""
@@ -1168,8 +1185,8 @@ class ThreeDWorld:
                 # Reduce velocity to prevent flinging
                 self._data.qvel[dof] *= 0.3
                 self._data.qvel[dof + 1] *= 0.3
-        except Exception:
-            pass
+        except Exception as _e:
+            _expose_exc("_sync_held_object")
 
     # ------------------------------------------------------------------ chain tasks
 
@@ -1257,8 +1274,8 @@ class ThreeDWorld:
                         ky = float(self._data.xpos[kid, 1])
                         dist_key = ((ax - kx)**2 + (ay - ky)**2) ** 0.5
                         self._task_progress = max(0, 0.3 - dist_key / 3.0)
-        except Exception:
-            pass
+        except Exception as _e:
+            _expose_exc("_update_chain_task")
         return bonus
 
     def _occluder_only_reward(self) -> float:
@@ -1303,7 +1320,8 @@ class ThreeDWorld:
                             if dot > 0.0:
                                 r += dot * self._occluder_shaping_weight
             return float(r)
-        except Exception:
+        except Exception as _e:
+            _expose_exc("_occluder_only_reward")
             return 0.0
 
     def _compute_reward(self, action: int = -1) -> float:
@@ -1363,8 +1381,8 @@ class ThreeDWorld:
                     contact_count += 1
             if contact_count > 0:
                 reward += min(contact_count * 0.05, 0.5)
-        except Exception:
-            pass
+        except Exception as _e:
+            _expose_exc("contact_reward")
 
         # Caregiver proximity reward
         try:
@@ -1374,8 +1392,8 @@ class ThreeDWorld:
             cy = float(self._data.body("caregiver").xpos[1])
             dist_caregiver = np.sqrt((lx - cx)**2 + (ly - cy)**2)
             reward += max(0, (1.0 - dist_caregiver)) * 0.05
-        except Exception:
-            pass
+        except Exception as _e:
+            _expose_exc("caregiver_reward")
 
         # Approach reward: reducing distance to any object (physics_sandbox
         # parity). 400K regression: weight>0 in the 3D scene (many objects)
@@ -1394,8 +1412,8 @@ class ThreeDWorld:
                     self._prev_obj_dist[i] = dist
                     if dist < prev:
                         reward += (prev - dist) * self._approach_reward_weight
-            except Exception:
-                pass
+            except Exception as _e:
+                _expose_exc("approach_reward")
 
         # Occluder-target reward (situational, single-target): while an
         # object is occluded (in _active_occlusions_3d), reward the agent
@@ -1415,8 +1433,8 @@ class ThreeDWorld:
                     occ["prev_agent_dist"] = dist
                     if dist < prev:
                         reward += (prev - dist) * self._occluder_target_reward
-            except Exception:
-                pass
+            except Exception as _e:
+                _expose_exc("occluder_target_reward")
 
         reward = max(0.0, min(5.0, reward))
 
@@ -1444,7 +1462,7 @@ class ThreeDWorld:
                     contact = self._data.contact[i]
                     touch[:] = [1.0, 1.0, 1.0]  # any contact = touch signal
             except Exception:
-                pass
+                pass  # legit: ncon may be 0 in a fresh scene
             # Joint positions
             joints = np.zeros(3)
             for i, axis in enumerate(["x", "y"]):
@@ -1452,7 +1470,7 @@ class ThreeDWorld:
                     joint_id = self._model.joint(f"learner_{axis}").id
                     joints[i] = float(self._data.qpos[joint_id])
                 except Exception:
-                    pass
+                    pass  # legit: joint may be absent until body scaffold
             base = np.concatenate([pos, vel, touch, joints]).astype(np.float32)
             # Add grasping state when unlocked
             if self._dev_age > 0.15:
@@ -1462,13 +1480,14 @@ class ThreeDWorld:
                         hbid = self._model.body(f"obj_{self._held_obj_id}").id
                         held_pos = self._data.xpos[hbid][:3].copy().astype(np.float32)
                     except Exception:
-                        held_pos = np.zeros(3, dtype=np.float32)
+                        held_pos = np.zeros(3, dtype=np.float32)  # legit: obj_ may be gone after rebuild
                 else:
                     held_pos = np.zeros(3, dtype=np.float32)
                 grasp_state = np.concatenate([is_holding, held_pos]).astype(np.float32)
                 return np.concatenate([base, grasp_state])
             return base
-        except Exception:
+        except Exception as _e:
+            _expose_exc("_proprio")
             dim = 16 if self._dev_age > 0.15 else 12
             return np.zeros(dim, dtype=np.float32)
 
