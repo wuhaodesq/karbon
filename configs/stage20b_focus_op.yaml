@@ -295,7 +295,7 @@ train:
   value_coef: 0.5
   gamma: 0.99
   gae_lambda: 0.95
-  total_steps: 1000000             # Stage 20b 独立预算: 1M 步 (先专项 op, 后开放)
+  total_steps: 2000000             # Stage 20b 独立预算: 从 1M (stage20 终点) 续训 1M 步到 2M
   ckpt_every_steps: 50000
 
 independent_eval:
