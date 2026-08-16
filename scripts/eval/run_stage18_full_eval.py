@@ -273,6 +273,12 @@ def main():
             # occluder_trace intentionally NOT forwarded: eval must measure
             # true memory-based tracking without trace feedback (train/eval
             # env parity fix, 2026-08-13).
+            # Stage 20e: occluder memory slots ARE forwarded — last_known is
+            # the agent's own memory (same env code), not external info; the
+            # eval metric (end_d < 0.7*start_d) measures exactly the behavior
+            # this vector describes. Train/eval observation shapes must match
+            # or the resumed policy sees a different input dim.
+            occluder_obs_slots=int(cfg["env"].get("occluder_obs_slots", 0)),
         )
 
     env = make_env(cfg["env"].get("num_objects", 8),

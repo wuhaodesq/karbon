@@ -5,6 +5,24 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20e · 遮挡记忆注入观测: 打破盲走 (2026-08-17) 🔥
+
+- **根因** (比 import math 更深): PPO 策略是 proprio-only
+  (vision encoder off), `_proprio` 只有 pos/vel/touch/joints/grasp —
+  **观测里从来没有任何 last_known/遮挡信息**。奖励给了 (距离差/
+  塑形/归因), 但 agent 从不知道"该往哪走" → 任务对策略不可解 →
+  op 天花板 0.11 = 随机接近底座噪声 (2.4M 步五次干预全部封顶于此)
+- **方案**: `occluder_obs_slots=3` — 观测追加最多 3 个活动遮挡槽,
+  每槽 (dx, dy, dist)/4.0 归一化相对偏移 (指向 agent 自己记忆中的
+  last_known)。训练与评测同 env 代码 → 评测同样提供该向量
+  (last_known = agent 自身记忆, 非外部注入, 评测度量 end<0.7*start
+  测的正是这个行为)。观测 16 → 25 维
+- **兼容**: resume 时 load_state_dict 不匹配 → 自动 fresh model
+  (replay/记忆/技能全保留, 丢的只是没学会的旧策略)
+- **验证**: 远端实测 proprio_dim=25, 遮挡激活时槽位携带 last_known
+  偏移且值与 expect 一致
+- **状态**: 从 2400K ckpt 重启, 2500K 评测验证 (新观测首考)
+
 ### Stage 20d P1.1 · 窗口物理对齐: hold 8→30 步 (2026-08-16) 🔧
 
 - **背景**: P1 固定目标后 2100/2200/2300K op = 0.11/0.04/0.11,

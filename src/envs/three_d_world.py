@@ -434,6 +434,7 @@ class ThreeDWorld:
         object_crossing_hold_steps: int = 0,  # Stage 20: 穿越后停在墙后步数 (0=off)
         object_crossing_fixed_object: int = -1,  # Stage 20d P1: 固定穿越物体 (-1=随机)
         object_crossing_fixed_wall: int = -1,  # Stage 20d P1: 固定穿越墙 (-1=随机)
+        occluder_obs_slots: int = 0,  # Stage 20e: 遮挡记忆槽注入观测 (0=off, 容量<=3)
         focus_op_only: bool = False,  # Stage 20b: 课程固化 - 封闭其他目标, 专训 op
     ) -> None:
         if not _mj_available:
@@ -464,6 +465,14 @@ class ThreeDWorld:
         self._object_crossing_hold_steps = int(object_crossing_hold_steps)
         self._object_crossing_fixed_object = int(object_crossing_fixed_object)
         self._object_crossing_fixed_wall = int(object_crossing_fixed_wall)
+        # Stage 20e: occluder memory slots in the observation. The policy
+        # is proprio-only (vision encoder off), so without these it can
+        # NEVER know where a hidden object was last seen — rewards alone
+        # are unlearnable (0.11 plateau across 2.4M steps = random-base).
+        # Slot content: for the closest active occlusions, the normalized
+        # relative offset (dx, dy, dist) to last_known in the agent's own
+        # memory — the same quantity the eval metric measures.
+        self._occluder_obs_slots = max(0, min(3, int(occluder_obs_slots)))
         self._focus_op_only = bool(focus_op_only)
         # Objects parked behind a wall after crossing (bounded: num_objects).
         # obj_id -> remaining hold steps; while held the object is reported
@@ -547,7 +556,8 @@ class ThreeDWorld:
     def proprio_dim(self) -> int:
         # Always 16: grasping fields (is_holding + held_pos) are zeros
         # until dev_age > 0.15. Ensures checkpoint compatibility.
-        return 16
+        # Stage 20e: occluder memory slots appended (3 dims per slot).
+        return 16 + 3 * self._occluder_obs_slots
 
     @property
     def objects(self) -> list[dict]:
@@ -1543,8 +1553,33 @@ class ThreeDWorld:
                 else:
                     held_pos = np.zeros(3, dtype=np.float32)
                 grasp_state = np.concatenate([is_holding, held_pos]).astype(np.float32)
-                return np.concatenate([base, grasp_state])
-            return base
+                out = np.concatenate([base, grasp_state])
+            else:
+                out = base
+            # Stage 20e: occluder memory slots — normalized relative offset
+            # (dx, dy, dist / room scale ~4.0) to the closest active
+            # last_known positions; unused slots stay 0. Same signal in
+            # training and eval (last_known is the agent's own memory).
+            slots = self._occluder_obs_slots
+            if slots > 0 and self._active_occlusions_3d:
+                ax_, ay_ = float(pos[0]), float(pos[1])
+                cands = []
+                for _key, _occ in self._active_occlusions_3d.items():
+                    _lk = _occ.get("last_known")
+                    if _lk is None:
+                        continue
+                    _d = math.hypot(_lk[0] - ax_, _lk[1] - ay_)
+                    cands.append((_d, _lk))
+                cands.sort(key=lambda t: t[0])
+                slot_vec = np.zeros(3 * slots, dtype=np.float32)
+                for s in range(min(slots, len(cands))):
+                    _d, _lk = cands[s]
+                    slot_vec[3 * s] = float((_lk[0] - ax_) / 4.0)
+                    slot_vec[3 * s + 1] = float((_lk[1] - ay_) / 4.0)
+                    slot_vec[3 * s + 2] = float(_d / 4.0)
+            else:
+                slot_vec = np.zeros(3 * slots, dtype=np.float32)
+            return np.concatenate([out, slot_vec]).astype(np.float32)
         except Exception as _e:
             _expose_exc("_proprio")
             dim = 16 if self._dev_age > 0.15 else 12
