@@ -63,7 +63,7 @@ env:
   occluder_reveal_bonus: 1.0          # Stage 20d: 揭示归因奖励 (成功追踪=大额因果)
   occluder_reveal_ratio: 0.7          # Stage 20d: 归因阈值 end_d < 0.7*start_d (与评测一致)
   object_crossing_every: 50           # 物体穿越墙周期 (密集遮挡练习)
-  object_crossing_hold_steps: 8       # 遮挡持续 8 步, op 评测可测
+  object_crossing_hold_steps: 30      # 遮挡持续 30 步 (1.5s): 0.7 阈值物理可达 (8步=0.4s 走不完 30% 距离)
   object_crossing_fixed_object: 0     # Stage 20d P1: 固定穿越物体 (恒定可学映射)
   object_crossing_fixed_wall: 0       # Stage 20d P1: 固定穿越墙 (恒定镜像点)
   focus_op_only: true                 # Stage 20b: 封闭 means_ends/物体操控, 专训 op
