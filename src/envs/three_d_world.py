@@ -432,6 +432,8 @@ class ThreeDWorld:
         occluder_reveal_ratio: float = 0.7,  # Stage 20d: 归因阈值 end_d < ratio*start_d
         object_crossing_every: int = 0,  # Stage 20: 物体穿越墙周期 (0=off)
         object_crossing_hold_steps: int = 0,  # Stage 20: 穿越后停在墙后步数 (0=off)
+        object_crossing_fixed_object: int = -1,  # Stage 20d P1: 固定穿越物体 (-1=随机)
+        object_crossing_fixed_wall: int = -1,  # Stage 20d P1: 固定穿越墙 (-1=随机)
         focus_op_only: bool = False,  # Stage 20b: 课程固化 - 封闭其他目标, 专训 op
     ) -> None:
         if not _mj_available:
@@ -460,6 +462,8 @@ class ThreeDWorld:
         self._reveal_bonus_pending = 0.0
         self._object_crossing_every = int(object_crossing_every)
         self._object_crossing_hold_steps = int(object_crossing_hold_steps)
+        self._object_crossing_fixed_object = int(object_crossing_fixed_object)
+        self._object_crossing_fixed_wall = int(object_crossing_fixed_wall)
         self._focus_op_only = bool(focus_op_only)
         # Objects parked behind a wall after crossing (bounded: num_objects).
         # obj_id -> remaining hold steps; while held the object is reported
@@ -670,14 +674,24 @@ class ThreeDWorld:
         # Every object_crossing_every steps, mirror one random object across
         # an occluder wall so the agent repeatedly witnesses occlusion ->
         # reveal events (hypothesis-deduction training material).
+        # Stage 20d P1: fixed target/wall curriculum — one ever-same object
+        # and wall, so "which object disappears -> where to find it" is a
+        # stable, learnable mapping instead of a fresh random target every
+        # 50 steps (random targets gave the policy no constant concept).
         if self._object_crossing_every > 0 and self._num_occluders > 0 \
                 and self._step_count % self._object_crossing_every == 0:
             try:
-                _ci = int(self._rng.randint(0, self._num_objects))
+                _ci = int(self._object_crossing_fixed_object) if self._object_crossing_fixed_object >= 0 \
+                    else int(self._rng.randint(0, self._num_objects))
                 if _ci in self._crossing_hold:
-                    _ci = int(self._rng.randint(0, self._num_objects))
+                    if self._object_crossing_fixed_object >= 0:
+                        _ci = (self._object_crossing_fixed_object + 1) % self._num_objects
+                    else:
+                        _ci = int(self._rng.randint(0, self._num_objects))
                 _bid = self._model.body(f"obj_{_ci}").id
-                _occ_id = self._model.body(f"occluder_{int(self._rng.randint(0, self._num_occluders))}").id
+                _occ_i = int(self._object_crossing_fixed_wall) if self._object_crossing_fixed_wall >= 0 \
+                    else int(self._rng.randint(0, self._num_occluders))
+                _occ_id = self._model.body(f"occluder_{_occ_i}").id
                 _ocx = float(self._data.xpos[_occ_id, 0])
                 _ocy = float(self._data.xpos[_occ_id, 1])
                 _px = float(self._data.xpos[_bid, 0])

@@ -5,6 +5,21 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20d P1 · 固定遮挡课程: 恒定可学映射 (2026-08-16) 🎯
+
+- **背景**: 20d 归因奖励成绩单 — 1600K=0.00, 1700K=0.11 (峰值),
+  1800K=0.09, 1900K=0.04 → 有信号但脆弱回落; 且 1900K 伴随
+  means_ends/physics 同步崩坏 (1.00/1.00 → 0.02/0.00), 疑似被
+  3d-crowded 场景噪声主导
+- **方案**: `object_crossing_fixed_object=0` + `object_crossing_fixed_wall=0`
+  — crossing 永远只让物体 0 穿越墙 0 (镜射点在两固定位置间振荡),
+  "哪个消失→去哪找"成为恒定映射而非每 50 步随机新目标。评测侧
+  make_env 不读这些参数 → 评测仍是随机遮挡 = **测泛化**, 不是测
+  记忆单个位置
+- **预算**: `total_steps: 2000000 → 3000000` (2M 终点续训 1M 步)
+- **验证**: 远端 eposide 实测 crossing 恒为物体 0 / reveal 恒为 [0]
+- **状态**: 从最新 ckpt 重启, 新评测链 2100K→3000K 每 100K 验证
+
 ### Stage 20d · reveal 归因奖励: 给"成功追踪"显式因果 (2026-08-15) 🎯
 
 - **背景**: 1500K 评测 op=0.05 与 1400K 一模一样 → 奖励通路已通

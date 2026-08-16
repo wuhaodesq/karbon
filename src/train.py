@@ -711,6 +711,8 @@ def _build_env_from_spec(spec: dict[str, Any], env_cfg: dict[str, Any]):
             occluder_target_reward=float(env_cfg.get("occluder_target_reward", 0.0)),
             object_crossing_every=int(env_cfg.get("object_crossing_every", 0)),
             object_crossing_hold_steps=int(env_cfg.get("object_crossing_hold_steps", 0)),
+            object_crossing_fixed_object=int(env_cfg.get("object_crossing_fixed_object", -1)),
+            object_crossing_fixed_wall=int(env_cfg.get("object_crossing_fixed_wall", -1)),
             focus_op_only=bool(env_cfg.get("focus_op_only", False)),
             occluder_shaping_weight=float(env_cfg.get("occluder_shaping_weight", 0.0)),
             occluder_reveal_bonus=float(env_cfg.get("occluder_reveal_bonus", 0.0)),

@@ -64,6 +64,8 @@ env:
   occluder_reveal_ratio: 0.7          # Stage 20d: 归因阈值 end_d < 0.7*start_d (与评测一致)
   object_crossing_every: 50           # 物体穿越墙周期 (密集遮挡练习)
   object_crossing_hold_steps: 8       # 遮挡持续 8 步, op 评测可测
+  object_crossing_fixed_object: 0     # Stage 20d P1: 固定穿越物体 (恒定可学映射)
+  object_crossing_fixed_wall: 0       # Stage 20d P1: 固定穿越墙 (恒定镜像点)
   focus_op_only: true                 # Stage 20b: 封闭 means_ends/物体操控, 专训 op
 
 # --- LLM Fusion (disabled) ---
@@ -298,7 +300,7 @@ train:
   value_coef: 0.5
   gamma: 0.99
   gae_lambda: 0.95
-  total_steps: 2000000             # Stage 20b 独立预算: 从 1M (stage20 终点) 续训 1M 步到 2M
+  total_steps: 3000000             # Stage 20d P1: 从 2M 终点续训 1M 步到 3M (固定遮挡课程)
   ckpt_every_steps: 50000
 
 independent_eval:
