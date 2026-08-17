@@ -5,6 +5,35 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20h · BC 教学脚手架: 模仿打破"冻结策略"死结 (2026-08-17) 🔥
+
+- **根因** (20a-20g 七轮奖励干预全部失败的共同死结):
+  - 2800/2900/3000K op = 0.08/0.00/0.04, 且行为诊断实锤:
+    `move_steps=154` 在 20g 前后**一字不差** — 策略完全冻结,
+    entropy≈2.45 (≈均匀), PPO 梯度 ≈ 0
+  - 非对称塑形 (20c, 只奖趋近) 与对称塑形 (20g, 趋近+/远离−)
+    对均匀策略的**期望梯度都是 0** (随机方向 dot 期望为 0);
+    窗口 60 步 (3s ≈ 走 3-6m) 对 last_known 常距 5-10m
+    **物理上走不到** → reveal 因果链永远连不上 → 无任何可学信号
+  - conclusion: 停止调奖励, 改成"教"
+- **方案: BC 教学脚手架** (发育学: 婴幼儿通过模仿学习):
+  1. `ThreeDWorld.occluder_teacher_force` (默认 0): 遮挡窗口内
+     以该概率由 teacher 接管动作, 朝 last_known 方向行走 (4 基本
+     方向 + 远距双倍力档), 让 agent 反复亲历"搜索→找到→reveal"
+  2. `env.last_teacher_action` 暴露动作标签; `RolloutBuffer` 新增
+     `teach` 通道; PPO mini-batch 对 teacher 样本加
+     `-bc_teacher_coef * log π(teacher_action)` 模仿损失 (默认 0.5),
+     step 日志新增 `bc=` 字段
+  3. `occluder_teacher_ramp` (300K 步): 接管率 0.9 → 0.15 线性衰减
+     (脚手架逐步拆除, BC 样本随之消失 — 内化过渡)
+  4. **纯净性**: eval 构造不转发该参数 (默认 0); 行为诊断脚本
+     显式清零; 训练/评测观测形状不变 (12 动作 / 27 proprio)
+- **配套**: total_steps 3M → 3.5M; 评测链扩展到 3500K
+- **验证**: v/loss 瞬态 (同 20f) 回落, 首个 PPO 周期 `bc=2.55`
+  (≈ log(12), 均匀初始, 信号链路通)
+- **状态**: 已从 3000K ckpt 重启, 3200/3300/3400/3500K 为 20h
+  首考
+
 ### Stage 20f · proprio 进策略 + yaw 观测: 槽终于可见 (2026-08-17) 🔥
 
 - **根因** (20e 的继承根因): 20e 把 last_known 槽注入 proprio, 但
