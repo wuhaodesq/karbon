@@ -435,6 +435,7 @@ class ThreeDWorld:
         object_crossing_fixed_object: int = -1,  # Stage 20d P1: 固定穿越物体 (-1=随机)
         object_crossing_fixed_wall: int = -1,  # Stage 20d P1: 固定穿越墙 (-1=随机)
         occluder_obs_slots: int = 0,  # Stage 20e: 遮挡记忆槽注入观测 (0=off, 容量<=3)
+        occluder_teacher_force: float = 0.0,  # Stage 20h: BC 教学接管率 (0=off, 1=每步接管)
         focus_op_only: bool = False,  # Stage 20b: 课程固化 - 封闭其他目标, 专训 op
     ) -> None:
         if not _mj_available:
@@ -473,6 +474,12 @@ class ThreeDWorld:
         # relative offset (dx, dy, dist) to last_known in the agent's own
         # memory — the same quantity the eval metric measures.
         self._occluder_obs_slots = max(0, min(3, int(occluder_obs_slots)))
+        # Stage 20h: BC teacher scaffold — teacher takes over locomotion
+        # during active occlusion windows and walks toward last_known; the
+        # taken action is exposed via last_teacher_action so train.py can
+        # apply an imitation loss. Eval envs keep the default 0.0 -> pure.
+        self._occluder_teacher_force = float(occluder_teacher_force)
+        self.last_teacher_action: int = -1  # -1 = no teacher this step
         self._focus_op_only = bool(focus_op_only)
         # Objects parked behind a wall after crossing (bounded: num_objects).
         # obj_id -> remaining hold steps; while held the object is reported
@@ -618,6 +625,38 @@ class ThreeDWorld:
     def step(self, action: int) -> EnvStep3D:
         action = int(action) % self.action_space_n
         agent_name = self._agent_names[0]
+
+        # --- Stage 20h: BC teacher scaffold override ---
+        # While an occlusion is genuinely active (object truly hidden), the
+        # teacher may take over locomotion: walk the learner toward the
+        # last_known position. This guarantees the agent repeatedly
+        # experiences "search -> reveal" and hands train.py an imitation
+        # label (last_teacher_action) for the BC auxiliary loss. Ramp-down
+        # is driven from train.py via the occluder_teacher_force attribute.
+        self.last_teacher_action = -1
+        if self._occluder_teacher_force > 0.0 and self._active_occlusions_3d:
+            try:
+                ax = float(self._data.body("learner").xpos[0])
+                ay = float(self._data.body("learner").xpos[1])
+                best_dir, best_dot, best_dist = 0, -1.0, 0.0
+                for _key, _occ in list(self._active_occlusions_3d.items()):
+                    if not _occ.get("truly_occluded", False):
+                        continue
+                    _lk = _occ["last_known"]
+                    _dist = math.hypot(_lk[0] - ax, _lk[1] - ay)
+                    if _dist < 0.8:
+                        continue  # already there: stillness is the correct move
+                    _tx, _ty = (_lk[0] - ax) / _dist, (_lk[1] - ay) / _dist
+                    for _d in range(4):
+                        _dot = _tx * [0, 0, -1, 1][_d] + _ty * [1, -1, 0, 0][_d]
+                        if _dot > best_dot:
+                            best_dot, best_dir, best_dist = _dot, _d, _dist
+                if best_dist > 0.0 and self._rng.rand() < self._occluder_teacher_force:
+                    # 4 basic directions; +4 = double-force gear when far away
+                    self.last_teacher_action = best_dir + (4 if best_dist > 3.0 else 0)
+                    action = self.last_teacher_action
+            except Exception as _e:
+                _expose_exc("occluder_teacher")
 
         # --- Grasping actions (8-11): only effective when dev_age > 0.15 ---
         # Before unlocking, actions 8-11 fall through to locomotion (action % 8)

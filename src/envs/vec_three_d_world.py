@@ -94,6 +94,21 @@ class VecEnv:
     def obs(self) -> np.ndarray:
         return self._obs
 
+    @property
+    def last_teacher_action(self) -> int:
+        """Stage 20h: teacher label from env 0 (BC scaffold)."""
+        return int(getattr(self._envs[0], "last_teacher_action", -1))
+
+    @property
+    def occluder_teacher_force(self) -> float:
+        return float(getattr(self._envs[0], "occluder_teacher_force", 0.0))
+
+    @occluder_teacher_force.setter
+    def occluder_teacher_force(self, value: float) -> None:
+        for e in self._envs:
+            if hasattr(e, "occluder_teacher_force"):
+                e.occluder_teacher_force = float(value)
+
     def step(self, actions: np.ndarray) -> VecStep:
         actions = np.asarray(actions).reshape(self.n_envs)
         rewards = np.zeros(self.n_envs, dtype=np.float32)

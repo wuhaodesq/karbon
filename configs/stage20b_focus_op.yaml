@@ -67,6 +67,8 @@ env:
   object_crossing_fixed_object: 0     # Stage 20d P1: 固定穿越物体 (恒定可学映射)
   object_crossing_fixed_wall: 0       # Stage 20d P1: 固定穿越墙 (恒定镜像点)
   occluder_obs_slots: 3              # Stage 20e: 遮挡记忆槽注入观测 (策略唯一知道去哪找的输入)
+  occluder_teacher_force: 0.9        # Stage 20h: BC 教学接管率 (窗口内 90% 由 teacher 接管走向 last_known)
+  occluder_teacher_ramp: 300000      # Stage 20h: 接管率随训练步线性衰减至 0.15 (脚手架逐步拆除)
   focus_op_only: true                 # Stage 20b: 封闭 means_ends/物体操控, 专训 op
 
 # --- LLM Fusion (disabled) ---
@@ -299,9 +301,10 @@ train:
   ppo_epochs: 4
   entropy_coef: 0.04
   value_coef: 0.5
+  bc_teacher_coef: 0.5             # Stage 20h: BC 模仿损失权重 (teacher 样本自动随接管率衰减)
   gamma: 0.99
   gae_lambda: 0.95
-  total_steps: 3000000             # Stage 20d P1: 从 2M 终点续训 1M 步到 3M (固定遮挡课程)
+  total_steps: 3500000             # Stage 20h: 3M 终点 + 500K 步给 BC 教学脚手架
   ckpt_every_steps: 50000
 
 independent_eval:

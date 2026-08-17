@@ -355,6 +355,7 @@ class TransitionBatch:
     rewards: torch.Tensor
     dones: torch.Tensor
     propr: torch.Tensor = None  # Stage 20f: (B, proprio_dim) or empty default
+    teach: torch.Tensor = None  # Stage 20h: (B,) teacher action label, -1 = none
 
 
 class RolloutBuffer:
@@ -381,6 +382,9 @@ class RolloutBuffer:
         )
         self.propr = torch.zeros(
             (capacity, max(1, self.n_envs), self.proprio_dim), dtype=torch.float32, device=device
+        )
+        self.teach = torch.full(
+            (capacity, max(1, self.n_envs)), -1, dtype=torch.long, device=device
         )
         self.actions = torch.zeros((capacity, self.n_envs), dtype=torch.long, device=device)
         self.logprobs = torch.zeros((capacity, self.n_envs), dtype=torch.float32, device=device)
@@ -411,6 +415,7 @@ class RolloutBuffer:
         reward: np.ndarray,
         done: np.ndarray,
         proprio: np.ndarray | None = None,
+        teacher_action: int | None = None,
     ) -> None:
         """Add ``n_envs`` transitions for one collected timestep.
 
@@ -418,6 +423,7 @@ class RolloutBuffer:
         ``proprio`` (n_envs, proprio_dim) float32 — Stage 20f: stored so the
         PPO update sees the same proprio the policy saw during rollout
         (otherwise the proprio_mlp gets no gradient).
+        ``teacher_action`` (int, -1 = none) — Stage 20h: BC imitation label.
         """
         if self._ptr >= self._capacity:
             raise IndexError("RolloutBuffer full (Axiom 1: no unbounded growth)")
@@ -426,6 +432,8 @@ class RolloutBuffer:
         if proprio is not None and self.proprio_dim > 0:
             _p = np.asarray(proprio, dtype=np.float32).reshape(self.n_envs, -1)
             self.propr[i, :, : _p.shape[1]] = torch.from_numpy(_p)
+        if teacher_action is not None:
+            self.teach[i, :] = int(teacher_action)
         self.actions[i] = torch.as_tensor(np.asarray(action)).to(self.actions.dtype)
         self.logprobs[i] = torch.as_tensor(np.asarray(logprob)).to(self.logprobs.dtype)
         self.values[i] = torch.as_tensor(np.asarray(value)).to(self.values.dtype)
@@ -445,6 +453,7 @@ class RolloutBuffer:
             rewards=self.rewards[:T].reshape(T * N),
             dones=self.dones[:T].reshape(T * N),
             propr=self.propr[:T].reshape(T * N, self.proprio_dim),
+            teach=self.teach[:T].reshape(T * N),
         )
 
 
@@ -731,6 +740,7 @@ def _build_env_from_spec(spec: dict[str, Any], env_cfg: dict[str, Any]):
             occluder_shaping_weight=float(env_cfg.get("occluder_shaping_weight", 0.0)),
             occluder_reveal_bonus=float(env_cfg.get("occluder_reveal_bonus", 0.0)),
             occluder_reveal_ratio=float(env_cfg.get("occluder_reveal_ratio", 0.7)),
+            occluder_teacher_force=float(env_cfg.get("occluder_teacher_force", 0.0)),
         )
     return MiniGridWrapper(
         env_id=env_id,
@@ -810,6 +820,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             occluder_shaping_weight=float(env_cfg.get("occluder_shaping_weight", 0.0)),
             occluder_reveal_bonus=float(env_cfg.get("occluder_reveal_bonus", 0.0)),
             occluder_reveal_ratio=float(env_cfg.get("occluder_reveal_ratio", 0.7)),
+            occluder_teacher_force=float(env_cfg.get("occluder_teacher_force", 0.0)),
         )
         n_envs = int(env_cfg.get("num_envs", 1))
         if n_envs > 1:
@@ -2150,6 +2161,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     ppo_epochs = int(train_cfg.get("ppo_epochs", 4))
     entropy_coef = float(train_cfg.get("entropy_coef", 0.01))
     value_coef = float(train_cfg.get("value_coef", 0.5))
+    bc_teacher_coef = float(train_cfg.get("bc_teacher_coef", 0.5))  # Stage 20h
     gamma = float(train_cfg.get("gamma", 0.99))
     gae_lambda = float(train_cfg.get("gae_lambda", 0.95))
     log_every = int(train_cfg.get("log_every_steps", 50))
@@ -2314,6 +2326,17 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             manager_buffer.clear()
 
         # Collect a rollout of exactly `rollout_capacity` steps
+        # Stage 20h: BC teacher force schedule — start strong, linear fade
+        # to a floor so the learner gradually takes over (scaffold removal).
+        _occluder_teacher_base = float(env_cfg.get("occluder_teacher_force", 0.0))
+        _occluder_teacher_ramp = int(env_cfg.get("occluder_teacher_ramp", 0))
+        if _occluder_teacher_base > 0.0 and hasattr(env, "occluder_teacher_force"):
+            if _occluder_teacher_ramp > 0:
+                env.occluder_teacher_force = max(
+                    0.15, _occluder_teacher_base * (1.0 - state.step / _occluder_teacher_ramp)
+                )
+            else:
+                env.occluder_teacher_force = _occluder_teacher_base
         while not buffer.full():
             t0 = time.perf_counter()
             obs_t = _obs_to_tensor(obs, device)  # (N,3,H,W) for vec; (1,3,H,W) single
@@ -2714,6 +2737,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 reward=total_r,
                 done=done_arr,
                 proprio=prop_t.cpu().numpy() if prop_t is not None else None,
+                teacher_action=int(getattr(env, "last_teacher_action", -1)),
             )
             t_buf_end = time.perf_counter()
 
@@ -3368,11 +3392,12 @@ and state.step % 50000 < rollout_capacity):
         indices = torch.randperm(n, device=device)
         mb_size = max(1, n // ppo_minibatches)
         ppo_losses: dict[str, list[float]] = {"policy": [], "value": [], "entropy": [],
-                                               "kl": [], "clipfrac": [], "total": []}
+                                           "kl": [], "clipfrac": [], "teach": [], "total": []}
         for _ in range(ppo_epochs):
             for start in range(0, n, mb_size):
                 mb_idx = indices[start:start + mb_size]
                 _mb_prop = getattr(batch, "propr", None)
+                _mb_teach = getattr(batch, "teach", None)
                 logits, values = model(
                     batch.obs[mb_idx],
                     proprio=_mb_prop[mb_idx] if _mb_prop is not None else None,
@@ -3388,6 +3413,18 @@ and state.step % 50000 < rollout_capacity):
                 approx_kl = ((batch.logprobs[mb_idx] - new_logprobs).mean()).detach()
                 clipfrac = ((ratio - 1.0).abs() > ppo_clip).float().mean().detach()
                 loss = policy_loss + value_coef * value_loss - entropy_coef * entropy
+                # Stage 20h: BC imitation loss on teacher-labeled steps
+                # (occluder teacher scaffold). -log pi(teacher_action) pulls
+                # the policy toward the demonstrated "walk to last_known"
+                # behavior while rewards stay off the critical path.
+                teach_loss = torch.zeros((), device=loss.device)
+                if _mb_teach is not None:
+                    _tm = _mb_teach[mb_idx]
+                    _mask = _tm >= 0
+                    if _mask.any():
+                        _lp_full = F.log_softmax(dist.logits, dim=-1)
+                        teach_loss = -_lp_full[_mask][_tm[_mask]].mean()
+                        loss = loss + bc_teacher_coef * teach_loss
                 if ewc is not None and ewc.has_consolidated():
                     loss = loss + ewc.penalty(model).to(loss.device)
                 # Core-Knowledge P2 auxiliary loss (open-gap A#4): soft priors
@@ -3411,6 +3448,7 @@ and state.step % 50000 < rollout_capacity):
                 ppo_losses["entropy"].append(float(entropy.item()))
                 ppo_losses["kl"].append(float(approx_kl.item()))
                 ppo_losses["clipfrac"].append(float(clipfrac.item()))
+                ppo_losses["teach"].append(float(teach_loss.item()))
                 ppo_losses["total"].append(float(loss.item()))
 
         # --- Stage 1: off-policy value refresh from replay (small, extra grad) ---
@@ -3896,7 +3934,7 @@ and state.step % 50000 < rollout_capacity):
             if language_gen is not None:
                 extras.append("speak=on")
             logger.info(
-                "step=%d ep=%d mean_ret=%.3f loss=%.4f(p=%.2f v=%.2f ent=%.3f kl=%.4f cf=%.2f) mem_used=%.2fGB slope=%s %s",
+                "step=%d ep=%d mean_ret=%.3f loss=%.4f(p=%.2f v=%.2f ent=%.3f kl=%.4f cf=%.2f bc=%.4f) mem_used=%.2fGB slope=%s %s",
                 state.step,
                 summary["episodes"],
                 summary["mean_return"],
@@ -3906,6 +3944,7 @@ and state.step % 50000 < rollout_capacity):
                 float(np.mean(ppo_losses["entropy"])),
                 float(np.mean(ppo_losses["kl"])),
                 float(np.mean(ppo_losses["clipfrac"])),
+                float(np.mean(ppo_losses["teach"])),
                 (mem.get("used_bytes", 0) or 0) / 1024**3,
                 mem.get("slope_gb_per_hour"),
                 " ".join(extras),
