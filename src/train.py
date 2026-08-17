@@ -3435,7 +3435,15 @@ and state.step % 50000 < rollout_capacity):
                     _mask = _tm >= 0
                     if _mask.any():
                         _lp_full = F.log_softmax(dist.logits, dim=-1)
-                        teach_loss = -_lp_full[_mask][_tm[_mask]].mean()
+                        # Cardinal Rule: t[mask] selects ROWS; to grab the
+                        # log-prob of the teacher class we must index by
+                        # (row, class) pairs. The old `_lp_full[_mask][_tm[_mask]]`
+                        # re-indexed the first dim — the "BC loss" was a
+                        # meaningless constant (~log 12): bc never moved for 4h.
+                        _ta = _tm[_mask]
+                        teach_loss = -_lp_full[
+                            torch.arange(_ta.shape[0], device=_ta.device), _ta
+                        ].mean()
                         loss = loss + bc_teacher_coef * teach_loss
                 if ewc is not None and ewc.has_consolidated():
                     loss = loss + ewc.penalty(model).to(loss.device)
