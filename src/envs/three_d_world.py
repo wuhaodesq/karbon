@@ -1537,7 +1537,7 @@ class ThreeDWorld:
             except Exception:
                 pass  # legit: ncon may be 0 in a fresh scene
             # Joint positions
-            joints = np.zeros(2)
+            joints = np.zeros(3)
             for i, axis in enumerate(["x", "y"]):
                 try:
                     joint_id = self._model.joint(f"learner_{axis}").id

@@ -794,6 +794,22 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             developmental_age=float(env_cfg.get("developmental_age", 0.0)),
             camera_pos=tuple(env_cfg.get("camera_pos", [0.0, -1.0, 0.8])),
             camera_fovy=float(env_cfg.get("camera_fovy", 60.0)),
+            # Stage 20 occluder params — must match _build_env_from_spec so the
+            # pre-curriculum env and curriculum envs share proprio shape (the
+            # model's proprio_mlp is built from env_proprio_dim BEFORE the
+            # curriculum rebuild; a 18-vs-27 mismatch would blow up forward).
+            num_occluders=int(env_cfg.get("num_occluders", 0)),
+            occluder_trace=bool(env_cfg.get("occluder_trace", False)),
+            occluder_target_reward=float(env_cfg.get("occluder_target_reward", 0.0)),
+            object_crossing_every=int(env_cfg.get("object_crossing_every", 0)),
+            object_crossing_hold_steps=int(env_cfg.get("object_crossing_hold_steps", 0)),
+            object_crossing_fixed_object=int(env_cfg.get("object_crossing_fixed_object", -1)),
+            object_crossing_fixed_wall=int(env_cfg.get("object_crossing_fixed_wall", -1)),
+            occluder_obs_slots=int(env_cfg.get("occluder_obs_slots", 0)),
+            focus_op_only=bool(env_cfg.get("focus_op_only", False)),
+            occluder_shaping_weight=float(env_cfg.get("occluder_shaping_weight", 0.0)),
+            occluder_reveal_bonus=float(env_cfg.get("occluder_reveal_bonus", 0.0)),
+            occluder_reveal_ratio=float(env_cfg.get("occluder_reveal_ratio", 0.7)),
         )
         n_envs = int(env_cfg.get("num_envs", 1))
         if n_envs > 1:
