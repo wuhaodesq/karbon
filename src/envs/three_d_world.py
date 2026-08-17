@@ -1362,6 +1362,14 @@ class ThreeDWorld:
         (which needs the agent to already be approaching), so the policy
         learns "object disappeared -> move where it was" faster. Uses only
         last_known (pre-occlusion memory); no eval-only information leaks.
+
+        Stage 20g: symmetric — the same dot product is SUBTRACTED when the
+        learner moves AWAY from last_known. 2800K diagnostics showed the
+        policy freezing (entropy~2.45, ~0 movement, 20 reward vs 408 for a
+        random policy) because away-movement and stillness both cost zero;
+        only approach earned, so the zero-gradient policy never moved.
+        Teaching-scaffold semantics: approach earns, away is discouraged,
+        stillness is neutral — the optimal policy is forced to move.
         """
         if self._occluder_target_reward <= 0.0 and self._occluder_shaping_weight <= 0.0:
             return 0.0
@@ -1390,8 +1398,9 @@ class ThreeDWorld:
                             vy = float(self._data.qvel[dof + 1])
                             vlen = math.hypot(vx, vy) + 1e-9
                             dot = (vx * dx + vy * dy) / (vlen * dlen)
-                            if dot > 0.0:
-                                r += dot * self._occluder_shaping_weight
+                            # Stage 20g: symmetric — approach earns,
+                            # away is penalized (negative dot).
+                            r += dot * self._occluder_shaping_weight
             return float(r)
         except Exception as _e:
             _expose_exc("_occluder_only_reward")
