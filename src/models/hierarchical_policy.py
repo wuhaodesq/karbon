@@ -184,6 +184,7 @@ class HierarchicalActorCritic(nn.Module):
         slot_num_slots: int = 7,
         slot_dim: int = 128,
         slot_num_iterations: int = 3,
+        proprio_dim: int = 0,  # Stage 20f: proprio (incl. occluder slots) -> policy
     ) -> None:
         super().__init__()
         if d_model % n_heads != 0:
@@ -194,6 +195,7 @@ class HierarchicalActorCritic(nn.Module):
         self._sub_goal_every = max(1, int(sub_goal_every))
         self.num_actions = num_actions
         self.obs_shape = tuple(obs_shape)
+        self.proprio_dim = int(proprio_dim)
 
         # Stage 19: symbol-bias callback (set by train.py after the
         # NarrativeLoopController is created). Returns a (num_actions,)
@@ -246,6 +248,20 @@ class HierarchicalActorCritic(nn.Module):
         # Worker head (action + worker value, FiLM-conditioned)
         self.worker = GoalConditionedActionHead(d_model=d_model, num_actions=num_actions)
 
+        # Stage 20f: proprio injection — the occluder memory slots (last_known
+        # offsets) live in the proprio vector; without this the policy never
+        # sees them (model input was image-only). MLP maps proprio (pos, vel,
+        # touch, joints, yaw, grasp, slots) into a residual on h, so both the
+        # manager (sub-goal) and worker (action) see the tracking target.
+        if self.proprio_dim > 0:
+            self.proprio_mlp = nn.Sequential(
+                nn.Linear(self.proprio_dim, d_model),
+                nn.GELU(),
+                nn.Linear(d_model, d_model),
+            )
+        else:
+            self.proprio_mlp = None
+
         # Cached sub-goal (regenerated every N steps)
         # Note: plain tensor attr avoids copy_() inplace version conflicts.
         # Persisted via custom state_dict/load_state_dict overrides.
@@ -261,10 +277,13 @@ class HierarchicalActorCritic(nn.Module):
     def forward(
         self, obs_u8: torch.Tensor, return_hidden: bool = False,
         skill_delta: "Any | None" = None,
+        proprio: "torch.Tensor | None" = None,
     ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass. Returns (action_logits, worker_value).
 
         When ``return_hidden=True``, returns (logits, worker_value, hidden).
+        ``proprio``: (B, proprio_dim) float vector; None-safe (no injection
+        when absent, e.g. off-policy callbacks that have no env step).
         """
         # Encode
         if self.use_slots:
@@ -284,6 +303,13 @@ class HierarchicalActorCritic(nn.Module):
         else:
             h = seq_out.squeeze(1)  # (B, d_model)
         self._last_hidden = h
+
+        # Stage 20f: proprio residual injection BEFORE manager/worker so the
+        # sub-goal can be conditioned on the target as well. no_grad-free by
+        # design (part of the differentiable policy path); must be a plain
+        # add (no inplace) to keep autograd graphs valid.
+        if proprio is not None and self.proprio_mlp is not None:
+            h = h + self.proprio_mlp(proprio.float())
 
         # Manager: regenerate sub-goal at period boundary
         # Device guard: ensure cached sub-goal is on the same device as h

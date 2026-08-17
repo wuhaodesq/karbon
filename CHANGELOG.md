@@ -5,6 +5,33 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20f · proprio 进策略 + yaw 观测: 槽终于可见 (2026-08-17) 🔥
+
+- **根因** (20e 的继承根因): 20e 把 last_known 槽注入 proprio, 但
+  **策略输入只有渲染图像 — proprio 从不进模型** (train.py rollout
+  `model(obs_t)` 只传 image; proprio 仅被 cross-modal touch bridge
+  使用)。槽信息从未到达策略 → 2500/2600/2700K op = 0.11/0.05/0.11
+  纹丝不动, 行为诊断实锤: policy 遮挡窗口内 cos=-0.60 (反向离开
+  last_known), 而 random ≈ 0; policy 总奖励 44 vs random 408
+  (reveal/塑形信号被"不动"策略系统性错过)
+- **方案**:
+  1. `HierarchicalActorCritic.proprio_mlp` (Linear→GELU→Linear,
+     proprio_dim→d_model), forward 里残差注入 h (manager 子目标 +
+     worker 动作都看到), proprio 可为 None (无注入, 兼容旧路径)
+  2. rollout 每步读 env 实时 proprio (含槽) 传入模型;
+     `RolloutBuffer` 新增 `propr` 通道, PPO mini-batch 更新时同
+     步传入 (否则 proprio_mlp 无梯度)
+  3. `_proprio` 新增 yaw (cos, sin) 2 维 — 没有朝向, 全局 (dx,dy)
+     槽无法映射成局部转弯/前进动作; 16→18 维, 含槽 27 维
+  4. eval 同步: `_prop_to_tensor` + build_model(proprio_dim),
+     measure_milestones 每步传 proprio (评测动作与训练同输入)
+  5. resume 改 strict=False: 新 proprio_mlp 随机初始化, 其余 2.7M
+     步权重完整保留 (20e 之前是 strict 加载, obs 形状未变所以其实
+     权重从未重置 — 这也是 20e 无效的旁证)
+- **验证**: 本地 smoke (梯度可达 proprio_mlp, None 路径安全, 旧模型
+  无 proprio 层兼容), 远端 proprio_dim=27 + yaw 值实测
+- **状态**: 重启训练, 3000K 之前看 2800/2900K 评测首考
+
 ### Stage 20e · 遮挡记忆注入观测: 打破盲走 (2026-08-17) 🔥
 
 - **根因** (比 import math 更深): PPO 策略是 proprio-only

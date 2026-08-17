@@ -54,7 +54,30 @@ def _obs_to_tensor(obs: np.ndarray, device: torch.device) -> torch.Tensor:
     return t.to(device)
 
 
-def build_model(obs_shape, num_actions, model_cfg, device, n_layers):
+def _prop_to_tensor(env, device: torch.device) -> torch.Tensor | None:
+    """Live proprio (incl. occluder slots) as (1, proprio_dim) or None.
+
+    Stage 20f: the policy must see the same proprio in eval as in training,
+    otherwise the trained proprio_mlp path is bypassed and op stays at the
+    random-proximity floor.
+    """
+    dim = int(getattr(env, "proprio_dim", 0))
+    if dim <= 0:
+        return None
+    raw = None
+    if hasattr(env, "proprio") and getattr(env, "proprio", None) is not None:
+        raw = env.proprio
+    elif hasattr(env, "_proprio"):
+        raw = env._proprio()
+    if raw is None:
+        return None
+    t = torch.from_numpy(np.asarray(raw, dtype=np.float32)).reshape(1, -1)
+    if t.shape[-1] < dim:
+        t = torch.cat([t, torch.zeros(1, dim - t.shape[-1])], dim=-1)
+    return t.to(device)
+
+
+def build_model(obs_shape, num_actions, model_cfg, device, n_layers, proprio_dim=0):
     return HierarchicalActorCritic(
         obs_shape=obs_shape,
         num_actions=num_actions,
@@ -72,6 +95,7 @@ def build_model(obs_shape, num_actions, model_cfg, device, n_layers):
         slot_dim=int(model_cfg.get("slot_dim", 128)),
         slot_num_iterations=int(model_cfg.get("slot_num_iterations", 3)),
         sub_goal_every=int(model_cfg.get("sub_goal_every", 10)),
+        proprio_dim=int(proprio_dim),  # Stage 20f: proprio incl. occluder slots
     ).to(device)
 
 
@@ -94,8 +118,9 @@ def measure_milestones(model, env, device, episodes=20, max_steps=300, epsilon=0
         step = 0
         while not done and step < max_steps:
             obs_t = _obs_to_tensor(obs, device)
+            prop_t = _prop_to_tensor(env, device)
             with torch.no_grad():
-                out = model(obs_t)
+                out = model(obs_t, proprio=prop_t)
             logits = out[0] if isinstance(out, (tuple, list)) else out
             if rng.random() < epsilon:
                 action = int(rng.randint(0, env.action_space_n))
@@ -289,7 +314,8 @@ def main():
     n_layers = _ckpt_layer_count(args.ckpt)
     if n_layers <= 0:
         n_layers = int(model_cfg.get("hybrid_n_layers", 7))
-    model = build_model(env.observation_shape, env.action_space_n, model_cfg, device, n_layers)
+    model = build_model(env.observation_shape, env.action_space_n, model_cfg, device, n_layers,
+                        proprio_dim=int(getattr(env, "proprio_dim", 0)))
     ck = torch.load(args.ckpt, map_location="cpu")
     sd = ck.get("model_state") if isinstance(ck, dict) else ck
     missing, unexpected = model.load_state_dict(sd, strict=False)

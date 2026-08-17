@@ -554,10 +554,14 @@ class ThreeDWorld:
 
     @property
     def proprio_dim(self) -> int:
-        # Always 16: grasping fields (is_holding + held_pos) are zeros
-        # until dev_age > 0.15. Ensures checkpoint compatibility.
+        # Always 18 = base(13: pos3+vel3+touch3+joints2+yaw2) + grasp(5),
+        # grasping fields are zeros until dev_age > 0.15. Ensures checkpoint
+        # compatibility.
         # Stage 20e: occluder memory slots appended (3 dims per slot).
-        return 16 + 3 * self._occluder_obs_slots
+        # Stage 20f: yaw (cos,sin) in base so the policy can map the global
+        # (dx,dy) last_known slots to LOCAL turn/forward actions — without
+        # orientation the slots are unaddressable (op stuck at 0.11).
+        return 18 + 3 * self._occluder_obs_slots
 
     @property
     def objects(self) -> list[dict]:
@@ -1533,14 +1537,27 @@ class ThreeDWorld:
             except Exception:
                 pass  # legit: ncon may be 0 in a fresh scene
             # Joint positions
-            joints = np.zeros(3)
+            joints = np.zeros(2)
             for i, axis in enumerate(["x", "y"]):
                 try:
                     joint_id = self._model.joint(f"learner_{axis}").id
                     joints[i] = float(self._data.qpos[joint_id])
                 except Exception:
                     pass  # legit: joint may be absent until body scaffold
-            base = np.concatenate([pos, vel, touch, joints]).astype(np.float32)
+            # Stage 20f: heading (yaw) in global frame — cos/sin so the
+            # orientation is a continuous, periodic-safe feature. Without it
+            # the policy cannot convert global last_known offsets (slots)
+            # into local turn/forward actions.
+            yaw_xy = np.zeros(2, dtype=np.float32)
+            try:
+                q = self._data.body("learner").xquat  # (w,x,y,z)
+                qw, qx, qy, qz = float(q[0]), float(q[1]), float(q[2]), float(q[3])
+                yaw = math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+                yaw_xy[0] = math.cos(yaw)
+                yaw_xy[1] = math.sin(yaw)
+            except Exception:
+                pass  # legit: body may be absent during scaffold build
+            base = np.concatenate([pos, vel, touch, joints, yaw_xy]).astype(np.float32)
             # Add grasping state when unlocked
             if self._dev_age > 0.15:
                 is_holding = np.array([1.0 if self._held_obj_id is not None else 0.0], dtype=np.float32)

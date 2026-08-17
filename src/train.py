@@ -354,6 +354,7 @@ class TransitionBatch:
     values: torch.Tensor
     rewards: torch.Tensor
     dones: torch.Tensor
+    propr: torch.Tensor = None  # Stage 20f: (B, proprio_dim) or empty default
 
 
 class RolloutBuffer:
@@ -370,12 +371,16 @@ class RolloutBuffer:
 
     def __init__(
         self, capacity: int, obs_shape: tuple[int, ...], device: torch.device,
-        n_envs: int = 1,
+        n_envs: int = 1, proprio_dim: int = 0,
     ) -> None:
         self._capacity = int(capacity)
         self.n_envs = int(n_envs)
+        self.proprio_dim = int(proprio_dim)
         self.obs = torch.zeros(
             (capacity, self.n_envs, *obs_shape), dtype=torch.uint8, device=device
+        )
+        self.propr = torch.zeros(
+            (capacity, max(1, self.n_envs), self.proprio_dim), dtype=torch.float32, device=device
         )
         self.actions = torch.zeros((capacity, self.n_envs), dtype=torch.long, device=device)
         self.logprobs = torch.zeros((capacity, self.n_envs), dtype=torch.float32, device=device)
@@ -405,15 +410,22 @@ class RolloutBuffer:
         value: np.ndarray,
         reward: np.ndarray,
         done: np.ndarray,
+        proprio: np.ndarray | None = None,
     ) -> None:
         """Add ``n_envs`` transitions for one collected timestep.
 
         Shapes: ``obs`` (n_envs, *obs_shape) uint8; the rest (n_envs,).
+        ``proprio`` (n_envs, proprio_dim) float32 — Stage 20f: stored so the
+        PPO update sees the same proprio the policy saw during rollout
+        (otherwise the proprio_mlp gets no gradient).
         """
         if self._ptr >= self._capacity:
             raise IndexError("RolloutBuffer full (Axiom 1: no unbounded growth)")
         i = self._ptr
         self.obs[i] = torch.from_numpy(np.asarray(obs))
+        if proprio is not None and self.proprio_dim > 0:
+            _p = np.asarray(proprio, dtype=np.float32).reshape(self.n_envs, -1)
+            self.propr[i, :, : _p.shape[1]] = torch.from_numpy(_p)
         self.actions[i] = torch.as_tensor(np.asarray(action)).to(self.actions.dtype)
         self.logprobs[i] = torch.as_tensor(np.asarray(logprob)).to(self.logprobs.dtype)
         self.values[i] = torch.as_tensor(np.asarray(value)).to(self.values.dtype)
@@ -432,6 +444,7 @@ class RolloutBuffer:
             values=self.values[:T].reshape(T * N),
             rewards=self.rewards[:T].reshape(T * N),
             dones=self.dones[:T].reshape(T * N),
+            propr=self.propr[:T].reshape(T * N, self.proprio_dim),
         )
 
 
@@ -813,7 +826,9 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     obs = env.reset()
     obs_shape = env.observation_shape
     num_actions = env.action_space_n
-    logger.info("Env shape: %s  obs_shape=%s  actions=%d", env_cfg["id"], obs_shape, num_actions)
+    env_proprio_dim = int(getattr(env, "proprio_dim", 0))
+    logger.info("Env shape: %s  obs_shape=%s  actions=%d proprio_dim=%d",
+                env_cfg["id"], obs_shape, num_actions, env_proprio_dim)
     if int(env_cfg.get("num_envs", 1)) > 1 and n_envs == 1:
         logger.warning("n_envs>1 only supported for ThreeDWorld; falling back to 1")
 
@@ -854,9 +869,10 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             slot_dim=int(model_cfg.get("slot_dim", 128)),
             slot_num_iterations=int(model_cfg.get("slot_num_iterations", 3)),
             sub_goal_every=int(model_cfg.get("sub_goal_every", 10)),
+            proprio_dim=env_proprio_dim,  # Stage 20f: proprio incl. occluder slots
         ).to(device)
-        logger.info("Model: HierarchicalActorCritic (d_model=%d, layers=%d, sub_goal_every=%d)",
-                    model.d_model, model_n_layers, model._sub_goal_every)
+        logger.info("Model: HierarchicalActorCritic (d_model=%d, layers=%d, sub_goal_every=%d, proprio=%d)",
+                    model.d_model, model_n_layers, model._sub_goal_every, env_proprio_dim)
     elif bool(model_cfg.get("use_hybrid_backbone", False)):
         model = HybridActorCritic(
             obs_shape=obs_shape,
@@ -899,7 +915,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # Smoke capacity must be >= max_episode_steps (default 200) to avoid
     # IndexError when a single episode fills the buffer.
     rollout_capacity = 256 if smoke_only else 2048
-    buffer = RolloutBuffer(rollout_capacity, obs_shape, device=device, n_envs=n_envs)
+    buffer = RolloutBuffer(rollout_capacity, obs_shape, device=device, n_envs=n_envs,
+                           proprio_dim=env_proprio_dim)
 
     # Hierarchical manager buffer (smaller: every K steps)
     _is_hierarchical = use_hierarchical
@@ -1932,7 +1949,11 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         payload = load_ckpt(resume)
         _model_mismatch = False
         try:
-            model.load_state_dict(payload["model_state"])
+            # Stage 20f: strict=False so a newly added proprio_mlp initializes
+            # randomly while all previously learned weights carry over (the
+            # obs/action shapes are unchanged; only the proprio path is new).
+            # Shape mismatches (e.g. obs-dim change) still raise -> fresh model.
+            model.load_state_dict(payload["model_state"], strict=False)
         except RuntimeError as exc:
             _model_mismatch = True
             logger.warning("Model state mismatch on resume (%s); starting model fresh.", exc)
@@ -2242,6 +2263,32 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # ---- Main loop
     _prof_env = _prof_model = _prof_cog = _prof_buf = _prof_total = 0.0
     _prof_n = 0
+
+    def _prop_tensor(dim: int = env_proprio_dim) -> torch.Tensor | None:
+        """Current env proprio (incl. Stage 20e occluder slots) as (1, dim).
+
+        Stage 20f: the policy input was image-only; the slots (last_known
+        offsets) never reached the model. Read the live proprio each step so
+        the forward pass sees the tracking target in the same frame as obs.
+        """
+        if dim <= 0:
+            return None
+        raw = None
+        if hasattr(env, "proprio") and getattr(env, "proprio", None) is not None:
+            raw = env.proprio  # type: ignore[attr-defined]
+        elif hasattr(env, "_proprio"):
+            raw = env._proprio()  # type: ignore[attr-defined]
+        elif hasattr(env, "_envs"):  # vec wrapper: batch of envs
+            parts = [getattr(e, "_proprio", lambda: None)() or np.zeros(dim, dtype=np.float32)
+                     for e in env._envs]  # type: ignore[attr-defined]
+            raw = np.stack(parts)
+        if raw is None:
+            return None
+        t = torch.from_numpy(np.asarray(raw, dtype=np.float32)).reshape(1, -1)
+        if t.shape[-1] < dim:
+            t = torch.cat([t, torch.zeros(1, dim - t.shape[-1])], dim=-1)
+        return t.to(device)
+
     # Bounded accumulator of core-knowledge records for the P2 aux loss.
     ck_records: list[dict[str, torch.Tensor]] = []
     CK_RECORD_CAP = 4096  # BOUNDS-OK: fixed cap on accumulated records
@@ -2254,10 +2301,12 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         while not buffer.full():
             t0 = time.perf_counter()
             obs_t = _obs_to_tensor(obs, device)  # (N,3,H,W) for vec; (1,3,H,W) single
+            prop_t = _prop_tensor()  # Stage 20f: (1, proprio_dim) or None
             # --- M2: retrieve most relevant skill by observation embedding ---
             if skills is not None and n_envs == 1 and active_skill is None and skills.top_k():
                 with torch.no_grad():
-                    _, _, h = model(obs_t, return_hidden=True, skill_delta=None)
+                    _, _, h = model(obs_t, return_hidden=True, skill_delta=None,
+                                    proprio=prop_t)
                 _ep_first_key = h.detach().cpu()  # saved for skill creation at episode end
                 matched, sim = skills.retrieve_by_embedding(_ep_first_key)
                 if matched is not None:
@@ -2268,10 +2317,12 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 _skill_delta = active_skill.weights if active_skill is not None else None
                 if _collect_cognitive and n_envs == 1:
                     logits, value, hidden = model(
-                        obs_t, return_hidden=True, skill_delta=_skill_delta
+                        obs_t, return_hidden=True, skill_delta=_skill_delta,
+                        proprio=prop_t,
                     )
                 else:
-                    logits, value = model(obs_t, skill_delta=_skill_delta)  # value: (N,)
+                    logits, value = model(obs_t, skill_delta=_skill_delta,
+                                          proprio=prop_t)  # value: (N,)
                 dist = torch.distributions.Categorical(logits=logits)
                 action = dist.sample()              # (N,)
                 logprob = dist.log_prob(action)     # (N,)
@@ -2646,6 +2697,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 value=value.cpu().numpy(),
                 reward=total_r,
                 done=done_arr,
+                proprio=prop_t.cpu().numpy() if prop_t is not None else None,
             )
             t_buf_end = time.perf_counter()
 
@@ -3304,7 +3356,11 @@ and state.step % 50000 < rollout_capacity):
         for _ in range(ppo_epochs):
             for start in range(0, n, mb_size):
                 mb_idx = indices[start:start + mb_size]
-                logits, values = model(batch.obs[mb_idx])
+                _mb_prop = getattr(batch, "propr", None)
+                logits, values = model(
+                    batch.obs[mb_idx],
+                    proprio=_mb_prop[mb_idx] if _mb_prop is not None else None,
+                )
                 dist = torch.distributions.Categorical(logits=logits)
                 new_logprobs = dist.log_prob(batch.actions[mb_idx])
                 ratio = (new_logprobs - batch.logprobs[mb_idx]).exp()
