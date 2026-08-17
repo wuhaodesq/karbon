@@ -299,9 +299,9 @@ coverage:
 train:
   ppo_clip: 0.2
   ppo_epochs: 4
-  entropy_coef: 0.04
+  entropy_coef: 0.01            # Stage 20h#2: 降熵压 (0.04 在全部样本上推均匀, 与 BC 竞争)
   value_coef: 0.5
-  bc_teacher_coef: 0.5             # Stage 20h: BC 模仿损失权重 (teacher 样本自动随接管率衰减)
+  bc_teacher_coef: 1.0          # Stage 20h#2: BC 权重加倍 (0.5 被 PPO credit 错位抵消过)
   gamma: 0.99
   gae_lambda: 0.95
   total_steps: 3500000             # Stage 20h: 3M 终点 + 500K 步给 BC 教学脚手架

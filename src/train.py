@@ -2471,6 +2471,18 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             te = time.perf_counter()
             a_np = action.cpu().numpy()
             step_out = env.step(a_np if n_envs > 1 else int(a_np.item()))
+            # --- Stage 20h credit fix (BC scaffold): ---
+            # If the occluder teacher overrode the action inside env.step, the
+            # recorded (action, logprob) must be the TEACHER's action — the
+            # reward the step earned belongs to what was actually executed.
+            # Recording the policy's own sample instead makes PPO bootstrap the
+            # static/free policy's action from teacher-earned rewards and the
+            # PPO term fights the BC term to a standstill (observed: bc loss
+            # frozen at ~2.49 = uniform for 4h).
+            _t_lta = int(getattr(env, "last_teacher_action", -1))
+            if _t_lta >= 0 and n_envs == 1:
+                a_np = np.asarray([_t_lta], dtype=np.int64)
+                logprob = dist.log_prob(torch.as_tensor([_t_lta], device=device))
             ta = time.perf_counter()
             done_arr = np.asarray(step_out.terminated) | np.asarray(step_out.truncated)
             extrinsic_r = np.asarray(step_out.reward, dtype=np.float32)  # (N,) or scalar
