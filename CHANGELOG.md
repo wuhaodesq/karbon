@@ -5,6 +5,29 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20h#7 · BC 螺旋根治: 满血 teacher 是毒 (2026-08-18) 🔥
+
+- **诊断实录** (14:23-17:21, 20h#6b 3 小时 0 崩溃但训练已坏):
+  - policy loss 1e11 -> 1e41, clipfrac 0.42->0.98, kl 负至 -8.7
+  - **关键证据**: rew_std≈0.9 正常而 `returns_std -> 5.6e4`,
+    `raw_adv_std -> 5.9e4` — **value 网络发散** (GAE 由 V 驱动) +
+    BC 持续推分布迁移 (bc 2->7.9) = 正反馈螺旋
+  - 与 20h#5 (18 分钟 NaN) 同速: 两次爆炸都发生在**满血 teacher
+    0.9 + bc 0.5 重启后 ~20 分钟**; 而 20h#3 健康收敛时 teacher
+    是 0.15 地板 (绝对步数公式在 3.4M 处已衰减到底) — **BC 强度
+    与稳定性直接挂钩**
+- **修复** (弱引导原则 — 脚手架该"轻推"不该"强拽"):
+  1. `occluder_teacher_force` 0.9 -> **0.35** (监督密度降 2.5x,
+     接近 20h#3 健康区), ramp 600K -> 300K (更快拆除)
+  2. `bc_teacher_coef` 0.5 -> **0.05** (BC 成弱正则, PPO 主导)
+  3. **ratio 硬帽** `clamp(0,5)` — 单样本 overconfident 不再能
+     打爆 unclipped 项 (1e41 的元凶路径封死)
+  4. **value 目标护栏** `returns_norm.clamp(-10,10)` — 打断
+     V->GAE->adv->policy 的回归环
+- **验证**: py_compile 绿; 17:23 从 3501760 重启 (pid 78331)
+- **观察**: 重启后 20-40 分钟内 PPO 周期应恢复健康 (p<20,
+  cf<0.5, adv_std<50)
+
 ### Stage 20h#6b · smoothing 掩码维度 bug 修复 (2026-08-18)
 
 - 20h#6 首次启动 2 分钟即死于 train.py:3476 `(1-ε)*_lp_t + ε*_mean_logp`

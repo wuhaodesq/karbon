@@ -3431,11 +3431,23 @@ and state.step % 50000 < rollout_capacity):
                 logits = torch.clamp(logits, -10.0, 10.0)
                 dist = torch.distributions.Categorical(logits=logits)
                 new_logprobs = dist.log_prob(batch.actions[mb_idx])
-                ratio = (new_logprobs - batch.logprobs[mb_idx]).exp()
+                # Stage 20h#7: hard-cap the ratio (not just PPO clip) so a
+                # single wildly-overconfident new policy cannot blow the
+                # unclipped term (observed 1e41 policy losses 14:40-17:20
+                # while clipfrac hovered 0.9+; adv itself exploded via a
+                # diverging value net -> GAE -> normalized targets).
+                ratio = (new_logprobs - batch.logprobs[mb_idx]).exp().clamp(0.0, 5.0)
                 unclipped = ratio * adv_norm[mb_idx]
                 clipped = torch.clamp(ratio, 1.0 - ppo_clip, 1.0 + ppo_clip) * adv_norm[mb_idx]
                 policy_loss = -torch.min(unclipped, clipped).mean()
-                value_loss = F.mse_loss(values, returns_norm[mb_idx])
+                # Stage 20h#7: hard-cap normalized value targets too — the
+                # value net chased EMA-detached extreme returns (returns_std
+                # 1e4-5e4 at 17:xx) which fed GAE -> adv explosion -> policy
+                # spiral. Clamping the target breaks that feedback loop while
+                # preserving the ordering.
+                value_loss = F.mse_loss(
+                    values, returns_norm[mb_idx].clamp(-10.0, 10.0)
+                )
                 entropy = dist.entropy().mean()
                 approx_kl = ((batch.logprobs[mb_idx] - new_logprobs).mean()).detach()
                 clipfrac = ((ratio - 1.0).abs() > ppo_clip).float().mean().detach()
