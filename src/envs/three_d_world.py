@@ -655,6 +655,15 @@ class ThreeDWorld:
                     # 4 basic directions; +4 = double-force gear when far away
                     self.last_teacher_action = best_dir + (4 if best_dist > 3.0 else 0)
                     action = self.last_teacher_action
+                elif best_dist <= 0.0 and self._rng.rand() < self._occluder_teacher_force:
+                    # Stage 20h#5: already at last_known -> teach STILLNESS.
+                    # Action 8 is zero-force at dev_age>0.15 (grasp attempt on
+                    # nothing = no motion), so BC teaches "hold position"
+                    # which is exactly what the eval's end_d<0.7*d0 needs at
+                    # reveal time (3400K: policy roams, hits frames 38x but
+                    # reveal moment drifts -> op stuck 0.08).
+                    self.last_teacher_action = 8
+                    action = 8
             except Exception as _e:
                 _expose_exc("occluder_teacher")
 

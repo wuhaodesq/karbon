@@ -5,6 +5,41 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20h#4 · BC NLL 无界 -> NaN 级联修复 + 训练自愈 (2026-08-18) 🔥
+
+- **崩溃实录**: 20h#3 修复 gather bug 后 bc 2.49→0.89 真实下降 (模仿
+  发生, entropy 2.47→1.07, 策略变尖), 但 06:15 训练死于
+  `Categorical(logits)` ValueError — logits 全 NaN (256,12):
+  `-log π(teacher)` 在确定性模仿下无界 → 单个 teacher 步的 BC 梯度
+  级联污染整个 PPO mini-batch
+- **修复** (train.py):
+  1. `teach_loss = -_lp_t.clamp(min=-6.0).mean()` — NLL 上限 6,
+     单样本梯度有界 (~6/logit)
+  2. **NaN 守护**: backward 前 `torch.isfinite(loss)` 检查, NaN 时
+     跳过该 update 并打 WARNING — 训练永不静默毒化权重
+- **配置**: entropy_coef 0.01→0.05 (熵缓冲), bc_teacher_coef 1.0→0.5
+- **验证**: py_compile/test/check_bounds 全绿; 从 3401408 ckpt
+  (崩前最后完好) 重启, total 3.5M, 重启后 100K 步内无 NaN
+
+### Stage 20h#5 · teacher 满血重训 + 静止教学 (2026-08-18) 🔥
+
+- **3400K 行为诊断实锤** (3401408): `move_steps 154 → 2429` (冻结
+  解除!), `hit 501 vs random 108` (命中帧 5x), `rew_total 1226 vs
+  random 1056` — 策略活了! 但 `op=0.08`: 窗口内游荡命中高,
+  **reveal 时刻不在 last_known 旁** (cos≈0 的方向感 + 到位不驻留)
+- **根因**: 教师只教"走"不教"停" — teacher 在 dist<0.8m 时放弃
+  接管, BC 从未见过"到位=静止"的监督; agent 学会走近但继续游走
+- **修复** (three_d_world.py): dist<0.8m 时 teacher 改教
+  `action=8` (dev_age>0.15 时零力抓取=原地不动) — 把"驻留等待
+  reveal"直接教进策略, 方向动作与静止动作同帧监督
+- **调度修复** (train.py): teacher ramp 原用**绝对步数** —
+  3.4M+ resume 时立即打到 0.15 地板, 模仿已死; 改为
+  `(state.step - _resume_step_at)/ramp` 从 resume 点起算, 重启即
+  满血 0.9, 4M 终点才降到地板
+- **配置**: total_steps 3.5M → **4M**, ramp 600K (从 resume 起算);
+  评测链 p1 (2100-3500K) + p2 (3600-4000K)
+- **验证**: 从 3401408 重启 (08:47), ~57ms/步, 单实例确认
+
 ### Stage 20h · BC 教学脚手架: 模仿打破"冻结策略"死结 (2026-08-17) 🔥
 
 - **根因** (20a-20g 七轮奖励干预全部失败的共同死结):

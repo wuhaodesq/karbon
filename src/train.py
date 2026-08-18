@@ -2327,13 +2327,18 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
 
         # Collect a rollout of exactly `rollout_capacity` steps
         # Stage 20h: BC teacher force schedule — start strong, linear fade
-        # to a floor so the learner gradually takes over (scaffold removal).
+        # from the RESUME point (not absolute step: resuming at 3.4M with an
+        # absolute-step formula immediately hit the 0.15 floor and the
+        # imitation died). Scaffold removal is driven by rollout count.
         _occluder_teacher_base = float(env_cfg.get("occluder_teacher_force", 0.0))
         _occluder_teacher_ramp = int(env_cfg.get("occluder_teacher_ramp", 0))
+        _resume_step_at = int(resumed_step if resumed_stage == stage else 0)
         if _occluder_teacher_base > 0.0 and hasattr(env, "occluder_teacher_force"):
             if _occluder_teacher_ramp > 0:
                 env.occluder_teacher_force = max(
-                    0.15, _occluder_teacher_base * (1.0 - state.step / _occluder_teacher_ramp)
+                    0.15, _occluder_teacher_base * (
+                        1.0 - (state.step - _resume_step_at) / _occluder_teacher_ramp
+                    )
                 )
             else:
                 env.occluder_teacher_force = _occluder_teacher_base
@@ -3441,9 +3446,14 @@ and state.step % 50000 < rollout_capacity):
                         # re-indexed the first dim — the "BC loss" was a
                         # meaningless constant (~log 12): bc never moved for 4h.
                         _ta = _tm[_mask]
-                        teach_loss = -_lp_full[
+                        _lp_t = _lp_full[
                             torch.arange(_ta.shape[0], device=_ta.device), _ta
-                        ].mean()
+                        ]
+                        # Stage 20h#4: clamp the NLL so a near-zero pi(teacher)
+                        # cannot push an unbounded BC gradient — deterministic
+                        # imitation (entropy -> 0) + raw NLL is a NaN cascade
+                        # (06:15 crash: all-NaN logits mid-PPO).
+                        teach_loss = -_lp_t.clamp(min=-6.0).mean()
                         loss = loss + bc_teacher_coef * teach_loss
                 if ewc is not None and ewc.has_consolidated():
                     loss = loss + ewc.penalty(model).to(loss.device)
@@ -3460,9 +3470,18 @@ and state.step % 50000 < rollout_capacity):
                     loss = loss + _sg_loss_extra * 0.1
                     _sg_first_mb = False
                 optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
-                optimizer.step()
+                if not torch.isfinite(loss):
+                    # Stage 20h#4: never backward a NaN loss — it silently
+                    # poisons every weight (06:15 crash). Skip the update and
+                    # say so loudly instead.
+                    logger.warning("[ppo] NaN loss at step=%d (policy=%.3f value=%.3f "
+                                   "teach=%.3f), update skipped", state.step,
+                                   float(policy_loss.item()), float(value_loss.item()),
+                                   float(teach_loss.item()))
+                else:
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+                    optimizer.step()
                 ppo_losses["policy"].append(float(policy_loss.item()))
                 ppo_losses["value"].append(float(value_loss.item()))
                 ppo_losses["entropy"].append(float(entropy.item()))
