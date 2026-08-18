@@ -5,6 +5,29 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20h#8 · 熵/BC 天平复位: 模仿被熵流冲散 (2026-08-19) 🔥
+
+- **诊断实录** (20h#7b 20h 运行, 00:55 step 3712K):
+  - 数值稳定 (0 崩溃) 但**学习退步**: `ent 1.3 -> 2.1-2.3` (策略
+    均匀化), `mean_ret 390 -> 187`, `[ppo]` 防线警告累积 81 次,
+    3600/3700K 首考 op=0.05 (死区)
+  - **根因**: 20h#7 防爆炸把 `entropy_coef 0.05->0.1` — 12 动作
+    均匀熵 2.48 × 0.1 = 0.248 的熵压, 是 `bc 0.05 × NLL(2.5)≈0.125`
+    的 **2 倍** — 熵压把模仿目标冲散。20h#3 模仿成功期 ent=1.07
+    (策略尖), 熵压/BC 的比例才是关键, 不是绝对强度
+  - 后 2 小时 adv_std 39-45 属次临界 (value 未爆), 非致命
+- **修正 (天平复位)**: `entropy_coef 0.1 -> 0.03` (弱熵缓冲, 仅防
+  确定性), `bc_teacher_coef 0.05 -> 0.2` (有存在感的引导) — 熵压:
+  BC ≈ 0.072:0.5, 回到 20h#3 的模仿主导区间; 防线 (logits clamp
+  ±10/ratio cap 5/returns clamp ±10/NaN-grad zero) 全部保留, ratio
+  cap + returns clamp 使"高 BC 再爆炸"路径被结构性封死
+- **watchdog v2**: 修复 awk 解析 bug (负号 p=-0.00 吞匹配 + v>150
+  阈值未命中), 改为 grep -oE 提取 + sort -n 取极值 + awk BEGIN
+  浮点比较; 锚点 ckpt 更新为 3651264; 进程死亡 (含无 traceback)
+  也自动重启
+- **验证**: 01:06 从 3651264 重启 (pid 98381), watchdog 98667 在
+  线; 首 6 个 PPO 周期检查 p<20/v<50/ent 回落
+
 ### Stage 20h#7 · BC 螺旋根治: 满血 teacher 是毒 (2026-08-18) 🔥
 
 - **诊断实录** (14:23-17:21, 20h#6b 3 小时 0 崩溃但训练已坏):

@@ -299,9 +299,9 @@ coverage:
 train:
   ppo_clip: 0.2
   ppo_epochs: 4
-  entropy_coef: 0.1             # Stage 20h#6: 0.05 时 ent~0.85 仍确定性 -> logits 爆炸 (09:04 崩); 0.1 给健康熵缓冲
+  entropy_coef: 0.03            # Stage 20h#8: 0.1 把熵压推到 BC 2 倍 -> 策略均匀化 (ent 1.3->2.3, mean_ret 390->187, op 死区 0.05); 0.03 弱熵缓冲仅防确定性
   value_coef: 0.5
-  bc_teacher_coef: 0.05         # Stage 20h#7: 0.5 太猛 (满血 teacher 下 20 分钟即爆); 0.05 = 弱引导, PPO 主导
+  bc_teacher_coef: 0.2          # Stage 20h#8: 0.05 太弱 (评测无 teacher 时学不到自主追踪, op 死区 0.05); 0.2 有存在感的引导, 配合熵 0.03 达到 20h#3 的模仿-熵比
   gamma: 0.99
   gae_lambda: 0.95
   total_steps: 4000000             # Stage 20h#5: 4M 终点 (3.5M 后 +500K: 满血 teacher 重启 + 攀 scaffold 拆除)
