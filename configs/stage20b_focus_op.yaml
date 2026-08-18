@@ -299,7 +299,7 @@ coverage:
 train:
   ppo_clip: 0.2
   ppo_epochs: 4
-  entropy_coef: 0.05            # Stage 20h#4: 恢复熵缓冲 (0.01 时确定性策略 + 无界 NLL -> NaN 级联)
+  entropy_coef: 0.1             # Stage 20h#6: 0.05 时 ent~0.85 仍确定性 -> logits 爆炸 (09:04 崩); 0.1 给健康熵缓冲
   value_coef: 0.5
   bc_teacher_coef: 0.5          # Stage 20h#4: BC 1.0 -> 0.5 + NLL clamp(-6), 防爆炸
   gamma: 0.99

@@ -5,6 +5,31 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20h#6 · 三道防线根治 logits 爆炸: 二次 NaN 崩溃 (2026-08-18) 🔥
+
+- **崩溃实录 2**: 20h#5 重启后 18 分钟 (09:04, step 3415744) 再次死于
+  `Categorical(logits)` 全 NaN (256,12) — 与 06:15 同型但**更快**
+- **根因修正** (与 20h#4 判断不同): 4 次 PPO 周期内 bc 1.53→2.14→1.04→1.79
+  **不降** (20h#3 是持续降), 而 policy loss 出现 `p=64.68` (ratio 爆炸
+  信号) + ent~0.85 (比 20h#3 末期还尖) — **这是 vanilla PPO 的确定性
+  漂移**: 最优动作概率趋 1 → logits 差 → +inf → NaN; `clamp(-6)` 只
+  限了 BC loss, 挡不住 logits 自身爆炸; 且 `clip_grad_norm_` 对 NaN
+  梯度无效 (NaN 范数比较为 False 不缩放) → 权重被毒化 → 下轮 forward
+  logits 全 NaN
+- **三道防线** (train.py):
+  1. **forward logits 防线**: `isfinite` 检查 (NaN 时跳过该 mb + WARNING)
+     后 `logits.clamp(-10, 10)` — logits 永不越界, ratio/BC 恒有限
+  2. **gradient 防线**: backward 后逐参数 isfinite 检查, 非有限梯度
+     `zero_()` + WARNING (clip 治不了的 NaN 梯度直接清零)
+  3. **BC label smoothing** (替代 clamp): target = (1-ε)onehot + ε/uniform,
+     ε=0.05 — 最优 logit 差被永久封顶在 log((11-10ε)/ε)≈5.3, 确定性
+     模仿不再靠 clamp 兜底而是**结构上不可能爆炸**
+- **配置**: entropy_coef 0.05 → **0.1** (健康熵缓冲, 防再次滑入确定性)
+- **行为修复**: 静止教学动作 8(grasp, 抓取半径 ~0.5m 会把 revealed
+  物体抓走破坏 last_known) → **11**(rotate, 纯零力视觉探索)
+- **验证**: py_compile/check_bounds 绿; 13:26 从 3401408 重启, 单实例
+  确认; 崩溃日志存档 /root/train_s20h_crash.log
+
 ### Stage 20h#4 · BC NLL 无界 -> NaN 级联修复 + 训练自愈 (2026-08-18) 🔥
 
 - **崩溃实录**: 20h#3 修复 gather bug 后 bc 2.49→0.89 真实下降 (模仿

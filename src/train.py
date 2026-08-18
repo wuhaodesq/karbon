@@ -3419,6 +3419,16 @@ and state.step % 50000 < rollout_capacity):
                     batch.obs[mb_idx],
                     proprio=_mb_prop[mb_idx] if _mb_prop is not None else None,
                 )
+                # Stage 20h#6: bound logits every forward. Deterministic
+                # policies push the optimal-action logit toward +/-inf
+                # (09:04 crash: all-NaN logits (256,12) at Categorical).
+                # Clamping keeps pi min/max bounded, so ratios and BC NLL
+                # stay finite; the bound is generous enough to never bind
+                # a healthy policy. NaN-check as a second, loud net.
+                if not torch.isfinite(logits).all():
+                    logger.warning("[ppo] NaN/inf logits at step=%d — resetting mb (prev crash site)", state.step)
+                    continue
+                logits = torch.clamp(logits, -10.0, 10.0)
                 dist = torch.distributions.Categorical(logits=logits)
                 new_logprobs = dist.log_prob(batch.actions[mb_idx])
                 ratio = (new_logprobs - batch.logprobs[mb_idx]).exp()
@@ -3453,7 +3463,18 @@ and state.step % 50000 < rollout_capacity):
                         # cannot push an unbounded BC gradient — deterministic
                         # imitation (entropy -> 0) + raw NLL is a NaN cascade
                         # (06:15 crash: all-NaN logits mid-PPO).
-                        teach_loss = -_lp_t.clamp(min=-6.0).mean()
+                        # Stage 20h#6: upgraded to label smoothing — a pure
+                        # one-hot target pushes logits toward +-inf even with
+                        # the clamp (09:04 crash: ent~0.85, p_loss=64, then
+                        # all-NaN logits). Smoothing caps the optimal logit
+                        # gap at log((11-10e)/e) ~ 5.3 forever.
+                        _eps = 0.05
+                        _logits_c = torch.clamp(dist.logits, -10.0, 10.0)
+                        _lse = torch.logsumexp(_logits_c, dim=-1)
+                        _n_cls = _logits_c.shape[-1]
+                        _mean_logp = (_logits_c.sum(dim=-1) - _n_cls * _lse) / _n_cls
+                        _lp_smooth = (1.0 - _eps) * _lp_t + _eps * _mean_logp
+                        teach_loss = -_lp_smooth.mean()
                         loss = loss + bc_teacher_coef * teach_loss
                 if ewc is not None and ewc.has_consolidated():
                     loss = loss + ewc.penalty(model).to(loss.device)
@@ -3480,6 +3501,18 @@ and state.step % 50000 < rollout_capacity):
                                    float(teach_loss.item()))
                 else:
                     loss.backward()
+                    # Stage 20h#6: NaN gradients survive clip_grad_norm_
+                    # (NaN norm compares False -> no scaling) and bake into
+                    # weights -> next-forward NaN logits (the 09:04 crash).
+                    # Zero any non-finite grad so one bad mini-batch cannot
+                    # poison the whole network.
+                    _bad_grad = False
+                    for _p in model.parameters():
+                        if _p.grad is not None and not torch.isfinite(_p.grad).all():
+                            _p.grad.zero_()
+                            _bad_grad = True
+                    if _bad_grad:
+                        logger.warning("[ppo] non-finite grads at step=%d — zeroed this mb", state.step)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
                     optimizer.step()
                 ppo_losses["policy"].append(float(policy_loss.item()))

@@ -657,13 +657,16 @@ class ThreeDWorld:
                     action = self.last_teacher_action
                 elif best_dist <= 0.0 and self._rng.rand() < self._occluder_teacher_force:
                     # Stage 20h#5: already at last_known -> teach STILLNESS.
-                    # Action 8 is zero-force at dev_age>0.15 (grasp attempt on
-                    # nothing = no motion), so BC teaches "hold position"
-                    # which is exactly what the eval's end_d<0.7*d0 needs at
-                    # reveal time (3400K: policy roams, hits frames 38x but
-                    # reveal moment drifts -> op stuck 0.08).
-                    self.last_teacher_action = 8
-                    action = 8
+                    # Action 11 (rotate, visual explore) is zero-force at
+                    # dev_age>0.15, so BC teaches "hold position" — exactly
+                    # what the eval's end_d<0.7*d0 needs at reveal time
+                    # (3400K: policy roams, hits frames 38x but the reveal
+                    # moment drifts -> op stuck 0.08).
+                    # Stage 20h#6: was action 8 (grasp) — grasp with reach
+                    # ~0.5m picks up revealed objects standing right next to
+                    # the agent, corrupting last_known. 11 has no side effect.
+                    self.last_teacher_action = 11
+                    action = 11
             except Exception as _e:
                 _expose_exc("occluder_teacher")
 
