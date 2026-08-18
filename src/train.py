@@ -3473,7 +3473,9 @@ and state.step % 50000 < rollout_capacity):
                         _lse = torch.logsumexp(_logits_c, dim=-1)
                         _n_cls = _logits_c.shape[-1]
                         _mean_logp = (_logits_c.sum(dim=-1) - _n_cls * _lse) / _n_cls
-                        _lp_smooth = (1.0 - _eps) * _lp_t + _eps * _mean_logp
+                        # NOTE: mean-logp must be masked like _lp_t (teacher
+                        # rows only) — 13:28 crash: 201 vs 256 shape mismatch.
+                        _lp_smooth = (1.0 - _eps) * _lp_t + _eps * _mean_logp[_mask]
                         teach_loss = -_lp_smooth.mean()
                         loss = loss + bc_teacher_coef * teach_loss
                 if ewc is not None and ewc.has_consolidated():

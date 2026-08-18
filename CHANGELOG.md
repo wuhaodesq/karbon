@@ -5,6 +5,14 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20h#6b · smoothing 掩码维度 bug 修复 (2026-08-18)
+
+- 20h#6 首次启动 2 分钟即死于 train.py:3476 `(1-ε)*_lp_t + ε*_mean_logp`
+  尺寸不匹配 (201 vs 256): `_mean_logp` 是整 minibatch 的, 未按
+  teacher 掩码截取; 修复为 `_mean_logp[_mask]` (与 `_lp_t` 同为
+  掩码行)
+- 14:23 重启 (pid 69020), 首 PPO 周期 bc=1.99 正常, 0 错误
+
 ### Stage 20h#6 · 三道防线根治 logits 爆炸: 二次 NaN 崩溃 (2026-08-18) 🔥
 
 - **崩溃实录 2**: 20h#5 重启后 18 分钟 (09:04, step 3415744) 再次死于
