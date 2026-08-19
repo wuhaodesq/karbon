@@ -67,8 +67,10 @@ env:
   object_crossing_fixed_object: 0     # Stage 20d P1: 固定穿越物体 (恒定可学映射)
   object_crossing_fixed_wall: 0       # Stage 20d P1: 固定穿越墙 (恒定镜像点)
   occluder_obs_slots: 3              # Stage 20e: 遮挡记忆槽注入观测 (策略唯一知道去哪找的输入)
-  occluder_teacher_force: 0.35       # Stage 20h#7: 0.9 满血=BC 螺旋源 (20h#5/#6 均 20 分钟内爆, 20h#3 健康时 teacher=0.15 地板); 0.35 接近健康区
-  occluder_teacher_ramp: 300000      # Stage 20h#7: 从 resume 起算 300K 步衰减至 0.15 (脚手架更快拆除)
+  occluder_teacher_force: 0.35       # 20i: 保持 20h 终值起步 (正确语义下第一次验证教学)
+  occluder_teacher_ramp: 600000      # 20i: 600K 步线性退火 (较 20h 的 300K 慢一倍, 给内化时间)
+  occluder_teacher_floor: 0.05       # 20i: 退火终值低地板 (给自主压力; 20h 为 0.15 硬编码)
+  occluder_teacher_zero_after: 400000  # 20i: ramp 结束后再 400K 步 teacher=0 纯自主验证段
   focus_op_only: true                 # Stage 20b: 封闭 means_ends/物体操控, 专训 op
 
 # --- LLM Fusion (disabled) ---
@@ -304,7 +306,7 @@ train:
   bc_teacher_coef: 0.2          # Stage 20h#8: 0.05 太弱 (评测无 teacher 时学不到自主追踪, op 死区 0.05); 0.2 有存在感的引导, 配合熵 0.03 达到 20h#3 的模仿-熵比
   gamma: 0.99
   gae_lambda: 0.95
-  total_steps: 4000000             # Stage 20h#5: 4M 终点 (3.5M 后 +500K: 满血 teacher 重启 + 攀 scaffold 拆除)
+  total_steps: 5000000             # 20i: 5M 终点 (+1M = 600K 退火 + 400K 纯自主)
   ckpt_every_steps: 50000
 
 independent_eval:

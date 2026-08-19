@@ -726,6 +726,12 @@ def _build_env_from_spec(spec: dict[str, Any], env_cfg: dict[str, Any]):
             max_episode_steps=env_cfg.get("max_episode_steps", 300),
             render_size=int(env_cfg.get("render_size", 128)),
             action_force=float(spec.get("action_force", env_cfg.get("action_force", 50.0))),
+            # 20i: forwarded so curriculum envs match the pre-curriculum env
+            # (804). Previously missed -> train env ran at dev_age=0.0 while
+            # eval used 0.5: actions 8-11 fell through to locomotion and the
+            # 20h#5/#6 stillness teaching (action 11) never actually taught
+            # stillness. MUST stay in sync with the startup env block.
+            developmental_age=float(env_cfg.get("developmental_age", 0.0)),
             camera_pos=tuple(env_cfg.get("camera_pos", [0.0, -1.0, 0.8])),
             camera_fovy=float(env_cfg.get("camera_fovy", 60.0)),
             num_occluders=int(env_cfg.get("num_occluders", 0)),
@@ -2332,14 +2338,24 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         # imitation died). Scaffold removal is driven by rollout count.
         _occluder_teacher_base = float(env_cfg.get("occluder_teacher_force", 0.0))
         _occluder_teacher_ramp = int(env_cfg.get("occluder_teacher_ramp", 0))
+        _occluder_teacher_floor = float(env_cfg.get("occluder_teacher_floor", 0.15))
+        _occluder_teacher_zero_after = int(env_cfg.get("occluder_teacher_zero_after", 0))
         _resume_step_at = int(resumed_step if resumed_stage == stage else 0)
         if _occluder_teacher_base > 0.0 and hasattr(env, "occluder_teacher_force"):
+            _elapsed = state.step - _resume_step_at
             if _occluder_teacher_ramp > 0:
-                env.occluder_teacher_force = max(
-                    0.15, _occluder_teacher_base * (
-                        1.0 - (state.step - _resume_step_at) / _occluder_teacher_ramp
+                # 20i: linear fade to _occluder_teacher_floor over the ramp,
+                # then a fully autonomous phase (teacher=0) of
+                # _occluder_teacher_zero_after steps after the ramp ends.
+                if _occluder_teacher_zero_after > 0 \
+                        and _elapsed >= _occluder_teacher_ramp + _occluder_teacher_zero_after:
+                    env.occluder_teacher_force = 0.0
+                else:
+                    env.occluder_teacher_force = max(
+                        _occluder_teacher_floor, _occluder_teacher_base * (
+                            1.0 - _elapsed / _occluder_teacher_ramp
+                        )
                     )
-                )
             else:
                 env.occluder_teacher_force = _occluder_teacher_base
         while not buffer.full():

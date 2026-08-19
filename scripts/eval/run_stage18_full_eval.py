@@ -276,6 +276,9 @@ def main():
     ap.add_argument("--seed", type=int, default=42,
                     help="rollout RNG seed (multi-seed stability eval)")
     ap.add_argument("--out", type=str, default="/root/stage18_500k_full_eval.json")
+    ap.add_argument("--probes", type=str, default="far,cross",
+                    help="op probes: 'far' (historical far-object occlusion), "
+                         "'cross' (training crossing curriculum); comma list")
     ap.add_argument("--tasks", type=str, default="all",
                     help="comma list of curriculum task ids to evaluate, or 'all'")
     args = ap.parse_args()
@@ -287,8 +290,8 @@ def main():
     model_cfg = cfg["model"]
     num_sense_cfg = cfg.get("number_sense")
 
-    def make_env(num_objects, action_force):
-        return ThreeDWorld(
+    def make_env(num_objects, action_force, probe="far"):
+        kw = dict(
             num_objects=int(num_objects),
             max_episode_steps=args.max_steps,
             render_size=int(cfg["env"].get("render_size", 128)),
@@ -305,6 +308,20 @@ def main():
             # or the resumed policy sees a different input dim.
             occluder_obs_slots=int(cfg["env"].get("occluder_obs_slots", 0)),
         )
+        if probe == "cross":
+            # 20i C-probe: replay the training crossing curriculum (fixed
+            # object/wall, same cadence) so the op metric measures the
+            # trained skill; the default "far" probe stays the historical
+            # far-object occlusion metric. Both are reported; far is the
+            # headline (generalization), cross is the diagnostic (did the
+            # taught skill transfer to the probe at all).
+            kw.update(
+                object_crossing_every=int(cfg["env"].get("object_crossing_every", 0)),
+                object_crossing_hold_steps=int(cfg["env"].get("object_crossing_hold_steps", 0)),
+                object_crossing_fixed_object=int(cfg["env"].get("object_crossing_fixed_object", -1)),
+                object_crossing_fixed_wall=int(cfg["env"].get("object_crossing_fixed_wall", -1)),
+            )
+        return ThreeDWorld(**kw)
 
     env = make_env(cfg["env"].get("num_objects", 8),
                    cfg["env"].get("action_force", 50.0))
@@ -388,6 +405,49 @@ def main():
         rep_agg = rep
     print(f"  BASE est. age={rep_agg.estimated_age:.1f}y")
 
+    # 2. 20i C-probe: replay the training crossing curriculum. The far probe
+    # above stays the historical/generalization metric; this one measures
+    # whether the taught skill transfers to the probe env at all (teacher
+    # force intentionally 0 -> pure autonomous roll).
+    probes = [p.strip() for p in args.probes.split(",")]
+    if "cross" in probes:
+        print("[s18e] Measuring cross-probe (training crossing curriculum) ...")
+        per_task_c: dict[str, dict] = {}
+        env_c0 = make_env(cfg["env"].get("num_objects", 8),
+                          cfg["env"].get("action_force", 50.0), probe="cross")
+        for tid in task_ids:
+            spec = next((t for t in tasks_cfg if int(t["id"]) == tid), None)
+            if spec is None:
+                continue
+            env_c = make_env(spec.get("num_objects", 8),
+                             spec.get("action_force", 50.0), probe="cross")
+            rep_c = measure_milestones(model, env_c, device, episodes=args.episodes,
+                                       max_steps=args.max_steps, epsilon=args.epsilon,
+                                       rule_count=rule_count, seed=args.seed)
+            per_task_c[str(tid)] = {
+                "tag": spec.get("tag"),
+                "num_objects": spec.get("num_objects"),
+                "action_force": spec.get("action_force"),
+                "scores": {k: round(float(v), 4) for k, v in rep_c.scores.items()},
+                "passed": {k: bool(v) for k, v in rep_c.passed.items()},
+                "estimated_age": rep_c.estimated_age,
+            }
+            print(f"  cross t{tid}: age={rep_c.estimated_age:.1f}y | "
+                  + " ".join(f"{k}={v:.2f}" for k, v in rep_c.scores.items()))
+            env_c.close()
+        rep_cross = measure_milestones(model, env_c0, device, episodes=args.episodes,
+                                       max_steps=args.max_steps, epsilon=args.epsilon,
+                                       rule_count=rule_count, seed=args.seed)
+        results["milestones_3d_cross"] = {
+            "scores": {k: round(float(v), 4) for k, v in rep_cross.scores.items()},
+            "passed": {k: bool(v) for k, v in rep_cross.passed.items()},
+            "estimated_age": rep_cross.estimated_age,
+            "per_task": per_task_c,
+        }
+        print(f"  CROSS est. age={rep_cross.estimated_age:.1f}y | "
+              + " ".join(f"{k}={v:.2f}" for k, v in rep_cross.scores.items()))
+        env_c0.close()
+
     # 2. ToM module targeted tests
     print("[s18e] Measuring ToM module ...")
     tom_state = extra.get("theory_of_mind_state")
@@ -448,6 +508,9 @@ def main():
     print(f"  ToM module          : {results['tom_module']}")
     print(f"  NumberSense head    : {results['number_sense']}")
     print(f"  Scene description   : {results['scene_description']}")
+    if "milestones_3d_cross" in results:
+        cs = results["milestones_3d_cross"]["scores"]
+        print(f"  cross probe op     : {cs.get('object_permanence', float('nan')):.3f}")
     print()
 
     out_path = Path(args.out)

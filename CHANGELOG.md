@@ -5,6 +5,35 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20i 归因诊断 · 三个环境级根因, op 死区重新解释 (2026-08-19)
+
+- **diag20i @ 4000K (训练同构 env, dev_age=0.5, 无教师, 10ep x 300)**
+  (计数 bug 修复后): 策略闭合 44 事件 END<0.7 仅 6/44=0.14, reveal
+  d/d0 mean=0.987; 随机基线 17/75=0.23, mean=0.870; toward_ratio
+  0.416 vs 随机 0.343 -> **策略没有任何超过随机的自主追踪能力**,
+  "教师依赖"从假设升级为结论; 且 0.14 与评测 0.10 同量级, 说明评测
+  探针没有冤枉策略 (早前 diag 的 5/5=1.0 是统计 bug: windows 只统计
+  命中事件, 比值恒 1.0)。
+- **根因 I: 训练 env dev_age 丢失**。`_build_env_from_spec` 漏传
+  `developmental_age`, 训练环境恒为 0.0 (评测 0.5)。后果: dev_age<=0.15
+  时 action 8-11 落到 locomotion (action%8) —— 20h#5/#6 的"静止教学"
+  (action 11) 实际教的是满力朝 +y 推, 每个"到位"时刻把 agent 推开;
+  grasp/rotate 语义在训练中从未出现过。修复: 转发 env_cfg 的
+  developmental_age (与启动 env 块对齐)。
+- **根因 II: eval op 探针与训练任务错位**。eval 的 make_env 不传
+  object_crossing_* -> 训练的是"固定物体 0 穿越固定墙 0"的墙边驻留,
+  评测的却是"随机远物视线遮挡"搜索。20b-20h 全程 0.03-0.10 死区
+  部分是这个错位的产物。修复: 双探针 (--probes far,cross), far 保持
+  历史口径 (泛化能力), cross 复刻训练课程 (技能是否迁移), 均报。
+- **根因 III: mujoco 3.10 API 错用**。`self._model.ncon` 不存在
+  (ncon 是 MjData 属性), contact reward + proprio touch 每次 step 都
+  抛异常 (训练日志没有是因为 focus_op_only=True 短路了 reward,
+  eval 默认 False 才走到)。修复: `self._data.ncon`; 修复后 eval
+  速度恢复正常 (之前每步打 2 个 traceback)。
+- **状态**: 4000K 双探针 eval 于 ncon 修复后重跑中。
+
+
+
 ### Stage 20h 终局 · 稳定性胜, op 死区坐实 — 教师依赖假设 (2026-08-19)
 
 - **最终读数**: 4000K eval `op=0.10` (p2 链自动完成)。整条 op 曲线:

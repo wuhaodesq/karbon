@@ -1503,7 +1503,7 @@ class ThreeDWorld:
         try:
             learner_bid = self._model.body("learner").id
             contact_count = 0
-            for i in range(self._model.ncon):
+            for i in range(self._data.ncon):
                 contact = self._data.contact[i]
                 if contact.geom1 == learner_bid or contact.geom2 == learner_bid:
                     contact_count += 1
@@ -1591,7 +1591,7 @@ class ThreeDWorld:
             touch = np.zeros(3)
             # Touch: compute from contact forces (simplified)
             try:
-                for i in range(self._model.ncon):
+                for i in range(self._data.ncon):
                     contact = self._data.contact[i]
                     touch[:] = [1.0, 1.0, 1.0]  # any contact = touch signal
             except Exception:
