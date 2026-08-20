@@ -480,6 +480,16 @@ class ThreeDWorld:
         # apply an imitation loss. Eval envs keep the default 0.0 -> pure.
         self._occluder_teacher_force = float(occluder_teacher_force)
         self.last_teacher_action: int = -1  # -1 = no teacher this step
+        # Stage 20j threshold-gate counters (bounded ints): tracking
+        # attempts vs successes while teacher=0, same d_now<ratio*d0
+        # semantic as the eval op metric. train.py snaps & resets them at
+        # the end of each probe window. 20h/20i note: train.py wrote
+        # env.occluder_teacher_force but there was NO property -> hasattr()
+        # False -> the fade schedule silently never ran; the property
+        # below is the fix (external schedule now really controls the
+        # internal force).
+        self._gate_arrivals = 0
+        self._gate_success = 0
         self._focus_op_only = bool(focus_op_only)
         # Objects parked behind a wall after crossing (bounded: num_objects).
         # obj_id -> remaining hold steps; while held the object is reported
@@ -545,6 +555,39 @@ class ThreeDWorld:
         self._build_scene()
 
     # ------------------------------------------------------------------ properties
+
+    @property
+    def occluder_teacher_force(self) -> float:
+        """Stage 20h/20j: live BC teacher takeover rate (0=off, 1=every step).
+
+        Stage 20j fix: this property is the ONLY way train.py's schedule
+        reaches the internal ``_occluder_teacher_force``. Before it existed
+        (20h/20i) train.py assigned ``env.occluder_teacher_force`` directly,
+        which silently created a dead instance attribute; ``hasattr`` was
+        True-ish only after that assignment, the fade never ran, and the
+        teacher stayed at the constructor value for 4.5M steps.
+        """
+        return self._occluder_teacher_force
+
+    @occluder_teacher_force.setter
+    def occluder_teacher_force(self, value: float) -> None:
+        self._occluder_teacher_force = float(value)
+
+    @property
+    def occluder_reveal_ratio(self) -> float:
+        """Stage 20j: live reveal-attribution ratio (eval keeps its own kw)."""
+        return self._occluder_reveal_ratio
+
+    @occluder_reveal_ratio.setter
+    def occluder_reveal_ratio(self, value: float) -> None:
+        self._occluder_reveal_ratio = float(value)
+
+    def gate_stats_snapshot_and_reset(self) -> tuple[int, int]:
+        """Stage 20j: (arrivals, successes) since last probe-window end."""
+        snap = (self._gate_arrivals, self._gate_success)
+        self._gate_arrivals = 0
+        self._gate_success = 0
+        return snap
 
     @property
     def action_space_n(self) -> int:
@@ -1126,7 +1169,13 @@ class ThreeDWorld:
         sx, sy = traj[0]
         d0 = math.hypot(sx - lk[0], sy - lk[1])
         d_now = math.hypot(ax - lk[0], ay - lk[1])
+        # Stage 20j threshold-gate probe counters: every valid tracking
+        # attempt counts an arrival; a d_now < ratio*d0 success counts a
+        # hit. Same semantic as the eval op metric (train.py consumes via
+        # gate_stats_snapshot_and_reset).
+        self._gate_arrivals += 1
         if d0 >= 1e-6 and d_now < self._occluder_reveal_ratio * d0:
+            self._gate_success += 1
             self._reveal_bonus_pending = max(
                 self._reveal_bonus_pending, self._occluder_reveal_bonus)
 

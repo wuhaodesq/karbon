@@ -5,7 +5,38 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
-### Stage 20i 归因诊断 · 三个环境级根因, op 死区重新解释 (2026-08-19)
+### Stage 20j · 阈值门控放手 — 20i 判决 + 两处隐藏根因 (2026-08-20) 🔥
+
+- **20i 判决点 (4.5M)**: far=0.0 cross=0.0 (4251904: 0.060/0.053; 4000K:
+  0.050/0.039)。三节点全在噪声带, op 真实信号 = 0。按预案**停训转 20j**
+  (用户拍板: 立即停)。20i 终权重 ckpt_stage20_004550912.pt。
+- **隐藏根因 1 (20h/20i 退火从未运行)**: train.py 调度写
+  `env.occluder_teacher_force`, 但 ThreeDWorld 只有私有
+  `_occluder_teacher_force` 且无 property —— hasattr 恒 False, 调度
+  **静默跳过** (日志 0 行 teacher 输出), teacher 恒 = yaml 构造值 0.35
+  直到 4.5M。"退火无效/教师依赖"重归因: **策略从未被放手过**, diag
+  0.14<随机 0.23 是未自主训练的直接后果。修复: property 化
+  `occluder_teacher_force` / `occluder_reveal_ratio` (20h#X 式静默失效
+  模式 +1)。
+- **隐藏根因 2 (reveal 奖励死锁)**: 20g 设归因阈值 0.7, 但策略
+  mean end/start=0.987 >> 0.7 —— 5.0 大额"找到"奖励从 20g 起**从未
+  发放** (唯一梯度只剩 1.5 趋近+1.5 塑形)。20j 修复: 阈值阶梯
+  0.85→0.75→0.70 (评测口径恒 0.7) + 奖励增强 (target 3.0 / shaping
+  3.0 / bonus 8.0)。
+- **20j 方案 (B: 阈值门控, 用户钦定)**: 替代固定退火 —— 每 gate_every
+  步探测窗口 (teacher=0), 按 env gate 计数器 (成功追踪帧/尝试帧,
+  d_now<ratio*d0 与评测同构) 测"自主到达率"; 连续 rounds_needed 轮
+  ≥threshold 才 -0.02 退火, 地板 min; 不足则保持。初始 teacher 0.5,
+  15K/2K 探测, 阈值 0.15, 3 轮, 1M 步 (总 5.5M, resume 4550912)。
+- **实现**: three_d_world.py property 化 + gate 计数器 +
+  gate_stats_snapshot_and_reset(); train.py 门控调度 + reveal 阶梯 +
+  [tgate] 日志; 新 yaml stage20j_threshold_gate.yaml。
+- **验证**: 服务器 pytest 全绿 (除两个历史失败: narrative fake 签名、
+  triton 环境缺失); check_bounded 干净; 训练 11:05 启动健康。
+- **进程**: 训练 279967 (train_s20j.log) + watchdog20j v4 (锚 4550912,
+  自然完成退役) + eval 链 v3 (LAST=4550912, Δ≥250K, s20j_op_curve.log)
+- **判决准则**: 5.5M 时 far/cross ≥0.15 → 放手有效; 若到达率长期
+  <0.15 (teacher 卡 0.5) → 20j 假设不成立, 转架构级 (分层目标/长程记忆)
 
 - **diag20i @ 4000K (训练同构 env, dev_age=0.5, 无教师, 10ep x 300)**
   (计数 bug 修复后): 策略闭合 44 事件 END<0.7 仅 6/44=0.14, reveal

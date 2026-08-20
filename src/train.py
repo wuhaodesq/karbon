@@ -2326,38 +2326,94 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # Bounded accumulator of core-knowledge records for the P2 aux loss.
     ck_records: list[dict[str, torch.Tensor]] = []
     CK_RECORD_CAP = 4096  # BOUNDS-OK: fixed cap on accumulated records
+
+    # ---- Stage 20j: threshold-gated teacher schedule -----------------------
+    # 20h/20i lesson: the linear-fade ramp NEVER ran (train.py wrote
+    # env.occluder_teacher_force but ThreeDWorld only reads
+    # self._occluder_teacher_force and has no property -> hasattr() was
+    # False -> schedule silently skipped, teacher stayed at the yaml
+    # constructor value 0.35 for 4.5M steps; the "fade to 0.05" never
+    # happened, so the policy was NEVER released). 20j fixes the property
+    # (three_d_world.py) and replaces the blind fade with a closed loop:
+    #   - probe every `gate_every` steps with teacher=0 for `probe_steps`;
+    #   - arrival rate = successful tracking frames / tracking attempts
+    #     measured in the probe (env._gate_arrivals/_gate_success, same
+    #     d_now < ratio*d0 semantic as the eval op metric);
+    #   - only when rate >= threshold for `rounds_needed` consecutive
+    #     windows does the teacher step down by `step`; otherwise it holds
+    #     (never below `min`). The learner must EARN every 0.02 of release.
+    _tgate = dict(
+        teacher=float(env_cfg.get("occluder_teacher_force", 0.0)),
+        min_=float(env_cfg.get("occluder_teacher_min", 0.05)),
+        gate_every=int(env_cfg.get("occluder_teacher_gate_every", 0)),
+        probe_steps=int(env_cfg.get("occluder_teacher_probe_steps", 5000)),
+        threshold=float(env_cfg.get("occluder_teacher_arrival_threshold", 0.15)),
+        rounds_needed=int(env_cfg.get("occluder_teacher_rounds_needed", 3)),
+        step=float(env_cfg.get("occluder_teacher_step", -0.02)),
+        rounds=0,
+        last_scored_window=-1,
+    )
+    _resume_step_at = int(resumed_step if resumed_stage == stage else 0)
+    # Stage 20j: reveal-ratio ladder (0.85 -> 0.75 -> 0.70) so the 5.0+
+    # attribution bonus actually fires for the first time (20g set the
+    # ratio at 0.7 while the policy's mean end/start was 0.987 -> the bonus
+    # NEVER paid out; training reward was torque-free). Eval keeps 0.7.
+    _reveal_ladder: list[float] = [
+        float(v) for v in env_cfg.get("occluder_reveal_ratio_ladder", [0.85, 0.75, 0.70])
+    ]
+    _reveal_ladder_every = int(env_cfg.get("occluder_reveal_ratio_ladder_every", 500000))
+    if _reveal_ladder and hasattr(env, "occluder_reveal_ratio"):
+        env.occluder_reveal_ratio = _reveal_ladder[0]
+
     while state.step < total_steps:
         buffer.clear()
         if _is_hierarchical and manager_buffer is not None:
             manager_buffer.clear()
 
         # Collect a rollout of exactly `rollout_capacity` steps
-        # Stage 20h: BC teacher force schedule — start strong, linear fade
-        # from the RESUME point (not absolute step: resuming at 3.4M with an
-        # absolute-step formula immediately hit the 0.15 floor and the
-        # imitation died). Scaffold removal is driven by rollout count.
-        _occluder_teacher_base = float(env_cfg.get("occluder_teacher_force", 0.0))
-        _occluder_teacher_ramp = int(env_cfg.get("occluder_teacher_ramp", 0))
-        _occluder_teacher_floor = float(env_cfg.get("occluder_teacher_floor", 0.15))
-        _occluder_teacher_zero_after = int(env_cfg.get("occluder_teacher_zero_after", 0))
-        _resume_step_at = int(resumed_step if resumed_stage == stage else 0)
-        if _occluder_teacher_base > 0.0 and hasattr(env, "occluder_teacher_force"):
-            _elapsed = state.step - _resume_step_at
-            if _occluder_teacher_ramp > 0:
-                # 20i: linear fade to _occluder_teacher_floor over the ramp,
-                # then a fully autonomous phase (teacher=0) of
-                # _occluder_teacher_zero_after steps after the ramp ends.
-                if _occluder_teacher_zero_after > 0 \
-                        and _elapsed >= _occluder_teacher_ramp + _occluder_teacher_zero_after:
+        # Stage 20j: threshold-gated teacher force — probe (teacher=0),
+        # score autonomous arrival rate, release teacher only after
+        # `rounds_needed` consecutive windows above threshold.
+        _elapsed = state.step - _resume_step_at
+        if _tgate["teacher"] > 0.0 and hasattr(env, "occluder_teacher_force"):
+            if _tgate["gate_every"] > 0:
+                _window = _elapsed // _tgate["gate_every"]
+                _in_probe = (_elapsed % _tgate["gate_every"]) < _tgate["probe_steps"]
+                if _in_probe:
                     env.occluder_teacher_force = 0.0
                 else:
-                    env.occluder_teacher_force = max(
-                        _occluder_teacher_floor, _occluder_teacher_base * (
-                            1.0 - _elapsed / _occluder_teacher_ramp
-                        )
-                    )
+                    env.occluder_teacher_force = _tgate["teacher"]
+                    if _window != _tgate["last_scored_window"]:
+                        _tgate["last_scored_window"] = _window
+                        _snap = env.gate_stats_snapshot_and_reset()
+                        if _snap[0] > 0:
+                            _rate = _snap[1] / _snap[0]
+                            if _rate >= _tgate["threshold"]:
+                                _tgate["rounds"] += 1
+                                if _tgate["rounds"] >= _tgate["rounds_needed"]:
+                                    _tgate["teacher"] = max(
+                                        _tgate["min_"], _tgate["teacher"] + _tgate["step"])
+                                    _tgate["rounds"] = 0
+                            else:
+                                _tgate["rounds"] = 0
+                            logger.info(
+                                "[tgate] window=%d arrivals=%d ok=%d rate=%.3f "
+                                "(thr=%.2f rounds=%d/%d) teacher=%.3f",
+                                _window, _snap[0], _snap[1], _rate,
+                                _tgate["threshold"], _tgate["rounds"],
+                                _tgate["rounds_needed"], _tgate["teacher"])
             else:
-                env.occluder_teacher_force = _occluder_teacher_base
+                env.occluder_teacher_force = _tgate["teacher"]
+        # Stage 20j: reveal-ratio ladder — relax the attribution gate as
+        # capability grows (eval metric stays 0.7 in the eval env).
+        if _reveal_ladder and hasattr(env, "occluder_reveal_ratio"):
+            _ladder_idx = int(min(len(_reveal_ladder) - 1, _elapsed // _reveal_ladder_every)) \
+                if _reveal_ladder_every > 0 else len(_reveal_ladder) - 1
+            _env_reveal = float(getattr(env, "occluder_reveal_ratio", 0.0))
+            if abs(_env_reveal - _reveal_ladder[_ladder_idx]) > 1e-9:
+                env.occluder_reveal_ratio = _reveal_ladder[_ladder_idx]
+                logger.info("[tgate] reveal_ratio -> %.2f @ step=%d",
+                            _reveal_ladder[_ladder_idx], state.step)
         while not buffer.full():
             t0 = time.perf_counter()
             obs_t = _obs_to_tensor(obs, device)  # (N,3,H,W) for vec; (1,3,H,W) single

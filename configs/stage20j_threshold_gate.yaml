@@ -1,0 +1,333 @@
+# Stage 20j · 阈值门控放手 (Threshold-Gated Teacher Release)
+# 基于 Stage 20i 4.5M 判决点 (far=0.0 cross=0.0)。
+#
+# 20i 教训 (重归因):
+#   1. 20h/20i 的退火调度从未生效 —— train.py 写 env.occluder_teacher_force
+#      但 ThreeDWorld 无此属性 (只有 _occluder_teacher_force), hasattr False,
+#      调度静默跳过, teacher 恒 = yaml 构造值 0.35 整程 4.5M 步。
+#      分层"退火无效"是假象: 策略从未被放手, 自主能力从未被训练/测试。
+#      (diag 0.14 < 随机 0.23 与此完全一致 —— 无 teacher 时≈随机)
+#   2. reveal 归因奖励死锁: 阈值 0.7 而策略 mean end/start=0.987 → 5.0
+#      大额"找到"奖励从 20g 起从未发放过, 唯一梯度只剩小项趋近/塑形。
+#   => 20j 两大修复: ① 真正的放手闭环 (阈值门控 teacher) ② 让奖励先流动
+#      (reveal 阈值阶梯 0.85→0.75→0.70 + 奖励增强; 评测口径恒 0.7 不变)
+#
+# 门控语义 (方案 B, 用户钦定):
+#   teacher 初始 0.5; 每 gate_every 步探测窗口 (probe_steps 步 teacher=0),
+#   按 env gate 计数器测"自主到达率" (成功追踪帧/尝试帧, d_now<ratio*d0,
+#   与评测 op 指标同构); 连续 rounds_needed 轮 ≥ arrival_threshold 才
+#   递减 teacher_step (地板 min); 不足则保持 (绝不回调到更低)。
+#   学习者必须"挣得"每一次放手。预期: 课程推进 1M 步 (到 5.5M)。
+#   若到达率长期 <0.15 -> teacher 卡 0.5, 说明 20j 假设 (放手+奖励流动
+#   就能学会) 不成立, 记录为负结果, 转架构级 (分层目标/长程记忆)。
+
+stage: 20
+name: "stage20j_threshold_gate"
+
+model:
+  hidden_size: 128
+  use_hierarchical: true
+  use_hybrid_backbone: false
+  hybrid_n_layers: 7
+  hybrid_n_heads: 4
+  hybrid_swa_window: 16
+  hybrid_ttt_mini_batch: 8
+  hybrid_ffn_hidden_mult: 4
+  hybrid_dropout: 0.0
+  use_slot_attention: true
+  slot_num_slots: 7
+  slot_dim: 128
+  slot_num_iterations: 3
+  use_vision_encoder: false
+  sub_goal_every: 10
+
+# --- Stage 19: Narrative Loop ---
+narrative:
+  enabled: true
+  narrative_every_episodes: 10
+  symbol_bias_weight: 0.1
+  trait_learning_enabled: true
+  trait_lr: 1.0e-4
+
+# --- Developmental Memory ---
+developmental_memory:
+  enabled: true
+  episodic_max: 10000
+  semantic_max: 1000
+  autobiographical_max: 100
+  surprise_threshold: 0.01
+  consolidation_every_steps: 50000
+
+# --- 3D Environment (MuJoCo) ---
+env:
+  id: "ThreeDWorld"
+  num_objects: 8
+  max_episode_steps: 300
+  render_size: 128
+  action_force: 50.0
+  developmental_age: 0.5
+  num_envs: 1
+  num_occluders: 4
+  occluder_trace: false
+  occluder_target_reward: 3.0          # 20j: 1.5 -> 3.0 (趋近梯度有存在感)
+  occluder_shaping_weight: 3.0         # 20j: 1.5 -> 3.0 (对称方向塑形)
+  occluder_reveal_bonus: 8.0           # 20j: 5.0 -> 8.0 (归因奖励更强锚)
+  occluder_reveal_ratio: 0.85          # 20j: 起步阈值放宽 (死锁修复起点)
+  occluder_reveal_ratio_ladder: [0.85, 0.75, 0.70]   # 20j: 阶梯放行
+  occluder_reveal_ratio_ladder_every: 500000         # 每 500K 步升一级
+  object_crossing_every: 100
+  object_crossing_hold_steps: 60
+  object_crossing_fixed_object: 0
+  object_crossing_fixed_wall: 0
+  occluder_obs_slots: 3
+  # --- Stage 20j: threshold-gated teacher (replaces the 20i blind fade) ---
+  occluder_teacher_force: 0.5          # 初始接管率 (方案 B 参数)
+  occluder_teacher_min: 0.05           # 最低保留引导
+  occluder_teacher_gate_every: 15000   # 每 15K 步一次探测窗口
+  occluder_teacher_probe_steps: 2000   # 探测长度 (teacher=0, 测自主到达率)
+  occluder_teacher_arrival_threshold: 0.15  # 到达率达标线
+  occluder_teacher_rounds_needed: 3    # 连续 3 轮达标才退火
+  occluder_teacher_step: -0.02         # 每次退火幅度
+  focus_op_only: true
+
+# --- LLM Fusion (disabled) ---
+llm_fusion:
+  enabled: false
+
+# --- Advanced Cognition ---
+advanced:
+  counterfactual_enabled: true
+  counterfactual_max_steps: 5
+  counterfactual_every_steps: 250
+  behavior_cloning_enabled: false
+  meta_learner_enabled: false
+  hypothesis_tester_enabled: true
+  hypothesis_max: 64
+  hypothesis_probe_epsilon: 0.15
+
+# --- Cognitive Modules ---
+cognitive:
+  symbolic_enabled: true
+  symbolic_max_rules: 64
+  symbolic_bias_weight: 0.5
+  self_model_enabled: true
+  self_model_d_model: 128
+  self_model_hidden: 64
+  self_model_lr: 1.0e-4
+  logic_engine_enabled: true
+  logic_max_rules: 64
+  logic_max_variables: 16
+  reflection_enabled: true
+  reflection_max: 256
+  reflection_every_episodes: 10
+
+theory_of_mind:
+  enabled: true
+
+creativity:
+  enabled: true
+  trigger_every_steps: 10000
+  divergent_generator_enabled: true
+  transformational_enabled: true
+  transformational_max: 64
+
+# --- Stage 16: Symbol Backend ---
+symbol_backend:
+  enabled: true
+  max_facts: 512
+  max_rules: 128
+  max_resolution_steps: 200
+
+# --- Neuro-Symbolic Bridge ---
+neuro_symbolic_bridge:
+  enabled: true
+
+# --- Abstract Reasoning ---
+abstract_reasoning:
+  enabled: true
+
+# --- 3D Curriculum ---
+curriculum:
+  max_tasks: 5
+  lp_window_size: 32
+  lp_min_samples: 8
+  exploration_epsilon: 0.3
+  mode: sequential
+  switch_every_steps: 20000
+  report_every_steps: 500
+  tasks:
+    - {id: 0, num_objects: 3,  action_force: 70.0, difficulty: 0.1, tag: "3d-sparse"}
+    - {id: 1, num_objects: 5,  action_force: 60.0, difficulty: 0.3, tag: "3d-few"}
+    - {id: 2, num_objects: 8,  action_force: 50.0, difficulty: 0.5, tag: "3d-base"}
+    - {id: 3, num_objects: 12, action_force: 45.0, difficulty: 0.7, tag: "3d-many"}
+    - {id: 4, num_objects: 16, action_force: 40.0, difficulty: 0.9, tag: "3d-crowded"}
+
+# --- Core modules (carry-forward) ---
+continual:
+  ewc_lambda: 50.0
+  ewc_gamma: 0.99
+  ewc_anchor_mode: "replace"
+  ewc_anchor_ema_alpha: 0.9
+  ewc_consolidate_every_steps: 50000
+  ewc_consolidate_num_batches: 32
+  ewc_batch_size: 32
+  gr_enabled: true
+  gr_latent_dim: 64
+  gr_hidden: 128
+  gr_lr: 1.0e-3
+  gr_kl_weight: 1.0
+  gr_update_every_steps: 16
+  gr_batch_size: 32
+  gr_rehearsal_batch_size: 32
+  gr_inject_every_steps: 5000
+  sleep_warmup_steps: 1000
+  sleep_replay_trim_every: 25000
+  sleep_skills_merge_every: 50000
+  sleep_ttt_distill_every: 50000
+
+core_knowledge_loss:
+  enabled: true
+  coef_object_permanence: 0.1
+  coef_intuitive_physics: 0.1
+  coef_number_sense: 0.1
+
+# --- External Memory System ---
+external_memory:
+  enabled: true
+  surprise_detector:
+    rnd_weight: 0.3
+    rssm_weight: 0.3
+    coverage_weight: 0.2
+    rnd_embed_dim: 128
+    rnd_hidden_dim: 256
+    rnd_lr: 1.0e-4
+    rnd_gamma: 0.99
+    surprise_threshold: 0.5
+    cooldown_steps: 100
+  episodic_memory:
+    capacity: 4096
+    embed_dim: 128
+    similarity_threshold: 0.7
+    lr: 1.0e-4
+  semantic_memory:
+    capacity: 512
+    embed_dim: 128
+    lr: 5.0e-5
+  procedural_memory:
+    capacity: 256
+    embed_dim: 128
+    lr: 1.0e-4
+
+# --- Causal Discovery ---
+causal_discovery:
+  enabled: true
+  mode: "experience"
+  buffer_capacity: 8192
+  intervene_every: 250
+  max_edges: 512
+  min_intervention_effect: 0.005
+  min_strength: 0.005
+
+# --- Number Sense ---
+number_sense:
+  enabled: true
+  max_count: 20
+  hidden: 32
+  lr: 3.0e-4
+
+# --- Rule Induction ---
+rule_induction:
+  enabled: true
+  max_rules: 128
+  max_chain_depth: 5
+  min_confidence: 0.3
+  induction_min_positive: 3
+
+# --- Skills ---
+skills:
+  skill_d_out: 128
+  skill_d_in: 128
+  skill_rank: 8
+  gpu_capacity: 256
+  cpu_capacity: 2048
+  ssd_max_shards: 64
+  ssd_shard_size: 128
+  merge_similarity_threshold: 0.9
+  score_alpha: 1.0
+  score_beta: 0.5
+  score_gamma: 0.1
+  archive_subdir: "skills"
+
+# --- World Model ---
+world_model:
+  z_dim: 32
+  h_dim: 64
+  embed_dim: 64
+  hidden: 128
+  max_rollout_steps: 10
+  kl_free_nats: 0.0
+  recon_loss_weight: 1.0
+  recon_pixel_weight: 200.0
+  next_loss_coef: 2.0
+  update_every_steps: 4
+  lr: 5.0e-4
+  wm_loss_coef: 1.0
+  log_every_steps: 2000
+
+# --- Imagination Training ---
+imagination:
+  enabled: true
+  imagination_horizon: 10
+  imagination_batch: 32
+  discount: 0.99
+  actor_entropy_scale: 0.01
+  critic_loss_scale: 0.5
+  update_every_steps: 4
+  min_replay_size: 64
+  lambda_gae: 0.95
+  lr: 3.0e-4
+
+intrinsic:
+  embed_dim: 128
+  lr: 1.0e-4
+  reward_clip: 5.0
+  reward_coef: 0.5
+  update_every_steps: 1
+
+replay:
+  hot_capacity: 16384
+  warm_capacity: 131072
+  cold_max_shards: 6
+  cold_shard_size: 16384
+  per_alpha: 0.6
+  min_size_to_sample: 256
+  sample_every_steps: 4
+  batch_size_offpolicy: 128
+  archive_subdir: "replay"
+
+coverage:
+  num_buckets: 16384
+  log_every_steps: 10000
+
+# --- Training (Stage 20j: 1M more steps to 5.5M) ---
+train:
+  ppo_clip: 0.2
+  ppo_epochs: 4
+  entropy_coef: 0.03
+  value_coef: 0.5
+  bc_teacher_coef: 0.2
+  gamma: 0.99
+  gae_lambda: 0.95
+  total_steps: 5500000
+  ckpt_every_steps: 50000
+
+independent_eval:
+  eval_every_steps: 50000
+  eval_weights: [2.0, 1.0, 2.0]
+  episodes_per_task: 5
+  max_steps_per_ep: 200
+  eval_epsilon: 0.05
+  eval_seed: 42
+
+viz:
+  frame_every_steps: 10000
