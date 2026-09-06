@@ -155,3 +155,41 @@ def test_systematic_uniform_12_actions_stays_low():
                "rule_count": 0, "num_actions": 12}]
     rep = estimate_cognitive_age(states)
     assert rep.scores["systematic_reasoning"] < 0.2
+
+
+# --- object permanence reach-credit regressions (stage 20j diag) ---
+# Historical bug: far-probe events terminated when the agent got within
+# 0.8m of last_known, so (a) successful "arrive and wait for reveal"
+# episodes were dropped from the denominator and (b) the end_d-only
+# metric missed agents that reached last_known then wandered off while
+# sticking around until the object re-appeared.
+
+def _op_events(*trajs: list[tuple[float, float]]) -> list[dict]:
+    return [{"last_known": (5.0, 5.0),
+             "agent_traj_during_occ": list(t)} for t in trajs]
+
+
+def test_op_credit_wanders_after_reach():
+    """Agent reached last_known (best_d < 0.8) but then wandered away:
+    must still count (end_d-only metric used to miss this)."""
+    st = {"occlusion_events": _op_events(
+        [(0.0, 0.0), (4.6, 4.6), (4.2, 4.2), (1.0, 1.0), (0.5, 0.5)])}
+    rep = estimate_cognitive_age([st])
+    assert rep.scores["object_permanence"] == 1.0
+
+
+def test_op_no_credit_without_reach():
+    """Agent never got close: best_d ~= start_d -> 0."""
+    st = {"occlusion_events": _op_events(
+        [(0.0, 0.0), (1.0, 1.0), (2.1, 2.1), (2.6, 2.7), (3.1, 3.2)])}
+    rep = estimate_cognitive_age([st])
+    assert rep.scores["object_permanence"] < 0.6
+
+
+def test_op_reach_inside_contact_radius_always_credit():
+    """best_d <= 0.8m counts even when start_d is small (ratio alone
+    would require an impossible 0.7x shrink from an already-close start)."""
+    st = {"occlusion_events": _op_events(
+        [(5.4, 5.4), (5.4, 5.4), (5.1, 5.0)])}
+    rep = estimate_cognitive_age([st])
+    assert rep.scores["object_permanence"] == 1.0

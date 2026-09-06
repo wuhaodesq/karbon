@@ -185,6 +185,8 @@ class HierarchicalActorCritic(nn.Module):
         slot_dim: int = 128,
         slot_num_iterations: int = 3,
         proprio_dim: int = 0,  # Stage 20f: proprio (incl. occluder slots) -> policy
+        belief_slots: int = 0,  # Stage 20s: internal object-permanence belief head
+        use_gru: bool = False,  # Stage 20v: recurrent temporal memory
     ) -> None:
         super().__init__()
         if d_model % n_heads != 0:
@@ -196,6 +198,7 @@ class HierarchicalActorCritic(nn.Module):
         self.num_actions = num_actions
         self.obs_shape = tuple(obs_shape)
         self.proprio_dim = int(proprio_dim)
+        self.belief_slots = int(belief_slots)
 
         # Stage 19: symbol-bias callback (set by train.py after the
         # NarrativeLoopController is created). Returns a (num_actions,)
@@ -262,6 +265,36 @@ class HierarchicalActorCritic(nn.Module):
         else:
             self.proprio_mlp = None
 
+        # Stage 20s: internal object-permanence belief head. Predicts the
+        # occluded-object last_known offset from the policy hidden state h so
+        # the agent can recall position WITHOUT the env proprio slot cue. The
+        # training loop fades out the env slot (occluder_slot_fade_*), forcing
+        # the belief to be internalized. Output = (dx,dy,dist)/4 per slot.
+        if self.belief_slots > 0:
+            _bout = 3 * self.belief_slots
+            self.belief_head = nn.Sequential(
+                nn.Linear(d_model, d_model),
+                nn.GELU(),
+                nn.Linear(d_model, _bout),
+            )
+        else:
+            self.belief_head = None
+
+        # Stage 20v: GRU recurrent layer for temporal memory. The pure
+        # feedforward policy (CNN→transformer→MLP) cannot track objects
+        # across frames — it sees only the current observation. GRU adds
+        # a recurrent state that implicitly maintains a belief about the
+        # environment's state (including hidden object positions) across
+        # steps. Applied AFTER backbone, BEFORE proprio injection so the
+        # belief_head also benefits from temporal context.
+        self.use_gru = bool(use_gru)
+        if self.use_gru:
+            self.gru = nn.GRU(d_model, d_model, num_layers=1, batch_first=True)
+            self._gru_state: torch.Tensor | None = None  # (1, B, d_model)
+        else:
+            self.gru = None
+            self._gru_state = None
+
         # Cached sub-goal (regenerated every N steps)
         # Note: plain tensor attr avoids copy_() inplace version conflicts.
         # Persisted via custom state_dict/load_state_dict overrides.
@@ -273,17 +306,26 @@ class HierarchicalActorCritic(nn.Module):
         self._last_manager_value: torch.Tensor | None = None
         self._last_sub_goal: torch.Tensor | None = None
         self._last_slots: torch.Tensor | None = None
+        self._last_belief: torch.Tensor | None = None  # 20t: belief from h_raw
 
     def forward(
         self, obs_u8: torch.Tensor, return_hidden: bool = False,
         skill_delta: "Any | None" = None,
         proprio: "torch.Tensor | None" = None,
+        proprio_hook: "Any | None" = None,
+        update_gru: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass. Returns (action_logits, worker_value).
 
         When ``return_hidden=True``, returns (logits, worker_value, hidden).
         ``proprio``: (B, proprio_dim) float vector; None-safe (no injection
         when absent, e.g. off-policy callbacks that have no env step).
+        ``proprio_hook``: optional callable ``(proprio, belief) -> proprio``
+        applied after belief computation but before proprio injection.
+        Stage 20t uses this to blend belief output into the proprio slot.
+        ``update_gru``: False for non-rollout calls (skill retrieval, PPO
+        mini-batch, off-policy) so the persistent GRU state is not advanced
+        by auxiliary forward passes (Stage 20v).
         """
         # Encode
         if self.use_slots:
@@ -303,6 +345,44 @@ class HierarchicalActorCritic(nn.Module):
         else:
             h = seq_out.squeeze(1)  # (B, d_model)
         self._last_hidden = h
+
+        # Stage 20v: GRU temporal memory. Applied after backbone, before
+        # belief/proprio so both benefit from temporal context. During
+        # rollout the GRU state is carried forward (detached); during PPO
+        # update the stored state is passed via _gru_state_override.
+        if self.gru is not None:
+            _state = getattr(self, '_gru_state_override', None)
+            if _state is None:
+                _state = self._gru_state
+            if _state is None:
+                _state = torch.zeros(
+                    1, h.shape[0], self.d_model, dtype=torch.float32, device=h.device)
+            elif _state.device != h.device:
+                _state = _state.to(h.device)
+            elif _state.shape[1] != h.shape[0]:
+                # batch-size change (e.g. PPO mini-batch vs rollout single)
+                _state = _state[:1].expand(1, h.shape[0], -1).contiguous()
+            h_seq = h.unsqueeze(1)  # (B, 1, d_model)
+            h_gru, new_state = self.gru(h_seq, _state)
+            h = h_gru.squeeze(1)  # (B, d_model)
+            # During rollout (no_grad + update_gru), update the persistent state.
+            # During PPO (grad enabled), the override is consumed and cleared.
+            if getattr(self, '_gru_state_override', None) is not None:
+                self._gru_state_override = None  # consumed
+            elif update_gru and not torch.is_grad_enabled():
+                self._gru_state = new_state.detach()
+
+        # Stage 20t: compute belief from h_raw (BEFORE proprio injection) so
+        # the belief head cannot cheat by reading the env slot cue. The
+        # belief output is then blended into proprio via proprio_hook.
+        if self.belief_head is not None:
+            self._last_belief = self.belief_head(h)
+        else:
+            self._last_belief = None
+
+        # 20t: allow training loop to modify proprio (e.g. blend belief)
+        if proprio_hook is not None:
+            proprio = proprio_hook(proprio, self._last_belief)
 
         # Stage 20f: proprio residual injection BEFORE manager/worker so the
         # sub-goal can be conditioned on the target as well. no_grad-free by
@@ -350,6 +430,18 @@ class HierarchicalActorCritic(nn.Module):
         if return_hidden:
             return action_logits, worker_value, h
         return action_logits, worker_value
+
+    def reset_gru_state(self, batch_size: int = 1, device: "torch.device | None" = None) -> None:
+        """Reset GRU hidden state (call at episode boundary)."""
+        if self.gru is not None:
+            dev = device or self._cached_sub_goal.device
+            self._gru_state = torch.zeros(1, batch_size, self.d_model, device=dev)
+
+    def get_gru_state(self) -> "torch.Tensor | None":
+        """Return current GRU state (for buffer storage during rollout)."""
+        if self._gru_state is not None:
+            return self._gru_state.detach()
+        return None
 
     @property
     def manager_value(self) -> torch.Tensor:

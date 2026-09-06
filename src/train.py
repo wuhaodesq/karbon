@@ -356,6 +356,8 @@ class TransitionBatch:
     dones: torch.Tensor
     propr: torch.Tensor = None  # Stage 20f: (B, proprio_dim) or empty default
     teach: torch.Tensor = None  # Stage 20h: (B,) teacher action label, -1 = none
+    belief_slot: torch.Tensor = None  # Stage 20s: (B, 3*slots) true last_known offset target
+    gru_state: torch.Tensor = None  # Stage 20v: (B, d_model) GRU hidden state
 
 
 class RolloutBuffer:
@@ -372,16 +374,25 @@ class RolloutBuffer:
 
     def __init__(
         self, capacity: int, obs_shape: tuple[int, ...], device: torch.device,
-        n_envs: int = 1, proprio_dim: int = 0,
+        n_envs: int = 1, proprio_dim: int = 0, belief_slot_dim: int = 0,
+        gru_dim: int = 0,
     ) -> None:
         self._capacity = int(capacity)
         self.n_envs = int(n_envs)
         self.proprio_dim = int(proprio_dim)
+        self.belief_slot_dim = int(belief_slot_dim)
+        self.gru_dim = int(gru_dim)
         self.obs = torch.zeros(
             (capacity, self.n_envs, *obs_shape), dtype=torch.uint8, device=device
         )
         self.propr = torch.zeros(
             (capacity, max(1, self.n_envs), self.proprio_dim), dtype=torch.float32, device=device
+        )
+        self.belief_slot = torch.zeros(
+            (capacity, max(1, self.n_envs), self.belief_slot_dim), dtype=torch.float32, device=device
+        )
+        self.gru_state = torch.zeros(
+            (capacity, max(1, self.n_envs), self.gru_dim), dtype=torch.float32, device=device
         )
         self.teach = torch.full(
             (capacity, max(1, self.n_envs)), -1, dtype=torch.long, device=device
@@ -416,6 +427,8 @@ class RolloutBuffer:
         done: np.ndarray,
         proprio: np.ndarray | None = None,
         teacher_action: int | None = None,
+        belief_slot: np.ndarray | None = None,
+        gru_state: np.ndarray | None = None,
     ) -> None:
         """Add ``n_envs`` transitions for one collected timestep.
 
@@ -424,6 +437,12 @@ class RolloutBuffer:
         PPO update sees the same proprio the policy saw during rollout
         (otherwise the proprio_mlp gets no gradient).
         ``teacher_action`` (int, -1 = none) — Stage 20h: BC imitation label.
+        ``belief_slot`` (n_envs, 3*slots) float32 — Stage 20s: true last_known
+        offset target for the internal belief head (stored so the recall loss
+        sees the unfaded truth even when proprio is faded during rollout).
+        ``gru_state`` (n_envs, d_model) float32 — Stage 20v: GRU hidden state
+        BEFORE this step's GRU update (stored so PPO update can recompute
+        the forward pass with the correct temporal context).
         """
         if self._ptr >= self._capacity:
             raise IndexError("RolloutBuffer full (Axiom 1: no unbounded growth)")
@@ -434,6 +453,12 @@ class RolloutBuffer:
             self.propr[i, :, : _p.shape[1]] = torch.from_numpy(_p)
         if teacher_action is not None:
             self.teach[i, :] = int(teacher_action)
+        if belief_slot is not None and self.belief_slot_dim > 0:
+            _b = np.asarray(belief_slot, dtype=np.float32).reshape(self.n_envs, -1)
+            self.belief_slot[i, :, : _b.shape[1]] = torch.from_numpy(_b)
+        if gru_state is not None and self.gru_dim > 0:
+            _g = np.asarray(gru_state, dtype=np.float32).reshape(self.n_envs, -1)
+            self.gru_state[i, :, : _g.shape[1]] = torch.from_numpy(_g)
         self.actions[i] = torch.as_tensor(np.asarray(action)).to(self.actions.dtype)
         self.logprobs[i] = torch.as_tensor(np.asarray(logprob)).to(self.logprobs.dtype)
         self.values[i] = torch.as_tensor(np.asarray(value)).to(self.values.dtype)
@@ -454,6 +479,10 @@ class RolloutBuffer:
             dones=self.dones[:T].reshape(T * N),
             propr=self.propr[:T].reshape(T * N, self.proprio_dim),
             teach=self.teach[:T].reshape(T * N),
+            belief_slot=self.belief_slot[:T].reshape(T * N, self.belief_slot_dim)
+            if self.belief_slot_dim > 0 else None,
+            gru_state=self.gru_state[:T].reshape(T * N, self.gru_dim)
+            if self.gru_dim > 0 else None,
         )
 
 
@@ -734,19 +763,28 @@ def _build_env_from_spec(spec: dict[str, Any], env_cfg: dict[str, Any]):
             developmental_age=float(env_cfg.get("developmental_age", 0.0)),
             camera_pos=tuple(env_cfg.get("camera_pos", [0.0, -1.0, 0.8])),
             camera_fovy=float(env_cfg.get("camera_fovy", 60.0)),
-            num_occluders=int(env_cfg.get("num_occluders", 0)),
+            # Stage 20w: allow spec-level override for curriculum reward/occ
+            num_occluders=int(spec.get("num_occluders", env_cfg.get("num_occluders", 0))),
             occluder_trace=bool(env_cfg.get("occluder_trace", False)),
-            occluder_target_reward=float(env_cfg.get("occluder_target_reward", 0.0)),
-            object_crossing_every=int(env_cfg.get("object_crossing_every", 0)),
-            object_crossing_hold_steps=int(env_cfg.get("object_crossing_hold_steps", 0)),
-            object_crossing_fixed_object=int(env_cfg.get("object_crossing_fixed_object", -1)),
-            object_crossing_fixed_wall=int(env_cfg.get("object_crossing_fixed_wall", -1)),
+            occluder_target_reward=float(spec.get("occluder_target_reward", env_cfg.get("occluder_target_reward", 0.0))),
+            object_crossing_every=int(spec.get("object_crossing_every", env_cfg.get("object_crossing_every", 0))),
+            object_crossing_hold_steps=int(spec.get("object_crossing_hold_steps", env_cfg.get("object_crossing_hold_steps", 0))),
+            object_crossing_fixed_object=int(spec.get("object_crossing_fixed_object", env_cfg.get("object_crossing_fixed_object", -1))),
+            object_crossing_fixed_wall=int(spec.get("object_crossing_fixed_wall", env_cfg.get("object_crossing_fixed_wall", -1))),
+            occluder_arrival_reveal=bool(spec.get("occluder_arrival_reveal",
+                                                  env_cfg.get("occluder_arrival_reveal", False))),
             occluder_obs_slots=int(env_cfg.get("occluder_obs_slots", 0)),
-            focus_op_only=bool(env_cfg.get("focus_op_only", False)),
-            occluder_shaping_weight=float(env_cfg.get("occluder_shaping_weight", 0.0)),
-            occluder_reveal_bonus=float(env_cfg.get("occluder_reveal_bonus", 0.0)),
+            focus_op_only=bool(spec.get("focus_op_only", env_cfg.get("focus_op_only", False))),
+            occluder_shaping_weight=float(spec.get("occluder_shaping_weight", env_cfg.get("occluder_shaping_weight", 0.0))),
+            occluder_reveal_bonus=float(spec.get("occluder_reveal_bonus", env_cfg.get("occluder_reveal_bonus", 0.0))),
             occluder_reveal_ratio=float(env_cfg.get("occluder_reveal_ratio", 0.7)),
-            occluder_teacher_force=float(env_cfg.get("occluder_teacher_force", 0.0)),
+            occluder_reach_reward=float(spec.get("occluder_reach_reward", env_cfg.get("occluder_reach_reward", 0.0))),
+            occluder_reach_radius=float(env_cfg.get("occluder_reach_radius", 0.8)),
+            occluder_reward_radius=float(env_cfg.get("occluder_reward_radius", 0.0)),
+            occluder_reach_hold=float(spec.get("occluder_reach_hold", env_cfg.get("occluder_reach_hold", 0.0))),
+            occluder_orient_weight=float(spec.get("occluder_orient_weight", env_cfg.get("occluder_orient_weight", 0.0))),
+            occluder_orient_bonus=float(spec.get("occluder_orient_bonus", env_cfg.get("occluder_orient_bonus", 0.0))),
+            occluder_teacher_force=float(spec.get("occluder_teacher_force", env_cfg.get("occluder_teacher_force", 0.0))),
         )
     return MiniGridWrapper(
         env_id=env_id,
@@ -826,6 +864,12 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             occluder_shaping_weight=float(env_cfg.get("occluder_shaping_weight", 0.0)),
             occluder_reveal_bonus=float(env_cfg.get("occluder_reveal_bonus", 0.0)),
             occluder_reveal_ratio=float(env_cfg.get("occluder_reveal_ratio", 0.7)),
+            occluder_reach_reward=float(env_cfg.get("occluder_reach_reward", 0.0)),
+            occluder_reach_radius=float(env_cfg.get("occluder_reach_radius", 0.8)),
+            occluder_reward_radius=float(env_cfg.get("occluder_reward_radius", 0.0)),
+            occluder_reach_hold=float(env_cfg.get("occluder_reach_hold", 0.0)),
+            occluder_orient_weight=float(env_cfg.get("occluder_orient_weight", 0.0)),
+            occluder_orient_bonus=float(env_cfg.get("occluder_orient_bonus", 0.0)),
             occluder_teacher_force=float(env_cfg.get("occluder_teacher_force", 0.0)),
         )
         n_envs = int(env_cfg.get("num_envs", 1))
@@ -903,6 +947,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             slot_num_iterations=int(model_cfg.get("slot_num_iterations", 3)),
             sub_goal_every=int(model_cfg.get("sub_goal_every", 10)),
             proprio_dim=env_proprio_dim,  # Stage 20f: proprio incl. occluder slots
+            belief_slots=int(env_cfg.get("occluder_obs_slots", 0)),  # Stage 20s: internal belief head
+            use_gru=bool(model_cfg.get("use_gru", False)),  # Stage 20v: recurrent temporal memory
         ).to(device)
         logger.info("Model: HierarchicalActorCritic (d_model=%d, layers=%d, sub_goal_every=%d, proprio=%d)",
                     model.d_model, model_n_layers, model._sub_goal_every, env_proprio_dim)
@@ -948,8 +994,12 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # Smoke capacity must be >= max_episode_steps (default 200) to avoid
     # IndexError when a single episode fills the buffer.
     rollout_capacity = 256 if smoke_only else 2048
+    _use_gru = getattr(model, 'use_gru', False)
     buffer = RolloutBuffer(rollout_capacity, obs_shape, device=device, n_envs=n_envs,
-                           proprio_dim=env_proprio_dim)
+                           proprio_dim=env_proprio_dim,
+                           belief_slot_dim=3 * int(env_cfg.get("occluder_obs_slots", 0))
+                           if int(env_cfg.get("occluder_obs_slots", 0)) > 0 else 0,
+                           gru_dim=model.d_model if _use_gru else 0)
 
     # Hierarchical manager buffer (smaller: every K steps)
     _is_hierarchical = use_hierarchical
@@ -1978,6 +2028,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
 
     _resume_extra: dict[str, Any] | None = None
     last_curr_switch_step = 0
+    resumed_step = 0
+    resumed_stage = stage
     if resume is not None:
         payload = load_ckpt(resume)
         _model_mismatch = False
@@ -2352,7 +2404,62 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         step=float(env_cfg.get("occluder_teacher_step", -0.02)),
         rounds=0,
         last_scored_window=-1,
+        # Stage 20r: decouple teacher release from the tgate probe gate.
+        # The probe gate requires autonomous arrival >= threshold for 3
+        # consecutive windows before releasing the teacher — but if the
+        # teacher is always on during non-probe steps, the policy never
+        # practices occlusion navigation alone, so the probe rate stays
+        # below threshold forever and the teacher NEVER releases. That
+        # yields far~0.04 at eval (teacher=0) despite slots+rewards present.
+        # always_step releases the teacher on a fixed cadence regardless of
+        # probe performance, forcing the policy to learn occlusion
+        # navigation from the existing last_known slots + recall rewards.
+        always_step=bool(env_cfg.get("occluder_teacher_always_step", False)),
     )
+    # Stage 20t: belief-in-the-loop. The env proprio slot feeds the policy a
+    # per-step last_known cue; 20t replaces the 20s side-branch design by
+    # blending the belief head output INTO the proprio slot as the true cue
+    # fades. belief_head now receives gradients from BOTH the MSE recall loss
+    # AND the policy loss (its output directly affects action selection),
+    # creating the developmental prediction→action→feedback loop.
+    _belief_slots = int(env_cfg.get("occluder_obs_slots", 0))
+    _belief_weight = float(env_cfg.get("occluder_belief_loss_weight", 0.0))
+    _belief_fade_start = int(env_cfg.get("occluder_slot_fade_start", 0))
+    _belief_fade_steps = int(env_cfg.get("occluder_slot_fade_steps", 0))
+    _slot_dim = 3 * _belief_slots if _belief_slots > 0 else 0
+
+    def _make_belief_hook(fade: float):
+        """Return a proprio_hook that blends belief output into the slot.
+
+        At fade=0 the slot is 100% env truth; at fade=1 the slot is 100%
+        belief_head output. The hook is called inside model.forward() after
+        belief is computed from h_raw (before proprio injection), so the
+        gradient from policy loss flows through belief_head.
+        """
+        _f = fade
+        def _hook(proprio, belief):
+            if proprio is None or belief is None or _slot_dim == 0:
+                return proprio
+            blended = proprio.clone()
+            blended[:, -_slot_dim:] = (1.0 - _f) * proprio[:, -_slot_dim:] + _f * belief
+            return blended
+        return _hook
+    # Stage 20m: L1 orientation sub-goal gate — fades occluder_orient_weight
+    # (the "turn the right way" shaping) once first-3-step alignment clears
+    # the threshold for consecutive windows. Separate from tgate: tgate
+    # releases the TEACHER, this releases the L1 orientation crutch.
+    _orient_gate = dict(rounds=0, last_window=-1)
+    # Stage 20p: reward-circle curriculum — shrink the TEACHING circle
+    # (2.0→1.5→1.0→0.8) as the agent masters each stage (reward-circle
+    # arrival rate >= threshold for consecutive windows). The 0.8m JUDGE
+    # (tgate + eval) never moves: measurement stays polluted-free, the
+    # reward gets the coarse-to-fine curriculum.
+    _rw_radius_ladder: list[float] = [
+        float(v) for v in env_cfg.get(
+            "occluder_reward_radius_ladder", [2.0, 1.5, 1.0, 0.8])]
+    _rw_radius_thr = float(env_cfg.get("occluder_reward_radius_threshold", 0.7))
+    _rw_gate = dict(rounds=0, needed=int(
+        env_cfg.get("occluder_reward_radius_rounds", 3)))
     _resume_step_at = int(resumed_step if resumed_stage == stage else 0)
     # Stage 20j: reveal-ratio ladder (0.85 -> 0.75 -> 0.70) so the 5.0+
     # attribution bonus actually fires for the first time (20g set the
@@ -2383,25 +2490,66 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     env.occluder_teacher_force = 0.0
                 else:
                     env.occluder_teacher_force = _tgate["teacher"]
-                    if _window != _tgate["last_scored_window"]:
-                        _tgate["last_scored_window"] = _window
-                        _snap = env.gate_stats_snapshot_and_reset()
-                        if _snap[0] > 0:
-                            _rate = _snap[1] / _snap[0]
-                            if _rate >= _tgate["threshold"]:
-                                _tgate["rounds"] += 1
-                                if _tgate["rounds"] >= _tgate["rounds_needed"]:
-                                    _tgate["teacher"] = max(
-                                        _tgate["min_"], _tgate["teacher"] + _tgate["step"])
-                                    _tgate["rounds"] = 0
-                            else:
-                                _tgate["rounds"] = 0
-                            logger.info(
-                                "[tgate] window=%d arrivals=%d ok=%d rate=%.3f "
-                                "(thr=%.2f rounds=%d/%d) teacher=%.3f",
-                                _window, _snap[0], _snap[1], _rate,
-                                _tgate["threshold"], _tgate["rounds"],
-                                _tgate["rounds_needed"], _tgate["teacher"])
+                if _window != _tgate["last_scored_window"]:
+                    _tgate["last_scored_window"] = _window
+                    _snap = env.gate_stats_snapshot_and_reset()
+                    # Stage 20p: 3-tuple — (arrivals, 0.8m judge ok,
+                    # reward-circle ok). Judge rate drives teacher
+                    # release; reward-circle rate drives the radius
+                    # curriculum below.
+                    _rate = (_snap[1] / _snap[0]) if _snap[0] > 0 else 0.0
+                    # Stage 20r: when always_step is set, force the
+                    # release condition True every window so the
+                    # teacher steps down on a fixed cadence even if
+                    # the autonomous probe rate is still low (the
+                    # policy learns BY being released, not after).
+                    # The anneal is decoupled from the probe/arrival
+                    # guard so it fires on a fixed window cadence.
+                    _release = _rate >= _tgate["threshold"]
+                    if _tgate.get("always_step"):
+                        _release = True
+                    if _release:
+                        _tgate["rounds"] += 1
+                        if _tgate["rounds"] >= _tgate["rounds_needed"]:
+                            _tgate["teacher"] = max(
+                                _tgate["min_"], _tgate["teacher"] + _tgate["step"])
+                            _tgate["rounds"] = 0
+                    else:
+                        _tgate["rounds"] = 0
+                    logger.info(
+                        "[tgate] window=%d arrivals=%d ok=%d rate=%.3f "
+                        "(thr=%.2f rounds=%d/%d) teacher=%.3f",
+                        _window, _snap[0], _snap[1], _rate,
+                        _tgate["threshold"], _tgate["rounds"],
+                        _tgate["rounds_needed"], _tgate["teacher"])
+                    if _snap[0] > 0:
+                        # Stage 20p: reward-circle curriculum — promote
+                        # (shrink 2.0→1.5→1.0→0.8) when the current
+                        # circle's arrival rate clears its threshold for
+                        # consecutive rounds. Judge (0.8m) untouched.
+                        _rw_rate = _snap[2] / _snap[0]
+                        _rw_ladder = _rw_radius_ladder  # [2.0,1.5,1.0,0.8]
+                        _rw_now = float(getattr(env, "occluder_reward_radius", 0.8))
+                        _rw_idx = _rw_ladder.index(_rw_now) \
+                            if _rw_now in _rw_ladder else 0
+                        if _rw_idx < len(_rw_ladder) - 1 and \
+                                _rw_rate >= _rw_radius_thr:
+                            _rw_gate["rounds"] += 1
+                            if _rw_gate["rounds"] >= _rw_gate["needed"]:
+                                env.occluder_reward_radius = _rw_ladder[_rw_idx + 1]
+                                _rw_gate["rounds"] = 0
+                                logger.info(
+                                    "[curriculum] reward_radius %.2f -> %.2f "
+                                    "@ step=%d (circle rate=%.3f)",
+                                    _rw_now, _rw_ladder[_rw_idx + 1],
+                                    state.step, _rw_rate)
+                        else:
+                            _rw_gate["rounds"] = 0
+                        logger.info(
+                            "[curriculum] window=%d rw_rate=%.3f "
+                            "(thr=%.2f rounds=%d/%d) radius=%.2f",
+                            _window, _rw_rate, _rw_radius_thr,
+                            _rw_gate["rounds"], _rw_gate["needed"], _rw_now)
             else:
                 env.occluder_teacher_force = _tgate["teacher"]
         # Stage 20j: reveal-ratio ladder — relax the attribution gate as
@@ -2414,15 +2562,78 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 env.occluder_reveal_ratio = _reveal_ladder[_ladder_idx]
                 logger.info("[tgate] reveal_ratio -> %.2f @ step=%d",
                             _reveal_ladder[_ladder_idx], state.step)
+        # Stage 20m: L1 orientation sub-goal — fade the orientation shaping
+        # once the policy reliably "turns the right way" right after an
+        # occlusion (first-3-steps alignment). Mirrors the threshold-gate
+        # pattern: probe windows, consecutive rounds above threshold step
+        # the orient weight down toward 0 (sub-goal mastered -> scaffold
+        # removed), never up. The arrival gate (tgate) still governs teacher
+        # release; this only removes the L1-specific crutch.
+        if hasattr(env, "occluder_orient_weight") and \
+                float(getattr(env, "occluder_orient_weight", 0.0)) > 0.0:
+            _ow_every = int(env_cfg.get("occluder_orient_gate_every", 0))
+            if _ow_every > 0 and hasattr(env, "orient_stats_snapshot_and_reset"):
+                _ow_window = _elapsed // _ow_every
+                if _ow_window != _orient_gate.get("last_window"):
+                    _orient_gate["last_window"] = _ow_window
+                    _osnap = env.orient_stats_snapshot_and_reset()
+                    # (events, aligned) with aligned = first3 mean_cos > 0.5
+                    _ow_events, _ow_aligned = int(_osnap[0]), int(_osnap[1])
+                    _ow_thr = float(env_cfg.get("occluder_orient_threshold", 0.5))
+                    _ow_rounds = int(env_cfg.get("occluder_orient_rounds_needed", 3))
+                    _ow_ok = _ow_events >= 20 and _ow_aligned / max(_ow_events, 1) >= _ow_thr
+                    if _ow_ok:
+                        _orient_gate["rounds"] += 1
+                        if _orient_gate["rounds"] >= _ow_rounds:
+                            _ow_now = float(getattr(env, "occluder_orient_weight", 0.0))
+                            env.occluder_orient_weight = max(0.0, _ow_now - 0.5)
+                            _orient_gate["rounds"] = 0
+                            logger.info(
+                                "[orient] fade -> %.2f @ step=%d (aligned=%d/%d)",
+                                env.occluder_orient_weight, state.step,
+                                _ow_aligned, _ow_events)
+                    else:
+                        _orient_gate["rounds"] = 0
+                    logger.info(
+                        "[orient] window=%d events=%d aligned=%d rate=%.3f "
+                        "(thr=%.2f rounds=%d/%d) orient_weight=%.2f",
+                        _ow_window, _ow_events, _ow_aligned,
+                        _ow_aligned / max(_ow_events, 1), _ow_thr,
+                        _orient_gate["rounds"], _ow_rounds,
+                        float(getattr(env, "occluder_orient_weight", 0.0)))
         while not buffer.full():
             t0 = time.perf_counter()
+            # Stage 20v: initialize GRU state on first step (episode start).
+            if _use_gru and model.get_gru_state() is None:
+                model.reset_gru_state(n_envs, device)
+            # Stage 20v: store GRU state BEFORE this step's forward (the
+            # state at the start of the step, so PPO can recompute).
+            _gru_state_to_store = None
+            if _use_gru:
+                _gs = model.get_gru_state()
+                if _gs is not None:
+                    _gru_state_to_store = _gs.squeeze(0).cpu().numpy()
             obs_t = _obs_to_tensor(obs, device)  # (N,3,H,W) for vec; (1,3,H,W) single
             prop_t = _prop_tensor()  # Stage 20f: (1, proprio_dim) or None
+            # Stage 20t: blend belief into proprio slot via hook. The true
+            # slot is stored separately as the recall-loss target; the hook
+            # mixes true_slot and belief output based on the current fade.
+            true_slot = None
+            _hook = None
+            if prop_t is not None and _belief_slots > 0:
+                true_slot = prop_t[:, -_slot_dim:].detach().clone()
+                if _belief_fade_steps > 0:
+                    _fade = min(1.0, max(0.0,
+                                 (state.step - _belief_fade_start) / _belief_fade_steps))
+                else:
+                    _fade = 0.0
+                _hook = _make_belief_hook(_fade)
             # --- M2: retrieve most relevant skill by observation embedding ---
             if skills is not None and n_envs == 1 and active_skill is None and skills.top_k():
                 with torch.no_grad():
                     _, _, h = model(obs_t, return_hidden=True, skill_delta=None,
-                                    proprio=prop_t)
+                                    proprio=prop_t, proprio_hook=_hook,
+                                    update_gru=False)  # 20v: don't advance GRU state
                 _ep_first_key = h.detach().cpu()  # saved for skill creation at episode end
                 matched, sim = skills.retrieve_by_embedding(_ep_first_key)
                 if matched is not None:
@@ -2434,11 +2645,11 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 if _collect_cognitive and n_envs == 1:
                     logits, value, hidden = model(
                         obs_t, return_hidden=True, skill_delta=_skill_delta,
-                        proprio=prop_t,
+                        proprio=prop_t, proprio_hook=_hook,
                     )
                 else:
                     logits, value = model(obs_t, skill_delta=_skill_delta,
-                                          proprio=prop_t)  # value: (N,)
+                                          proprio=prop_t, proprio_hook=_hook)  # value: (N,)
                 dist = torch.distributions.Categorical(logits=logits)
                 action = dist.sample()              # (N,)
                 logprob = dist.log_prob(action)     # (N,)
@@ -2562,6 +2773,10 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 logprob = dist.log_prob(torch.as_tensor([_t_lta], device=device))
             ta = time.perf_counter()
             done_arr = np.asarray(step_out.terminated) | np.asarray(step_out.truncated)
+            # Stage 20v: reset GRU state on episode end (env auto-resets to a
+            # new episode; the recurrent memory must not leak across episodes).
+            if _use_gru and bool(done_arr.any()):
+                model.reset_gru_state(n_envs, device)
             extrinsic_r = np.asarray(step_out.reward, dtype=np.float32)  # (N,) or scalar
             int_r = np.zeros(n_envs, dtype=np.float32)
             t_cog = time.perf_counter()
@@ -2827,6 +3042,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 done=done_arr,
                 proprio=prop_t.cpu().numpy() if prop_t is not None else None,
                 teacher_action=int(getattr(env, "last_teacher_action", -1)),
+                belief_slot=true_slot.cpu().numpy() if true_slot is not None else None,
+                gru_state=_gru_state_to_store,
             )
             t_buf_end = time.perf_counter()
 
@@ -3419,7 +3636,7 @@ and state.step % 50000 < rollout_capacity):
         batch = buffer.as_batch()
         # Estimate last value per-env for GAE (vectorized over N envs)
         with torch.no_grad():
-            _, last_value_t = model(_obs_to_tensor(obs, device))
+            _, last_value_t = model(_obs_to_tensor(obs, device), update_gru=False)  # 20v: no state advance
             # P1: value head trained on normalized returns; denormalize
             # back to raw reward scale before GAE (see ReturnNormalizer).
             T = buffer._ptr
@@ -3477,19 +3694,40 @@ and state.step % 50000 < rollout_capacity):
         _sg_first_mb = True
 
         # P2: mini-batch PPO — split rollout into shuffled minibatches
+        # Stage 20w#2: ensure model is in train mode before PPO — curriculum
+        # switch / model growth may have set it to eval() which crashes the
+        # cudnn GRU backward ("cudnn RNN backward can only be called in
+        # training mode").
+        model.train()
         n = batch.obs.shape[0]
         indices = torch.randperm(n, device=device)
         mb_size = max(1, n // ppo_minibatches)
         ppo_losses: dict[str, list[float]] = {"policy": [], "value": [], "entropy": [],
-                                           "kl": [], "clipfrac": [], "teach": [], "total": []}
+                                           "kl": [], "clipfrac": [], "teach": [], "belief": [], "total": []}
+        # 20t: compute current fade for the belief hook used in PPO forward
+        if _belief_fade_steps > 0:
+            _ppo_fade = min(1.0, max(0.0,
+                            (state.step - _belief_fade_start) / _belief_fade_steps))
+        else:
+            _ppo_fade = 0.0
+        _ppo_hook = _make_belief_hook(_ppo_fade) if _belief_slots > 0 else None
         for _ in range(ppo_epochs):
             for start in range(0, n, mb_size):
                 mb_idx = indices[start:start + mb_size]
                 _mb_prop = getattr(batch, "propr", None)
                 _mb_teach = getattr(batch, "teach", None)
-                logits, values = model(
+                _mb_belief = getattr(batch, "belief_slot", None)
+                _mb_gru = getattr(batch, "gru_state", None)
+                # Stage 20v: use the stored per-step GRU state so the PPO
+                # forward sees the same temporal context as rollout.
+                if _use_gru and _mb_gru is not None:
+                    model._gru_state_override = _mb_gru[mb_idx].unsqueeze(0)  # (1, B, d_model)
+                logits, values, hidden = model(
                     batch.obs[mb_idx],
                     proprio=_mb_prop[mb_idx] if _mb_prop is not None else None,
+                    proprio_hook=_ppo_hook,
+                    return_hidden=True,
+                    update_gru=False,
                 )
                 # Stage 20h#6: bound logits every forward. Deterministic
                 # policies push the optimal-action logit toward +/-inf
@@ -3562,6 +3800,22 @@ and state.step % 50000 < rollout_capacity):
                         _lp_smooth = (1.0 - _eps) * _lp_t + _eps * _mean_logp[_mask]
                         teach_loss = -_lp_smooth.mean()
                         loss = loss + bc_teacher_coef * teach_loss
+                # Stage 20t: belief-in-the-loop recall loss. The belief head
+                # predicts the occluded-object last_known offset from h_raw
+                # (BEFORE proprio injection), and its output is already blended
+                # into the policy via proprio_hook above. The MSE loss here
+                # anchors the belief to reality; the policy loss (through the
+                # hook) shapes it to be useful for navigation.
+                _belief_loss_val = 0.0
+                if _belief_weight > 0.0 and _mb_belief is not None:
+                    _pred = getattr(model, "_last_belief", None)
+                    if _pred is not None:
+                        _bt = _mb_belief[mb_idx]
+                        _mask = _bt.abs().sum(dim=-1) > 1e-6
+                        if _mask.any():
+                            _belief_loss_val = F.mse_loss(_pred[_mask], _bt[_mask])
+                            loss = loss + _belief_weight * _belief_loss_val
+                ppo_losses["belief"].append(float(_belief_loss_val))
                 if ewc is not None and ewc.has_consolidated():
                     loss = loss + ewc.penalty(model).to(loss.device)
                 # Core-Knowledge P2 auxiliary loss (open-gap A#4): soft priors
@@ -3619,14 +3873,14 @@ and state.step % 50000 < rollout_capacity):
                 sample, indices, weights = replay.sample_prioritized(
                     replay_batch_size, alpha=per_alpha
                 )
-                _, offp_values = model(sample["obs"])
+                _, offp_values = model(sample["obs"], update_gru=False)  # 20v: no state advance
                 # TD target with intrinsic-augmented reward + bootstrapped next value.
                 # Value head is trained on normalized returns, so offp_values /
                 # next_v are in normalized scale. Build TD target in RAW scale
                 # (denormalize next_v first), then re-normalize before the loss
                 # so both sides of the MSE are in the same (normalized) space.
                 with torch.no_grad():
-                    _, next_v = model(sample["next_obs"])
+                    _, next_v = model(sample["next_obs"], update_gru=False)  # 20v
                     next_v_raw = reward_ema.denormalize(next_v)
                     td_target_raw = sample["reward"] + gamma * next_v_raw * (1.0 - sample["done"])
                     td_target = reward_ema.normalize(td_target_raw)
@@ -3652,9 +3906,9 @@ and state.step % 50000 < rollout_capacity):
             try:
                 ep_batch = episodic_replay.sample(er_batch_size, device, obs_shape, num_actions)
                 if ep_batch is not None:
-                    _, ep_values = model(ep_batch["obs"])
+                    _, ep_values = model(ep_batch["obs"], update_gru=False)  # 20v
                     with torch.no_grad():
-                        _, ep_next_v = model(ep_batch["next_obs"])
+                        _, ep_next_v = model(ep_batch["next_obs"], update_gru=False)  # 20v
                         ep_next_v_raw = reward_ema.denormalize(ep_next_v)
                         ep_td_raw = ep_batch["reward"] + gamma * ep_next_v_raw * (1.0 - ep_batch["done"])
                         ep_td_target = reward_ema.normalize(ep_td_raw)
@@ -3987,7 +4241,7 @@ and state.step % 50000 < rollout_capacity):
             try:
                 with torch.no_grad():
                     sample_obs = _obs_to_tensor(obs, device)
-                    _, _, hidden = model(sample_obs, return_hidden=True)
+                    _, _, hidden = model(sample_obs, return_hidden=True, update_gru=False)  # 20v
                     hidden_flat = hidden.reshape(-1)
                     max_act = hidden_flat.abs().max()
                     sparsity = float((hidden_flat.abs() > 0.01 * max_act).float().mean())
@@ -4037,8 +4291,8 @@ and state.step % 50000 < rollout_capacity):
             try:
                 first_obs = batch.obs[0:1]
                 with torch.no_grad():
-                    _, _, hidden = model(first_obs, return_hidden=True)
-                    logits_check, _ = model(first_obs)
+                    _, _, hidden = model(first_obs, return_hidden=True, update_gru=False)  # 20v
+                    logits_check, _ = model(first_obs, update_gru=False)  # 20v
                 final_logits, sym_info = symbolic_layer(hidden, logits_check)
                 if sym_info.get("override", False) or sym_info.get("biased", False):
                     logger.info("[symbolic] rule #%d matched (sim=%.2f), action biased",
@@ -4053,7 +4307,7 @@ and state.step % 50000 < rollout_capacity):
         if logic_engine is not None and len(logic_engine) > 0:
             try:
                 with torch.no_grad():
-                    _, _, hidden = model(batch.obs[0:1], return_hidden=True)
+                    _, _, hidden = model(batch.obs[0:1], return_hidden=True, update_gru=False)  # 20v
                 best_rule, info = logic_engine.reason(hidden.squeeze(0))
                 if best_rule is not None:
                     logger.info("[logic] rule '%s' fired (conf=%.2f)",
@@ -4092,7 +4346,7 @@ and state.step % 50000 < rollout_capacity):
             if language_gen is not None:
                 extras.append("speak=on")
             logger.info(
-                "step=%d ep=%d mean_ret=%.3f loss=%.4f(p=%.2f v=%.2f ent=%.3f kl=%.4f cf=%.2f bc=%.4f) mem_used=%.2fGB slope=%s %s",
+                "step=%d ep=%d mean_ret=%.3f loss=%.4f(p=%.2f v=%.2f ent=%.3f kl=%.4f cf=%.2f bc=%.4f belief=%.4f fade=%.2f) mem_used=%.2fGB slope=%s %s",
                 state.step,
                 summary["episodes"],
                 summary["mean_return"],
@@ -4103,6 +4357,9 @@ and state.step % 50000 < rollout_capacity):
                 float(np.mean(ppo_losses["kl"])),
                 float(np.mean(ppo_losses["clipfrac"])),
                 float(np.mean(ppo_losses["teach"])),
+                float(np.mean(ppo_losses["belief"])) if ppo_losses["belief"] else 0.0,
+                (min(1.0, max(0.0, (state.step - _belief_fade_start) / _belief_fade_steps))
+                 if _belief_fade_steps > 0 else 0.0),
                 (mem.get("used_bytes", 0) or 0) / 1024**3,
                 mem.get("slope_gb_per_hour"),
                 " ".join(extras),
@@ -4180,6 +4437,9 @@ and state.step % 50000 < rollout_capacity):
                 env = _build_env_from_spec(new_task.spec, env_cfg)
                 obs = env.reset()
                 curr_active_task = new_task
+                # Stage 20w#2: restore train mode after curriculum switch —
+                # EWC consolidation may have set model to eval().
+                model.train()
             else:
                 # Same task — just reset the timer so we don't re-check every step.
                 last_curr_switch_step = state.step
@@ -4211,6 +4471,10 @@ and state.step % 50000 < rollout_capacity):
                 )
             except Exception:
                 logger.exception("[eval] independent evaluator failed")
+            finally:
+                # Stage 20w#2: restore train mode after eval — evaluator may
+                # have set model to eval() which crashes cudnn GRU backward.
+                model.train()
 
         # --- Stage 20 hypothesis-deduction diagnostics ---
         if state.step % 5000 < rollout_capacity and _hyp_stats["proposed"] > 0:
@@ -4328,7 +4592,7 @@ and state.step % 50000 < rollout_capacity):
             try:
                 with torch.no_grad():
                     _obs_sample = _obs_to_tensor(obs, device)
-                    _, _, _hidden = model(_obs_sample, return_hidden=True)
+                    _, _, _hidden = model(_obs_sample, return_hidden=True, update_gru=False)  # 20v
                     _dim_act = _hidden.abs().mean(dim=0)
                     _top_vals, _top_idx = _dim_act.topk(8)
                     _sp = float((_dim_act > 0.01 * _dim_act.max()).float().mean())
@@ -4387,14 +4651,24 @@ and state.step % 50000 < rollout_capacity):
 
             # NB: replay state not serialized here
             # rely on data disk to persist replay across restarts).
-            save_ckpt(
-                stage_ckpt_path(stage, state.step),
-                stage=stage,
-                step=state.step,
-                model_state=model.state_dict(),
-                optim_state=optimizer.state_dict(),
-                extra=extra,
-            )
+            # Stage 20s: checkpoint save MUST NOT kill a multi-day run on a
+            # single I/O blip (e.g. transient disk-full). Expose loudly but
+            # survive — the next ckpt window will retry (AGENTS §14: critical
+            # path exposes the error instead of silently swallowing it).
+            try:
+                save_ckpt(
+                    stage_ckpt_path(stage, state.step),
+                    stage=stage,
+                    step=state.step,
+                    model_state=model.state_dict(),
+                    optim_state=optimizer.state_dict(),
+                    extra=extra,
+                )
+            except Exception as _ckpt_exc:  # noqa: BLE001 - survive disk blips
+                logger.error(
+                    "[ckpt] SAVE FAILED @ step=%d (training continues): %s",
+                    state.step, _ckpt_exc,
+                )
 
         # --- Stage 7: periodic 3D frame dump (outside ckpt block) ---
         if _viz_dir is not None and state.step % _viz_every < rollout_capacity:

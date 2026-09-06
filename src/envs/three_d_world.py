@@ -277,7 +277,10 @@ class SceneBuilder:
     <geom name="floor" type="plane" size="{self._rw/2+0.1} {self._rl/2+0.1} 0.05"
           pos="0 0 0" material="floor_mat"/>
 
-    <!-- Walls -->
+    <!-- Walls (Stage 20z: room walls MUST collide with the agent
+         (conaffinity=1) or the velocity-controlled agent walks out of the
+         room forever. Furniture below stays conaffinity=0 so it never
+         wedges the agent, while objects (conaffinity=1) still rest on it. -->
     <geom name="wall_n" type="box" size="{self._rw/2+0.1} 0.05 {self._rh/2}"
           pos="0 {self._rl/2} {self._rh/2}" material="wall_mat"/>
     <geom name="wall_s" type="box" size="{self._rw/2+0.1} 0.05 {self._rh/2}"
@@ -287,38 +290,48 @@ class SceneBuilder:
     <geom name="wall_w" type="box" size="0.05 {self._rl/2+0.1} {self._rh/2}"
           pos="{-self._rw/2} 0 {self._rh/2}" material="wall_mat"/>
 
-    <!-- Furniture: table -->
+    <!-- Furniture: table (supports objects but never blocks the agent:
+         conaffinity=0 means only the agent (also conaffinity=0) ignores
+         them while objects (conaffinity=1) still rest on them. Stage 20z. -->
     <body name="table" pos="{-self._rw/4} {self._rl/4} 0.4">
-      <geom name="table_top" type="box" size="0.4 0.3 0.02" pos="0 0 0.4" material="furniture_mat"/>
-      <geom name="table_leg1" type="cylinder" size="0.02 0.4" pos="0.35 0.25 0.2" material="furniture_mat"/>
-      <geom name="table_leg2" type="cylinder" size="0.02 0.4" pos="-0.35 0.25 0.2" material="furniture_mat"/>
-      <geom name="table_leg3" type="cylinder" size="0.02 0.4" pos="0.35 -0.25 0.2" material="furniture_mat"/>
-      <geom name="table_leg4" type="cylinder" size="0.02 0.4" pos="-0.35 -0.25 0.2" material="furniture_mat"/>
+      <geom name="table_top" type="box" size="0.4 0.3 0.02" pos="0 0 0.4" material="furniture_mat" contype="1" conaffinity="0"/>
+      <geom name="table_leg1" type="cylinder" size="0.02 0.4" pos="0.35 0.25 0.2" material="furniture_mat" contype="1" conaffinity="0"/>
+      <geom name="table_leg2" type="cylinder" size="0.02 0.4" pos="-0.35 0.25 0.2" material="furniture_mat" contype="1" conaffinity="0"/>
+      <geom name="table_leg3" type="cylinder" size="0.02 0.4" pos="0.35 -0.25 0.2" material="furniture_mat" contype="1" conaffinity="0"/>
+      <geom name="table_leg4" type="cylinder" size="0.02 0.4" pos="-0.35 -0.25 0.2" material="furniture_mat" contype="1" conaffinity="0"/>
     </body>
 
     <!-- Furniture: bed -->
     <body name="bed" pos="{-self._rw/4} {-self._rl/4} 0.15">
-      <geom name="bed_mat" type="box" size="0.5 0.8 0.05" pos="0 0 0.15" material="furniture_mat"/>
-      <geom name="bed_pillow" type="box" size="0.3 0.2 0.06" pos="0 {-0.5} 0.25" rgba="0.9 0.9 0.9 1.0"/>
+      <geom name="bed_mat" type="box" size="0.5 0.8 0.05" pos="0 0 0.15" material="furniture_mat" contype="1" conaffinity="0"/>
+      <geom name="bed_pillow" type="box" size="0.3 0.2 0.06" pos="0 {-0.5} 0.25" rgba="0.9 0.9 0.9 1.0" contype="1" conaffinity="0"/>
     </body>
 
     <!-- Furniture: shelf -->
     <body name="shelf" pos="{self._rw/4} {self._rl/4} 0.8">
-      <geom name="shelf_b1" type="box" size="0.5 0.15 0.02" pos="0 0 0.4" material="furniture_mat"/>
-      <geom name="shelf_b2" type="box" size="0.5 0.15 0.02" pos="0 0 0.8" material="furniture_mat"/>
-      <geom name="shelf_side1" type="box" size="0.02 0.15 0.8" pos="{-0.5} 0 0.4" material="furniture_mat"/>
-      <geom name="shelf_side2" type="box" size="0.02 0.15 0.8" pos="{0.5} 0 0.4" material="furniture_mat"/>
+      <geom name="shelf_b1" type="box" size="0.5 0.15 0.02" pos="0 0 0.4" material="furniture_mat" contype="1" conaffinity="0"/>
+      <geom name="shelf_b2" type="box" size="0.5 0.15 0.02" pos="0 0 0.8" material="furniture_mat" contype="1" conaffinity="0"/>
+      <geom name="shelf_side1" type="box" size="0.02 0.15 0.8" pos="{-0.5} 0 0.4" material="furniture_mat" contype="1" conaffinity="0"/>
+      <geom name="shelf_side2" type="box" size="0.02 0.15 0.8" pos="{0.5} 0 0.4" material="furniture_mat" contype="1" conaffinity="0"/>
     </body>
 
     <!-- Spread objects on floor, table, shelf -->
 """
         # Occluder walls (static, block line of sight for occlusion probe)
+        # Stage 20k: contype/conaffinity=0 — the wall is a VISUAL occluder
+        # only. It must block line-of-sight (pure geometry test) but never
+        # physically block the agent: with 4-direction actions the agent
+        # cannot steer around a wall, so a colliding wall made every
+        # wall-behind object physically unreachable (teacher force 1.0
+        # measured rate=0.008-0.051; agent wedged against the wall at
+        # ~2.0m forever). Objects already use contype=0 (line 233).
         for oi, occ in enumerate(self._occluders):
             sx, sy, sz = occ["size"]
             px, py, pz = occ["pos"]
             xml += (f'    <body name="occluder_{oi}" pos="{px} {py} {pz}">\n'
                     f'      <geom type="box" size="{sx} {sy} {sz}" pos="0 0 0" '
-                    f'rgba="0.3 0.3 0.35 1.0" mass="0"/>\n'
+                    f'rgba="0.3 0.3 0.35 1.0" mass="0" '
+                    f'contype="0" conaffinity="0"/>\n'
                     f'    </body>\n')
 
         # Place objects — each wrapped in its own body for physics tracking
@@ -347,13 +360,15 @@ class SceneBuilder:
       <joint name="{a['name']}_x" type="slide" axis="1 0 0"/>
       <joint name="{a['name']}_y" type="slide" axis="0 1 0"/>
       <geom name="{a['name']}_geom" type="sphere" size="{sz}"
-            rgba="{c[0]} {c[1]} {c[2]} {c[3]}" mass="1.5"/>
+            rgba="{c[0]} {c[1]} {c[2]} {c[3]}" mass="1.5"
+            conaffinity="0"/>
     </body>"""
             else:
                 xml += f"""
     <body name="{a['name']}" pos="{a['pos'][0]} {a['pos'][1]} {a['pos'][2]}">
       <geom name="{a['name']}_geom" type="sphere" size="{sz}"
-            rgba="{c[0]} {c[1]} {c[2]} {c[3]}" mass="1.5"/>
+            rgba="{c[0]} {c[1]} {c[2]} {c[3]}" mass="1.5"
+            conaffinity="0"/>
     </body>"""
 
         # Third-person camera tracking the learner (targetbody mode: the
@@ -430,10 +445,18 @@ class ThreeDWorld:
         occluder_shaping_weight: float = 0.0,  # Stage 20c: direction-to-last-known shaping
         occluder_reveal_bonus: float = 0.0,  # Stage 20d: 揭示归因奖励 (找到=因果)
         occluder_reveal_ratio: float = 0.7,  # Stage 20d: 归因阈值 end_d < ratio*start_d
+        occluder_reach_reward: float = 0.0,  # Stage 20k: 绝对到达奖励 (走进触达圈, 0=off)
+        occluder_reach_radius: float = 0.8,  # Stage 20k: 触达半径 (与 eval op 硬门槛同构, 判据恒用)
+        occluder_reward_radius: float = 0.0,  # Stage 20p: 奖励圈半径 (课程化 2.0→0.8, 0=跟随判据)
+        occluder_reach_hold: float = 0.0,  # Stage 20n: 圈内持续分 (max(0, radius-dist)*w, 0=off)
+        occluder_orient_weight: float = 0.0,  # Stage 20m: L1 朝向 - 每步非对称方向塑形 (0=off)
+        occluder_orient_bonus: float = 0.0,  # Stage 20m: L1 朝向 - 事件首3步对齐一次性奖励 (0=off)
         object_crossing_every: int = 0,  # Stage 20: 物体穿越墙周期 (0=off)
         object_crossing_hold_steps: int = 0,  # Stage 20: 穿越后停在墙后步数 (0=off)
         object_crossing_fixed_object: int = -1,  # Stage 20d P1: 固定穿越物体 (-1=随机)
         object_crossing_fixed_wall: int = -1,  # Stage 20d P1: 固定穿越墙 (-1=随机)
+        occluder_arrival_reveal: bool = False,  # Stage 20y: 到达即揭示 - agent 进判据圈即结束事件 (与 eval far 同构)
+        occluder_arrival_deadline: int = 0,  # Stage 20z: hold 结束后再等 N 步让 agent 到达 (0=默认150)
         occluder_obs_slots: int = 0,  # Stage 20e: 遮挡记忆槽注入观测 (0=off, 容量<=3)
         occluder_teacher_force: float = 0.0,  # Stage 20h: BC 教学接管率 (0=off, 1=每步接管)
         focus_op_only: bool = False,  # Stage 20b: 课程固化 - 封闭其他目标, 专训 op
@@ -456,6 +479,13 @@ class ThreeDWorld:
         self._occluder_shaping_weight = float(occluder_shaping_weight)
         self._occluder_reveal_bonus = float(occluder_reveal_bonus)
         self._occluder_reveal_ratio = float(occluder_reveal_ratio)
+        self._occluder_reach_reward = float(occluder_reach_reward)
+        self._occluder_reach_radius = float(occluder_reach_radius)
+        self._occluder_reward_radius = float(occluder_reward_radius) \
+            if occluder_reward_radius > 0.0 else float(occluder_reach_radius)
+        self._occluder_reach_hold = float(occluder_reach_hold)
+        self._occluder_orient_weight = float(occluder_orient_weight)
+        self._occluder_orient_bonus = float(occluder_orient_bonus)
         # Stage 20d: reveal-attribution bonus pending delivery to the next
         # reward step (capacity 1 float, consumed once in _occluder_only_reward).
         # Reveals are detected in _track_3d_developmental_signals (which runs
@@ -464,6 +494,12 @@ class ThreeDWorld:
         self._reveal_bonus_pending = 0.0
         self._object_crossing_every = int(object_crossing_every)
         self._object_crossing_hold_steps = int(object_crossing_hold_steps)
+        self._occluder_arrival_reveal = bool(occluder_arrival_reveal)
+        # Stage 20z: after the crossing hold expires, keep the event alive
+        # this many extra steps for the agent to physically arrive (agent
+        # speed ~0.05-0.08 m/step; 150 steps covers ~7-12m).
+        self._arrival_deadline_steps = int(
+            occluder_arrival_deadline) if occluder_arrival_deadline else 150
         self._object_crossing_fixed_object = int(object_crossing_fixed_object)
         self._object_crossing_fixed_wall = int(object_crossing_fixed_wall)
         # Stage 20e: occluder memory slots in the observation. The policy
@@ -490,6 +526,18 @@ class ThreeDWorld:
         # internal force).
         self._gate_arrivals = 0
         self._gate_success = 0
+        # Stage 20p: reward-circle gate counters (second set): arrivals use
+        # the same tracking attempts; success uses the CURRENT reward
+        # circle (d_now < reward_radius). train.py promotes the curriculum
+        # stage when this rate clears its threshold — the reward circle
+        # shrinks, the 0.8m judge (tgate) never moves.
+        self._gate_rw_arrivals = 0
+        self._gate_rw_success = 0
+        # Stage 20m: L1 orientation counters (bounded ints): events with
+        # first-3-step alignment credit vs total events (see
+        # orient_stats_snapshot_and_reset).
+        self._orient_events = 0
+        self._orient_aligned = 0
         self._focus_op_only = bool(focus_op_only)
         # Objects parked behind a wall after crossing (bounded: num_objects).
         # obj_id -> remaining hold steps; while held the object is reported
@@ -582,11 +630,52 @@ class ThreeDWorld:
     def occluder_reveal_ratio(self, value: float) -> None:
         self._occluder_reveal_ratio = float(value)
 
-    def gate_stats_snapshot_and_reset(self) -> tuple[int, int]:
-        """Stage 20j: (arrivals, successes) since last probe-window end."""
-        snap = (self._gate_arrivals, self._gate_success)
+    @property
+    def occluder_reward_radius(self) -> float:
+        """Stage 20p: live reward-circle radius (curriculum 2.0→0.8).
+        The tgate/eval JUDGE radius (occluder_reach_radius) stays fixed at
+        0.8m; only this TEACHING circle shrinks as the agent masters each
+        stage (measurement never polluted, reward gets the curriculum)."""
+        return self._occluder_reward_radius
+
+    @occluder_reward_radius.setter
+    def occluder_reward_radius(self, value: float) -> None:
+        self._occluder_reward_radius = float(value)
+
+    @property
+    def occluder_orient_weight(self) -> float:
+        """Stage 20m: live L1-orientation shaping weight (train.py fades it
+        when the orientation sub-goal is mastered)."""
+        return self._occluder_orient_weight
+
+    @occluder_orient_weight.setter
+    def occluder_orient_weight(self, value: float) -> None:
+        self._occluder_orient_weight = float(value)
+
+    def gate_stats_snapshot_and_reset(self) -> tuple[int, int, int]:
+        """Stage 20j/20p: (arrivals, 0.8m-judge successes, reward-circle
+        successes) since the last probe-window end. The reward-circle count
+        feeds the curriculum promoter (reward_radius 2.0→0.8); the judge
+        count feeds teacher release (tgate)."""
+        snap = (self._gate_arrivals, self._gate_success, self._gate_rw_success)
         self._gate_arrivals = 0
         self._gate_success = 0
+        self._gate_rw_arrivals = 0
+        self._gate_rw_success = 0
+        return snap
+
+    def orient_stats_snapshot_and_reset(self) -> tuple[int, int]:
+        """Stage 20m: (events, first3-aligned) since last probe-window end.
+
+        ``aligned`` counts events whose first-3-step mean displacement
+        vs last_known direction cosine > 0.5 (the L1 orientation
+        sub-goal: "turned the right way right after the object
+        vanished"). train.py fades the orientation shaping when this
+        rate clears its threshold.
+        """
+        snap = (self._orient_events, self._orient_aligned)
+        self._orient_events = 0
+        self._orient_aligned = 0
         return snap
 
     @property
@@ -597,6 +686,26 @@ class ThreeDWorld:
         # model has 12 output heads from day 1, so checkpoints are
         # compatible across developmental stages.
         return 12
+
+    # Stage 20q: 8-direction locomotion (cardinal + diagonal). Actions 0-7 are
+    # 8 unit directions; actions 8-11 remain grasp/release/use/rotate (gated by
+    # dev_age). Previously 4-7 were a 2x-force gear of the SAME 4 cardinal dirs,
+    # so effective locomotion was only 4 directions. Repurposing 4-7 as diagonals
+    # gives finer angular approach control WITHOUT changing num_actions (still
+    # 12) -> 8M checkpoints resume directly, only the action semantics differ.
+    _EIGHT_DIRS = (
+        (0.0, 1.0), (0.0, -1.0), (-1.0, 0.0), (1.0, 0.0),
+        (0.70710678, 0.70710678), (-0.70710678, 0.70710678),
+        (-0.70710678, -0.70710678), (0.70710678, -0.70710678),
+    )
+
+    @staticmethod
+    def _action_direction(action: int) -> tuple[float, float]:
+        """Unit (dx, dy) for a locomotion action. Pure-logic helper so the
+        8-direction mapping is testable without a MuJoCo instance. Actions
+        0-7 are the 8 directions; 8-11 map via %8 to a cardinal dir (pre
+        dev_age unlock)."""
+        return ThreeDWorld._EIGHT_DIRS[int(action) % 8]
 
     @property
     def observation_shape(self) -> tuple[int, int, int]:
@@ -681,24 +790,52 @@ class ThreeDWorld:
             try:
                 ax = float(self._data.body("learner").xpos[0])
                 ay = float(self._data.body("learner").xpos[1])
-                best_dir, best_dot, best_dist = 0, -1.0, 0.0
+                best_dir, best_dot, best_dist = 0, -1.0, 1e9
                 for _key, _occ in list(self._active_occlusions_3d.items()):
                     if not _occ.get("truly_occluded", False):
                         continue
                     _lk = _occ["last_known"]
                     _dist = math.hypot(_lk[0] - ax, _lk[1] - ay)
-                    if _dist < 0.8:
+                    # Stage 20k: teacher must stop STRICTLY INSIDE the
+                    # success circle, not on its edge — and the circle is
+                    # min(ratio*d0, radius), NOT a fixed radius: for close
+                    # starts (d0 < 0.94m with ratio 0.85) the criterion is
+                    # tighter than 0.8m. Fixed stop lines fail near starts
+                    # (teacher 1.0 measured rate=0.008-0.051). Dynamic
+                    # margin 0.875 clears both the ratio and radius terms.
+                    # Stage 20p: the stop circle follows the CURRICULUM
+                    # reward_radius (2.0→0.8) — the teacher demonstrates
+                    # arrival at the current stage's circle, not the final
+                    # 0.8m (no jump-ahead teaching).
+                    _t0 = _occ.get("agent_traj_during_occ", [(ax, ay)])
+                    _d0 = math.hypot(_t0[0][0] - _lk[0], _t0[0][1] - _lk[1])
+                    if _dist < min(
+                            self._occluder_reveal_ratio * _d0,
+                            self._occluder_reward_radius) * 0.875:
                         continue  # already there: stillness is the correct move
+                    # Stage 20m#4: track the NEAREST truly-occluded object
+                    # (the observation-slot #1 target), not the one with the
+                    # most aligned direction. The L1 orientation signal
+                    # (first-3-step credit) measures heading against the
+                    # nearest lk; a teacher walking the best-dot object was
+                    # misaligned with the measured target (0.16 even at
+                    # force 1.0).
+                    if _dist >= best_dist:
+                        continue
+                    best_dist = _dist
                     _tx, _ty = (_lk[0] - ax) / _dist, (_lk[1] - ay) / _dist
-                    for _d in range(4):
-                        _dot = _tx * [0, 0, -1, 1][_d] + _ty * [1, -1, 0, 0][_d]
+                    # Stage 20q: pick among all 8 directions (cardinal+diagonal)
+                    # for the finest angular approach. No 2x-force gear — uniform
+                    # speed keeps the demonstrated trajectory clean and matches the
+                    # learner's own action set (actions 0-7 = 8 dirs now).
+                    for _d in range(8):
+                        _dot = _tx * self._EIGHT_DIRS[_d][0] + _ty * self._EIGHT_DIRS[_d][1]
                         if _dot > best_dot:
-                            best_dot, best_dir, best_dist = _dot, _d, _dist
-                if best_dist > 0.0 and self._rng.rand() < self._occluder_teacher_force:
-                    # 4 basic directions; +4 = double-force gear when far away
-                    self.last_teacher_action = best_dir + (4 if best_dist > 3.0 else 0)
+                            best_dot, best_dir = _dot, _d
+                if best_dist < 1e9 and self._rng.rand() < self._occluder_teacher_force:
+                    self.last_teacher_action = best_dir
                     action = self.last_teacher_action
-                elif best_dist <= 0.0 and self._rng.rand() < self._occluder_teacher_force:
+                elif best_dist >= 1e9 and self._rng.rand() < self._occluder_teacher_force:
                     # Stage 20h#5: already at last_known -> teach STILLNESS.
                     # Action 11 (rotate, visual explore) is zero-force at
                     # dev_age>0.15, so BC teaches "hold position" — exactly
@@ -726,17 +863,16 @@ class ThreeDWorld:
                 pass  # rotate: visual exploration
             dx, dy = 0.0, 0.0
         else:
-            # Apply force via position actuators (actions 0-7, or 8-11 mapped to 0-3)
-            eff_action = action % 8
-            if eff_action < 4:
-                force = self._action_force
-                dir_idx = eff_action
-            else:
-                force = self._action_force * 2.0
-                dir_idx = eff_action - 4
-
-            dx = force * [0, 0, -1, 1][dir_idx]
-            dy = force * [1, -1, 0, 0][dir_idx]
+            # Apply force via position actuators (actions 0-7 = 8 directions;
+            # 8-11 mapped via %8 to a cardinal dir before dev_age unlocks).
+            # Stage 20q: all 8 directions use the same base force (no gear) so
+            # the agent has uniform-speed, finer-angular control to reach a
+            # tight 0.8m circle precisely.
+            eff_action = int(action) % 8
+            ux, uy = self._EIGHT_DIRS[eff_action]
+            force = self._action_force
+            dx = force * ux
+            dy = force * uy
 
         # Move agent target position via velocity control
         try:
@@ -796,46 +932,92 @@ class ThreeDWorld:
                         _ci = (self._object_crossing_fixed_object + 1) % self._num_objects
                     else:
                         _ci = int(self._rng.randint(0, self._num_objects))
-                _bid = self._model.body(f"obj_{_ci}").id
-                _occ_i = int(self._object_crossing_fixed_wall) if self._object_crossing_fixed_wall >= 0 \
-                    else int(self._rng.randint(0, self._num_occluders))
-                _occ_id = self._model.body(f"occluder_{_occ_i}").id
-                _ocx = float(self._data.xpos[_occ_id, 0])
-                _ocy = float(self._data.xpos[_occ_id, 1])
-                _px = float(self._data.xpos[_bid, 0])
-                _py = float(self._data.xpos[_bid, 1])
-                # Mirror position across the wall (keep z)
-                self._model.body_pos[_bid] = np.array([
-                    2.0 * _ocx - _px, 2.0 * _ocy - _py,
-                    float(self._data.xpos[_bid, 2]),
-                ])
-                # Keep the object behind the wall for hold steps so the
-                # occlusion persists long enough to be measured by the eval
-                # metric (previously the event closed within 1-2 steps and
-                # trajectories <3 points were dropped -> op measured ~0).
-                if self._object_crossing_hold_steps > 0:
-                    self._crossing_hold[_ci] = int(self._object_crossing_hold_steps)
-                    # Regenerate the occlusion record fresh (it may have
-                    # already been closed by an earlier reveal).
-                    _key = f"occ_{_ci}"
-                    if _key not in self._active_occlusions_3d:
-                        self._active_occlusions_3d[_key] = {
-                            "last_known": (2.0 * _ocx - _px, 2.0 * _ocy - _py),
-                            "agent_traj_during_occ": [(float(self._data.body("learner").xpos[0]),
-                                                       float(self._data.body("learner").xpos[1]))],
-                            "truly_occluded": True,
-                        }
-                    self._occ_signal_just_occluded.append(
-                        (_ci, 2.0 * _ocx - _px, 2.0 * _ocy - _py))
+                # Stage 20y: if the (possibly wrapped) pick is STILL in hold,
+                # skip this crossing entirely — re-mirroring an object whose
+                # occlusion event is still active teleports its last_known,
+                # making the target unreachable for any controller (the
+                # teacher chases a jumping target: measured success collapse).
+                # With few objects and hold > crossing_every this used to
+                # re-mirror the SAME object every cycle.
+                if _ci in self._crossing_hold:
+                    _crossing_skipped = True
                 else:
-                    # Legacy instant-crossing: snap any active occlusion record
-                    _key = f"occ_{_ci}"
-                    if _key in self._active_occlusions_3d:
-                        _ev = self._active_occlusions_3d.pop(_key)
-                        if len(_ev["agent_traj_during_occ"]) >= 3:
-                            self._occlusion_events.append(_ev)
-                        # Crossing = object re-appeared: emit reveal signal
-                        self._occ_signal_just_revealed.append(_ci)
+                    _crossing_skipped = False
+                if not _crossing_skipped:
+                    _bid = self._model.body(f"obj_{_ci}").id
+                    _occ_i = int(self._object_crossing_fixed_wall) if self._object_crossing_fixed_wall >= 0 \
+                        else int(self._rng.randint(0, self._num_occluders))
+                    _occ_id = self._model.body(f"occluder_{_occ_i}").id
+                    _ocx = float(self._data.xpos[_occ_id, 0])
+                    _ocy = float(self._data.xpos[_occ_id, 1])
+                    _px = float(self._data.xpos[_bid, 0])
+                    _py = float(self._data.xpos[_bid, 1])
+                    # Mirror position across the wall (keep z)
+                    _mx = 2.0 * _ocx - _px
+                    _my = 2.0 * _ocy - _py
+                    # Stage 20z: never mirror the object OUTSIDE the room —
+                    # the agent is confined by the room walls (4x4m, objects
+                    # spawn within +-1.8), so a wall-exterior last_known is
+                    # unreachable and the event can never finalize (measured:
+                    # events=0 across episodes). Mirrors SceneBuilder default
+                    # room (4.0, 4.0, 2.5) and the +-1.8 spawn bound.
+                    _hb = 1.8  # in-room bound (same as object spawn limit)
+                    if abs(_mx) > _hb or abs(_my) > _hb:
+                        _crossing_skipped = True
+                    # Stage 20z (A-fix): never mirror the object INTO a
+                    # colliding furniture region — MuJoCo ejects overlapping
+                    # bodies with huge velocity (object flies to hundreds of
+                    # meters, then every later crossing mirrors it further).
+                    # Furniture/caregiver zones (SceneBuilder layout):
+                    #   table (-1, 1) r~0.6 | bed (-1,-1) r~1.0
+                    #   shelf (1, 1) r~0.7  | caregiver (-1.2, 0.8) r~0.35
+                    if not _crossing_skipped:
+                        _fd = math.hypot(_mx + 1.0, _my - 1.0)   # table
+                        if _fd < 0.7:
+                            _crossing_skipped = True
+                        _fd = math.hypot(_mx + 1.0, _my + 1.0)   # bed
+                        if not _crossing_skipped and _fd < 1.05:
+                            _crossing_skipped = True
+                        _fd = math.hypot(_mx - 1.0, _my - 1.0)   # shelf
+                        if not _crossing_skipped and _fd < 0.75:
+                            _crossing_skipped = True
+                        _fd = math.hypot(_mx + 1.2, _my - 0.8)   # caregiver
+                        if not _crossing_skipped and _fd < 0.4:
+                            _crossing_skipped = True
+                if not _crossing_skipped:
+                    # Mirror position across the wall (keep z)
+                    self._model.body_pos[_bid] = np.array([
+                        2.0 * _ocx - _px, 2.0 * _ocy - _py,
+                        float(self._data.xpos[_bid, 2]),
+                    ])
+                    # Keep the object behind the wall for hold steps so the
+                    # occlusion persists long enough to be measured by the eval
+                    # metric (previously the event closed within 1-2 steps and
+                    # trajectories <3 points were dropped -> op measured ~0).
+                    if self._object_crossing_hold_steps > 0:
+                        self._crossing_hold[_ci] = int(self._object_crossing_hold_steps)
+                        # Regenerate the occlusion record fresh (it may have
+                        # already been closed by an earlier reveal).
+                        _key = f"occ_{_ci}"
+                        if _key not in self._active_occlusions_3d:
+                            self._active_occlusions_3d[_key] = {
+                                "last_known": (2.0 * _ocx - _px, 2.0 * _ocy - _py),
+                                "agent_traj_during_occ": [(float(self._data.body("learner").xpos[0]),
+                                                           float(self._data.body("learner").xpos[1]))],
+                                "truly_occluded": True,
+                                "is_crossing": True,  # Stage 20z: arrival semantics for crossing events
+                            }
+                        self._occ_signal_just_occluded.append(
+                            (_ci, 2.0 * _ocx - _px, 2.0 * _ocy - _py))
+                    else:
+                        # Legacy instant-crossing: snap any active occlusion record
+                        _key = f"occ_{_ci}"
+                        if _key in self._active_occlusions_3d:
+                            _ev = self._active_occlusions_3d.pop(_key)
+                            if len(_ev["agent_traj_during_occ"]) >= 3:
+                                self._occlusion_events.append(_ev)
+                            # Crossing = object re-appeared: emit reveal signal
+                            self._occ_signal_just_revealed.append(_ci)
             except Exception as _e:
                 _expose_exc("object_crossing_teleport")
 
@@ -1086,19 +1268,115 @@ class ThreeDWorld:
                 # persists (eval op metric needs a multi-step trajectory).
                 key = f"occ_{i}"
                 held = self._crossing_hold.get(i, 0)
+                _finalized = False
                 if held > 0:
                     truly_occluded = True
                     if held <= 1:
-                        # Last held step: park ends -> object re-appears
+                        # Hold timer expired. Legacy: judge + reveal here at a
+                        # fixed cadence (usually a miss — the agent has not
+                        # arrived yet). Stage 20y arrival_reveal mode: the
+                        # event is NOT over — the object stays occluded until
+                        # the agent finds it (arrival) or a deadline expires,
+                        # matching the eval far probe semantics.
                         self._crossing_hold.pop(i, None)
-                        self._maybe_reveal_bonus(key)
-                        self._occ_signal_just_revealed.append(i)
+                        if not self._occluder_arrival_reveal:
+                            self._maybe_reveal_bonus(key)
+                            self._occ_signal_just_revealed.append(i)
                     else:
                         self._crossing_hold[i] = held - 1
                 else:
                     truly_occluded = self._line_of_sight_blocked(ax, ay, ox, oy)
-                if (truly_occluded or self._num_occluders == 0) and dist > 0.8:
-                    # Track per-object trajectory over multiple steps
+                    # Stage 20z#2 (B-fix): in arrival_reveal mode, LOS
+                    # unblocked must NOT end an event — the agent sees the
+                    # object from the side while still 1-3m away, and ending
+                    # there judged a miss before arrival (measured: events
+                    # finalized at d=0.94/1.45m, arrival rate 0/80). Keep the
+                    # event alive (as if occluded) until the agent enters the
+                    # judge circle (success) or the deadline.
+                    # Stage 21 (A-fix): applies to REAL LOS events too (not
+                    # just crossing) — when the agent wanders past a wall and
+                    # an object behind it becomes occluded, the event now
+                    # persists and (a) the teacher demonstrates walking to
+                    # last_known on LOS events as well, and (b) arrival pays
+                    # off, teaching proactive search ("object hidden -> find
+                    # it") — the far-probe behavior.
+                    if (self._occluder_arrival_reveal
+                            and key in self._active_occlusions_3d):
+                        _evc = self._active_occlusions_3d[key]
+                        _dl = _evc.get("deadline")
+                        if _dl is None:
+                            _dl = self._step_count + self._arrival_deadline_steps
+                            _evc["deadline"] = _dl
+                        if self._step_count < _dl:
+                            truly_occluded = True
+                # Stage 20y: arrival-triggered reveal — if the agent has
+                # entered the judge circle around last_known, end the
+                # occlusion NOW (train/eval isomorphism: the eval far probe
+                # ends when the agent finds the object). Checked on EVERY
+                # occluded step (held or LOS) so a slow agent that arrives
+                # after the hold timer expired still scores the arrival.
+                if (self._occluder_arrival_reveal and truly_occluded
+                        and not _finalized and key in self._active_occlusions_3d):
+                    try:
+                        _ev = self._active_occlusions_3d[key]
+                        _lk = _ev.get("last_known")
+                        _tr = _ev.get("agent_traj_during_occ") or []
+                        if _lk is not None and len(_tr) >= 1:
+                            _d0 = math.hypot(_tr[0][0] - _lk[0], _tr[0][1] - _lk[1])
+                            _dn = math.hypot(ax - _lk[0], ay - _lk[1])
+                            if _dn < min(
+                                    self._occluder_reveal_ratio * _d0,
+                                    self._occluder_reach_radius):
+                                # Arrived: finalize success NOW. Append the
+                                # CURRENT position first — the tracking block
+                                # below is skipped on finalize, so without
+                                # this the trajectory would end at the PREVIOUS
+                                # step (best_d ~0.98m > 0.8m -> judged a miss
+                                # even though the agent reached 0.78m this step;
+                                # measured: arrival rate 0/83 in verify).
+                                _ev["agent_traj_during_occ"].append((ax, ay))
+                                self._maybe_reveal_bonus(key)
+                                _ev2 = self._active_occlusions_3d.pop(key)
+                                if len(_ev2.get("agent_traj_during_occ") or []) >= 3:
+                                    self._occlusion_events.append(_ev2)
+                                if self._occluder_trace and i < len(self._trace_geom_ids):
+                                    self._model.geom_pos[self._trace_geom_ids[i]] = [0.0, 0.0, 100.0]
+                                self._occ_signal_just_revealed.append(i)
+                                _finalized = True
+                            elif held == 0 and self._occluder_arrival_reveal:
+                                # Deadline logic (arrival_reveal, post-hold):
+                                # event held alive past its deadline without an
+                                # arrival -> finalize now (judged miss unless
+                                # actually inside the circle). Prevents events
+                                # hanging forever when the agent wanders off.
+                                _evc2 = self._active_occlusions_3d.get(key)
+                                _dl2 = _evc2.get("deadline") if _evc2 else None
+                                if _dl2 is not None and self._step_count >= _dl2:
+                                    _evc2["agent_traj_during_occ"].append((ax, ay))
+                                    self._maybe_reveal_bonus(key)
+                                    _ev3 = self._active_occlusions_3d.pop(key)
+                                    if len(_ev3.get("agent_traj_during_occ") or []) >= 3:
+                                        self._occlusion_events.append(_ev3)
+                                    if self._occluder_trace and i < len(self._trace_geom_ids):
+                                        self._model.geom_pos[self._trace_geom_ids[i]] = [0.0, 0.0, 100.0]
+                                    self._occ_signal_just_revealed.append(i)
+                                    _finalized = True
+                    except Exception:
+                        pass
+                if truly_occluded or self._num_occluders == 0:
+                    # Stage 20y: if arrival already finalized this event,
+                    # skip tracking (the pop above removed the key; without
+                    # this guard the block would resurrect a fresh event).
+                    if _finalized:
+                        continue
+                    # Track per-object trajectory over multiple steps.
+                    # NOTE: no dist>0.8 gate here (historical bug): a reaching
+                    # agent (<0.8m from last_known) used to terminate the event
+                    # -> the eval op denominator silently dropped exactly the
+                    # successful tracking episodes. The event now persists
+                    # while the object stays occluded and only finalizes when
+                    # it re-becomes visible (else branch below), so "arrived
+                    # and waited for the reveal" scores as tracking success.
                     if key not in self._active_occlusions_3d:
                         self._active_occlusions_3d[key] = {
                             "last_known": (ox, oy),
@@ -1113,7 +1391,7 @@ class ThreeDWorld:
                             self._occ_signal_just_occluded.append((i, float(ox), float(oy)))
                     self._active_occlusions_3d[key]["agent_traj_during_occ"].append((ax, ay))
                 else:
-                    # Object became reachable (or visible) — finalize and emit event
+                    # Object re-became visible — finalize and emit event
                     key = f"occ_{i}"
                     if key in self._active_occlusions_3d:
                         self._maybe_reveal_bonus(key)
@@ -1141,6 +1419,15 @@ class ThreeDWorld:
                     self._object_contact_order.append(i)
             except Exception:
                 continue  # legit: per-object loop, obj_ may be gone
+
+    @staticmethod
+    def _approach_ok(d_now: float, d0: float, ratio: float, radius: float) -> bool:
+        """Stage 20k: op success criterion — isomorphic to the eval metric
+        (best_d < min(0.7*start_d, 0.8m)). The ratio alone lets a 6m-away
+        object count as "found" at 5.1m; the absolute radius floor demands
+        an actual arrival for far starts while keeping the ratio's
+        softening for close ones."""
+        return d0 >= 1e-6 and d_now < min(ratio * d0, radius)
 
     def _maybe_reveal_bonus(self, key: str) -> None:
         """Stage 20d: attribute a large bonus when an occlusion REVEALS.
@@ -1170,14 +1457,35 @@ class ThreeDWorld:
         d0 = math.hypot(sx - lk[0], sy - lk[1])
         d_now = math.hypot(ax - lk[0], ay - lk[1])
         # Stage 20j threshold-gate probe counters: every valid tracking
-        # attempt counts an arrival; a d_now < ratio*d0 success counts a
-        # hit. Same semantic as the eval op metric (train.py consumes via
-        # gate_stats_snapshot_and_reset).
+        # attempt counts an arrival; an approach success counts a hit.
+        # Same semantic as the eval op metric (but isomorphized to the
+        # absolute-reach hard floor in Stage 20k, see _approach_ok).
         self._gate_arrivals += 1
-        if d0 >= 1e-6 and d_now < self._occluder_reveal_ratio * d0:
+        if self._approach_ok(
+                d_now, d0, self._occluder_reveal_ratio,
+                self._occluder_reach_radius):
             self._gate_success += 1
             self._reveal_bonus_pending = max(
                 self._reveal_bonus_pending, self._occluder_reveal_bonus)
+        # Stage 20p: reward-circle gate — same arrivals, success judged by
+        # the CURRENT curriculum circle (d_now < reward_radius). This is
+        # the TEACHING measure; the 0.8m judge above never moves.
+        self._gate_rw_arrivals += 1
+        if d0 >= 1e-6 and d_now < self._occluder_reward_radius:
+            self._gate_rw_success += 1
+        # Stage 20m: L1 orientation payout — event ended; if the agent's
+        # FIRST 3 steps of the event were aligned with last_known, credit
+        # the "turned the right way" sub-goal (one-shot). Asymmetric: no
+        # punishment for bad first steps, only reward for good ones.
+        _n3 = ev.get("first3_n", 0)
+        if _n3 >= 2:
+            self._orient_events += 1
+            _aligned = ev.get("first3_cos", 0.0) / _n3 > 0.5
+            if _aligned:
+                self._orient_aligned += 1
+                if self._occluder_orient_bonus > 0.0:
+                    self._reveal_bonus_pending = max(
+                        self._reveal_bonus_pending, self._occluder_orient_bonus)
 
     def _line_of_sight_blocked(
         self, ax: float, ay: float, ox: float, oy: float,
@@ -1471,7 +1779,8 @@ class ThreeDWorld:
         Teaching-scaffold semantics: approach earns, away is discouraged,
         stillness is neutral — the optimal policy is forced to move.
         """
-        if self._occluder_target_reward <= 0.0 and self._occluder_shaping_weight <= 0.0:
+        if self._occluder_target_reward <= 0.0 and self._occluder_shaping_weight <= 0.0 \
+                and self._occluder_orient_weight <= 0.0 and self._occluder_orient_bonus <= 0.0:
             return 0.0
         try:
             bonus = self._reveal_bonus_pending  # Stage 20d: reveal attribution
@@ -1479,14 +1788,113 @@ class ThreeDWorld:
             ax = float(self._data.body("learner").xpos[0])
             ay = float(self._data.body("learner").xpos[1])
             r = bonus
+            # Stage 20m#2: directional terms (orientation shaping, symmetric
+            # shaping) act on the NEAREST active occlusion ONLY — the agent
+            # can only walk one direction at a time, and the observation
+            # slots feed it the nearest lk first. Summing dots over every
+            # concurrent occlusion diluted the signal: with 3-8 objects the
+            # summed gradient averaged toward zero direction (measured
+            # first-3-step alignment stuck at random ~0.16-0.22 regardless
+            # of teacher force).
+            _nearest_key = None
+            _nearest_dist = float("inf")
+            for _key in self._active_occlusions_3d:
+                _occ = self._active_occlusions_3d[_key]
+                _lk = _occ.get("last_known")
+                if _lk is None:
+                    continue
+                _d = math.hypot(_lk[0] - ax, _lk[1] - ay)
+                if _d < _nearest_dist:
+                    _nearest_dist = _d
+                    _nearest_key = _key
             for key, occ in list(self._active_occlusions_3d.items()):
                 lk = occ["last_known"]
                 dist = math.hypot(ax - lk[0], ay - lk[1])
+                # Stage 20m: L1 orientation — first-3-steps direction credit.
+                # "Turned the right way right after the object vanished" is
+                # the simplest, earliest-learnable sub-goal (head_cos was
+                # 0.28: the policy's first move barely correlates with lk).
+                # Accumulate displacement-vs-lk cos for the first 3 steps of
+                # the event; the event-end bonus (in _maybe_reveal_bonus)
+                # pays out if the mean alignment clears 0.5. Only reward
+                # alignment, never penalize misalignment (asymmetric).
+                # Stage 20m#2: only the NEAREST occlusion accumulates —
+                # the agent cannot align with several last_knowns at once.
+                # Stage 20m#4: orientation is measured against the NEAREST
+                # active lk at that step (what the observation slots feed),
+                # NOT against this event's lk. Multi-object concurrency
+                # makes "which event settles" unpredictable (teacher walked
+                # to A, B settled) — coupling L1 to settlement kept
+                # alignment at random ~0.16 even at teacher 1.0. L1 now
+                # measures "did the agent turn toward where it should go"
+                # (agent perspective); arrival at the settled object stays
+                # with the tgate/reach signals.
+                traj = occ.get("agent_traj_during_occ", [])
+                if (self._occluder_orient_bonus > 0.0
+                        and key == _nearest_key
+                        and len(traj) >= 3
+                        and len(traj) <= 5
+                        and not occ.get("first3_done", False)):
+                    px, py = traj[-2]
+                    mx, my = ax - px, ay - py
+                    mlen = math.hypot(mx, my)
+                    dxl, dyl = lk[0] - px, lk[1] - py
+                    dl = math.hypot(dxl, dyl)
+                    if mlen > 1e-6 and dl > 1e-6:
+                        c = (mx * dxl + my * dyl) / (mlen * dl)
+                        occ["first3_cos"] = occ.get("first3_cos", 0.0) + c
+                        occ["first3_n"] = occ.get("first3_n", 0) + 1
+                    if len(traj) >= 5:
+                        occ["first3_done"] = True
+                # Stage 20m: L1 orientation — per-step asymmetric shaping:
+                # moving TOWARD lk earns, moving away is neutral (unlike the
+                # 20g symmetric term, which punished wrong direction and
+                # drove the policy to average directions under noise).
+                # 20m#2: nearest occlusion only (same reason as above).
+                if (self._occluder_orient_weight > 0.0
+                        and key == _nearest_key):
+                    dx, dy = lk[0] - ax, lk[1] - ay
+                    dlen = math.hypot(dx, dy)
+                    if dlen > 1e-6:
+                        bid = self._model.body("learner").id
+                        dof = self._model.body_dofadr[bid]
+                        if dof >= 0:
+                            vx = float(self._data.qvel[dof])
+                            vy = float(self._data.qvel[dof + 1])
+                            vlen = math.hypot(vx, vy) + 1e-9
+                            dot = (vx * dx + vy * dy) / (vlen * dlen)
+                            r += max(0.0, dot) * self._occluder_orient_weight
+                # Stage 20k: absolute-reach credit — walking INTO the contact
+                # radius around last_known earns a one-shot reward. The dense
+                # distance/heading terms only reward "getting closer" from
+                # wherever you are; this is the only term that demands the
+                # actual arrival the eval op metric measures (best_d < 0.8m).
+                # Stage 20p: the circle is the CURRICULUM reward_radius
+                # (2.0→0.8) — teaching circle, judge stays 0.8m.
+                if (self._occluder_reach_reward > 0.0
+                        and not occ.get("reached", False)
+                        and dist < self._occluder_reward_radius):
+                    r += self._occluder_reach_reward
+                    occ["reached"] = True
+                # Stage 20n: in-circle hold credit — staying inside the
+                # reach radius keeps earning (closer = more). Without it,
+                # arriving costs the per-step heading points (dot~0 when
+                # still) while the one-shot reach reward is smaller than
+                # the heading stream — the reward math made arrival
+                # OPTIMALLY WRONG (measured: policy farmed heading points,
+                # far stuck at 0.03). This makes "arrive and stay" the
+                # dominant strategy: heading~1.5/step vs hold up to
+                # 0.8*w/step + 20 one-shot.
+                if (self._occluder_reach_hold > 0.0
+                        and dist < self._occluder_reward_radius):
+                    r += max(0.0, self._occluder_reward_radius - dist) \
+                        * self._occluder_reach_hold
                 prev = occ.get("prev_agent_dist", dist)
                 occ["prev_agent_dist"] = dist
                 if dist < prev:
                     r += (prev - dist) * self._occluder_target_reward
-                if self._occluder_shaping_weight > 0.0:
+                if (self._occluder_shaping_weight > 0.0
+                        and key == _nearest_key):
                     dx, dy = lk[0] - ax, lk[1] - ay
                     dlen = math.hypot(dx, dy)
                     if dlen > 1e-6:
@@ -1525,7 +1933,12 @@ class ThreeDWorld:
         # can no longer trade op against them.
         if self._focus_op_only:
             reward = self._occluder_only_reward()
-            reward = max(0.0, min(5.0, reward))
+            # Stage 20w: raise the per-step clamp so reach_reward can actually
+            # dominate. Previously clamped to 5.0 — reach=20 was silently
+            # truncated to 5, barely above the shaping stream. Now the clamp
+            # is configurable and defaults to 10x the old cap.
+            _clamp = float(getattr(self, '_op_reward_clamp', 50.0))
+            reward = max(0.0, min(_clamp, reward))
             # Chain task & logic bonus stay so hypothesis-deduction circuits
             # keep a thin extrinsic tie to the loop (not a competing goal).
             if self._dev_age > 0.3:

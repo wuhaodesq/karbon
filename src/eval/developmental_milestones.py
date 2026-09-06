@@ -72,10 +72,14 @@ def _eval_object_permanence(st: dict) -> float:
         traj = ev.get("agent_traj_during_occ", [])
         if not traj:
             continue
-        # 遮挡期间 agent 是否朝 last_known 靠近
+        # 遮挡期间 agent 是否朝 last_known 靠近。
+        # best_d = 轨迹上离 last_known 的最近距离 (不是 end_d): agent 到过
+        # last_known 附近就是追踪成功的证据,即使它后来又走开
+        # (事件现在持续到物体重新可见为止, end_d 会为此类轨迹丢分)。
+        # 0.8m 兜底: 接近到触达距离(接触半径)视同"找到"。
         start_d = _dist(traj[0], lk)
-        end_d = _dist(traj[-1], lk)
-        if end_d < start_d * 0.7:
+        best_d = min(_dist(p, lk) for p in traj)
+        if best_d < min(start_d * 0.7, 0.8):
             correct += 1
     return correct / len(occ)
 

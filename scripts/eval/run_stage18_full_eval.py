@@ -307,6 +307,14 @@ def main():
             # this vector describes. Train/eval observation shapes must match
             # or the resumed policy sees a different input dim.
             occluder_obs_slots=int(cfg["env"].get("occluder_obs_slots", 0)),
+            # Stage 21: arrival_reveal forwarded to ALL probes (not just
+            # cross) — the far probe must use the same event semantics as
+            # training (events persist until the agent arrives/deadline),
+            # otherwise LOS events end the instant the agent sees the object
+            # and the trained walk-to-last_known trajectory never completes
+            # (measured: far stuck at 0.06-0.07 while training LOS arrival
+            # rate is 0.75+).
+            occluder_arrival_reveal=bool(cfg["env"].get("occluder_arrival_reveal", False)),
         )
         if probe == "cross":
             # 20i C-probe: replay the training crossing curriculum (fixed
