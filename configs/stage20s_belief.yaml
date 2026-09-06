@@ -1,28 +1,18 @@
-# Stage 20j · 阈值门控放手 (Threshold-Gated Teacher Release)
-# 基于 Stage 20i 4.5M 判决点 (far=0.0 cross=0.0)。
-#
-# 20i 教训 (重归因):
-#   1. 20h/20i 的退火调度从未生效 —— train.py 写 env.occluder_teacher_force
-#      但 ThreeDWorld 无此属性 (只有 _occluder_teacher_force), hasattr False,
-#      调度静默跳过, teacher 恒 = yaml 构造值 0.35 整程 4.5M 步。
-#      分层"退火无效"是假象: 策略从未被放手, 自主能力从未被训练/测试。
-#      (diag 0.14 < 随机 0.23 与此完全一致 —— 无 teacher 时≈随机)
-#   2. reveal 归因奖励死锁: 阈值 0.7 而策略 mean end/start=0.987 → 5.0
-#      大额"找到"奖励从 20g 起从未发放过, 唯一梯度只剩小项趋近/塑形。
-#   => 20j 两大修复: ① 真正的放手闭环 (阈值门控 teacher) ② 让奖励先流动
-#      (reveal 阈值阶梯 0.85→0.75→0.70 + 奖励增强; 评测口径恒 0.7 不变)
-#
-# 门控语义 (方案 B, 用户钦定):
-#   teacher 初始 0.5; 每 gate_every 步探测窗口 (probe_steps 步 teacher=0),
-#   按 env gate 计数器测"自主到达率" (成功追踪帧/尝试帧, d_now<ratio*d0,
-#   与评测 op 指标同构); 连续 rounds_needed 轮 ≥ arrival_threshold 才
-#   递减 teacher_step (地板 min); 不足则保持 (绝不回调到更低)。
-#   学习者必须"挣得"每一次放手。预期: 课程推进 1M 步 (到 5.5M)。
-#   若到达率长期 <0.15 -> teacher 卡 0.5, 说明 20j 假设 (放手+奖励流动
-#   就能学会) 不成立, 记录为负结果, 转架构级 (分层目标/长程记忆)。
+# Stage 20s · 内源物体恒存信念 (20r 行为释放收敛到 far~0.04 后的认知级转进)
+# 20r 判决: 固定节奏撤教师后 far 仍 0.04 (20r 8/28 11.2M 终测), 自主到达率
+#   全程 0.06~0.10 无改善 -> 策略从未内源化位置信念, 只靠 env proprio slot +
+#   teacher 线索。证据: 20q 权重 proprio_dim=27=18+3*3 (slot 早已开), 撤教师后
+#   far 不升 -> "开 slot" 不是缺的; 缺的是让信念成为策略内部状态。
+# 20s 设计 (最小认知切片):
+#   (a) 策略隐藏态 h 上接 belief_head, 预测被遮挡物 last_known 偏移
+#       (3*slots 维 = (dx,dy,dist)/4); 召回损失迫使其内源化。
+#   (b) 训练中把 env proprio 的 slot 尾段按比例淡出 (occluder_slot_fade_*),
+#       逼策略放弃外部线索、改用内部信念。teacher 直接归零 (teacher_force=0.05),
+#       使信念与教师无关 (20r 已证明行为释放 alone 不够)。
+# 不在本 stage: 预测误差好奇心 / 更强世界模型 (后续 20t)。
 
 stage: 20
-name: "stage20j_threshold_gate"
+name: "stage20s_belief"
 
 model:
   hidden_size: 128
@@ -69,37 +59,41 @@ env:
   num_envs: 1
   num_occluders: 4
   occluder_trace: false
-  occluder_target_reward: 3.0          # 20j: 1.5 -> 3.0 (趋近梯度有存在感)
-  occluder_shaping_weight: 3.0         # 20j: 1.5 -> 3.0 (对称方向塑形)
-  occluder_reveal_bonus: 8.0           # 20j: 5.0 -> 8.0 (归因奖励更强锚)
-  occluder_reveal_ratio: 0.70          # 20k#2: 判据与 eval 完全同构 (0.7 比例 + 0.8m 绝对)
-  occluder_reveal_ratio_ladder: [0.70]  # 20k#2: 固定 0.7, 不再阶梯 (eval 同构优先)
-  occluder_reveal_ratio_ladder_every: 500000         # 每 500K 步升一级
-  occluder_reach_reward: 20.0         # 20n: 走进触达半径 0.8m 一次性奖励 (8.0→20: 到达必须比趋近更值钱)
-  occluder_reach_radius: 0.8          # 20k: 触达半径判据, 与 eval op 硬门槛同构 (恒 0.8, 课程不动它)
-  occluder_reward_radius: 2.0         # 20p: 奖励圈起始半径 (课程 2.0→1.5→1.0→0.8, 教学信号)
-  occluder_reward_radius_ladder: [2.0, 1.5, 1.0, 0.8]  # 20p: 课程阶梯
-  occluder_reward_radius_threshold: 0.7  # 20p: 当前圈到达率达标线 (≥0.7 连续 3 轮晋级)
-  occluder_reward_radius_rounds: 3       # 20p: 连续达标轮数
-  occluder_reach_hold: 2.0            # 20n: 圈内持续分 max(0, 0.8-dist)*2 每步 (到达后保持有收益)
-  occluder_orient_weight: 1.5         # 20n: L1 朝向塑形 5.0→1.5 (仍教方向, 不再压过到达奖励)
-  occluder_orient_bonus: 8.0          # 20m: L1 朝向 - 事件首3步对齐一次性奖励 (4.0→8.0)
-  occluder_orient_gate_every: 15000   # 20m: L1 达标探测窗口 (与 tgate 同周期)
-  occluder_orient_threshold: 0.25     # 20m: L1 对齐率达标线 (0.5→0.25: 多物体环境实测天花板 ~0.25, 0.5 为单物体理想值不可达)
-  occluder_orient_rounds_needed: 3    # 20m: 连续 3 轮达标才衰减塑形
+  occluder_target_reward: 3.0
+  occluder_shaping_weight: 3.0
+  occluder_reveal_bonus: 8.0
+  occluder_reveal_ratio: 0.70
+  occluder_reveal_ratio_ladder: [0.70]
+  occluder_reveal_ratio_ladder_every: 500000
+  occluder_reach_reward: 20.0
+  occluder_reach_radius: 0.8
+  occluder_reward_radius: 0.8
+  occluder_reward_radius_ladder: [0.8]
+  occluder_reward_radius_threshold: 0.7
+  occluder_reward_radius_rounds: 3
+  occluder_reach_hold: 2.0
+  occluder_orient_weight: 1.5
+  occluder_orient_bonus: 8.0
+  occluder_orient_gate_every: 15000
+  occluder_orient_threshold: 0.25
+  occluder_orient_rounds_needed: 3
   object_crossing_every: 100
   object_crossing_hold_steps: 60
   object_crossing_fixed_object: 0
   object_crossing_fixed_wall: 0
   occluder_obs_slots: 3
-  # --- Stage 20j: threshold-gated teacher (replaces the 20i blind fade) ---
-  occluder_teacher_force: 0.5          # 初始接管率 (方案 B 参数)
-  occluder_teacher_min: 0.05           # 最低保留引导
-  occluder_teacher_gate_every: 15000   # 每 15K 步一次探测窗口
-  occluder_teacher_probe_steps: 2000   # 探测长度 (teacher=0, 测自主到达率)
-  occluder_teacher_arrival_threshold: 0.15  # 到达率达标线
-  occluder_teacher_rounds_needed: 3    # 连续 3 轮达标才退火
-  occluder_teacher_step: -0.02         # 每次退火幅度
+  # 20s: 教师直接归零 (只留 0.05 底线) -> 信念必须与教师无关
+  occluder_teacher_force: 0.05
+  occluder_teacher_min: 0.05
+  occluder_teacher_gate_every: 15000
+  occluder_teacher_probe_steps: 2000
+  occluder_teacher_arrival_threshold: 0.15
+  occluder_teacher_rounds_needed: 3
+  occluder_teacher_step: -0.02
+  # 20s 新增: 内源信念训练旋钮
+  occluder_belief_loss_weight: 0.5     # 召回 (MSE) 损失权重
+  occluder_slot_fade_start: 10000000   # 相对全局 step; resume ~10.5M -> 起步约 0.17 可见
+  occluder_slot_fade_steps: 3000000    # 3M 内淡出到 0 -> ~13M 完全内源
   focus_op_only: true
 
 # --- LLM Fusion (disabled) ---
@@ -321,7 +315,7 @@ coverage:
   num_buckets: 16384
   log_every_steps: 10000
 
-# --- Training (Stage 20j: 1M more steps to 5.5M) ---
+# --- Training (Stage 20s: resume from 20r ~10.5M -> 14M, 信念内源化课程) ---
 train:
   ppo_clip: 0.2
   ppo_epochs: 4
@@ -330,7 +324,7 @@ train:
   bc_teacher_coef: 0.2
   gamma: 0.99
   gae_lambda: 0.95
-  total_steps: 8000000
+  total_steps: 14000000
   ckpt_every_steps: 50000
 
 independent_eval:

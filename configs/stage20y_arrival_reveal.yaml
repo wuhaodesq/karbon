@@ -1,0 +1,247 @@
+# Stage 20y · 到达即揭示 (arrival_reveal) — 事件可解性验证
+# 20x 判决 (9/2 15:26): teacher=1.0 全接管到达率仅 0.070。
+# 根因 (代码分析 + 物理实测):
+#   - agent 速度 0.08 m/步 (实测), hold=10 步窗口 → 最多移动 0.8m
+#   - 但遮挡事件结束时 (hold 到期瞬间) 判定 d_now, d0 常 >1.6m → 不可解
+#   - teacher 停圈 0.875*min(0.7*d0,0.8) ≤0.7m 比 judge 0.8m 更严 → 自相矛盾
+#   - eval far 探针是 "agent 到达即结束" (best_d, 直到可见), 训练却是
+#     "固定 hold 到期即判定" → 训练/评测语义不同构
+# 20y 修复: occluder_arrival_reveal=true — agent 进入 judge 圈
+#   (min(0.7*d0, 0.8)) 立即结束事件 + 判定成功 (与 eval far 同构)。
+#   hold_steps 变为超时上限 (60 步), 防 agent 永不抵达时死锁。
+# 验证目标: teacher=1.0 下 tgate rate 应大幅 >0.07 (接近 1.0 如果 teacher
+#   本身能走到), 证明事件可解 + 模仿示范有效。之后再训策略。
+
+stage: 20
+name: "stage20y_arrival_reveal"
+
+model:
+  hidden_size: 128
+  use_hierarchical: true
+  use_hybrid_backbone: false
+  hybrid_n_layers: 7
+  hybrid_n_heads: 4
+  hybrid_swa_window: 16
+  hybrid_ttt_mini_batch: 8
+  hybrid_ffn_hidden_mult: 4
+  hybrid_dropout: 0.0
+  use_slot_attention: true
+  slot_num_slots: 7
+  slot_dim: 128
+  slot_num_iterations: 3
+  use_vision_encoder: false
+  sub_goal_every: 10
+  use_gru: true
+
+# --- Narrative Loop (disabled) ---
+narrative:
+  enabled: false
+
+# --- Developmental Memory (disabled) ---
+developmental_memory:
+  enabled: false
+
+# --- 3D Environment — 极简 + 奖励对齐 + teacher 100% ---
+env:
+  id: "ThreeDWorld"
+  num_objects: 1
+  max_episode_steps: 100
+  render_size: 128
+  action_force: 50.0
+  developmental_age: 0.5
+  num_envs: 1
+  num_occluders: 1
+  occluder_trace: false
+  occluder_target_reward: 0.3
+  occluder_shaping_weight: 0.3
+  occluder_reveal_bonus: 2.0
+  occluder_reveal_ratio: 0.70
+  occluder_reveal_ratio_ladder: [0.70]
+  occluder_reveal_ratio_ladder_every: 500000
+  occluder_reach_reward: 100.0
+  occluder_reach_radius: 0.8
+  occluder_reward_radius: 0.8
+  occluder_reward_radius_ladder: [0.8]
+  occluder_reward_radius_threshold: 0.7
+  occluder_reward_radius_rounds: 3
+  occluder_reach_hold: 5.0
+  occluder_orient_weight: 0.1
+  occluder_orient_bonus: 2.0
+  occluder_orient_gate_every: 15000
+  occluder_orient_threshold: 0.25
+  occluder_orient_rounds_needed: 3
+  # 短遮挡
+  object_crossing_every: 100    # 20y: 必须 > hold_steps (60), 否则物体在 hold 中被再次镜像
+  object_crossing_hold_steps: 60    # 20y: 超时上限 (agent 到达可提前结束)
+  object_crossing_fixed_object: 0
+  object_crossing_fixed_wall: 0
+  occluder_arrival_reveal: true     # 20y: 到达即揭示 (进 judge 圈即成功)
+  occluder_obs_slots: 3
+  # 验证: teacher 恒 1.0, 窗口正常打分但永不退火
+  # (probe_steps=0 → probe 永不触发, teacher 恒 1.0; step=0 → 不退火)
+  occluder_teacher_force: 1.0
+  occluder_teacher_min: 1.0
+  occluder_teacher_gate_every: 15000
+  occluder_teacher_probe_steps: 0
+  occluder_teacher_arrival_threshold: 0.15
+  occluder_teacher_rounds_needed: 2
+  occluder_teacher_step: 0.0
+  occluder_teacher_always_step: false
+  occluder_belief_loss_weight: 0.0
+  occluder_slot_fade_start: 0
+  occluder_slot_fade_steps: 0
+  focus_op_only: true
+
+# --- LLM Fusion (disabled) ---
+llm_fusion:
+  enabled: false
+
+# --- Advanced Cognition (minimal) ---
+advanced:
+  counterfactual_enabled: false
+  behavior_cloning_enabled: false
+  meta_learner_enabled: false
+  hypothesis_tester_enabled: false
+
+# --- Cognitive Modules (minimal) ---
+cognitive:
+  symbolic_enabled: false
+  self_model_enabled: false
+  logic_engine_enabled: false
+  reflection_enabled: false
+
+theory_of_mind:
+  enabled: false
+
+creativity:
+  enabled: false
+
+symbol_backend:
+  enabled: false
+
+neuro_symbolic_bridge:
+  enabled: false
+
+abstract_reasoning:
+  enabled: false
+
+# --- 单任务: 短遮挡 (不切课程, 快速诊断) ---
+# NOTE: max_tasks 必须 >= resume ckpt 的任务数 (20w 有 3 个), 否则
+# HealthChecker 拦截 "curriculum exceeded capacity: size=3 cap=N"。
+curriculum:
+  max_tasks: 3
+  lp_window_size: 32
+  lp_min_samples: 8
+  exploration_epsilon: 0.3
+  mode: sequential
+  switch_every_steps: 999999999
+  report_every_steps: 500
+  tasks:
+    - {id: 0, num_objects: 1, action_force: 50.0, difficulty: 0.3, tag: "3d-short-occ"}
+
+# --- Core modules (minimal) ---
+continual:
+  ewc_lambda: 0.0
+  ewc_gamma: 0.99
+  ewc_anchor_mode: "replace"
+  ewc_anchor_ema_alpha: 0.9
+  ewc_consolidate_every_steps: 999999999
+  ewc_consolidate_num_batches: 32
+  ewc_batch_size: 32
+  gr_enabled: false
+  sleep_warmup_steps: 999999999
+  sleep_replay_trim_every: 999999999
+  sleep_skills_merge_every: 999999999
+  sleep_ttt_distill_every: 999999999
+
+core_knowledge_loss:
+  enabled: false
+
+external_memory:
+  enabled: false
+
+causal_discovery:
+  enabled: false
+
+number_sense:
+  enabled: false
+
+rule_induction:
+  enabled: false
+
+skills:
+  skill_d_out: 128
+  skill_d_in: 128
+  skill_rank: 8
+  gpu_capacity: 256
+  cpu_capacity: 2048
+  ssd_max_shards: 64
+  ssd_shard_size: 128
+  merge_similarity_threshold: 0.9
+  score_alpha: 1.0
+  score_beta: 0.5
+  score_gamma: 0.1
+  archive_subdir: "skills"
+
+world_model:
+  z_dim: 32
+  h_dim: 64
+  embed_dim: 64
+  hidden: 128
+  max_rollout_steps: 10
+  kl_free_nats: 0.0
+  recon_loss_weight: 0.0
+  recon_pixel_weight: 0.0
+  next_loss_coef: 0.0
+  update_every_steps: 999999999
+  lr: 5.0e-4
+  wm_loss_coef: 0.0
+  log_every_steps: 999999999
+
+imagination:
+  enabled: false
+
+intrinsic:
+  embed_dim: 128
+  lr: 1.0e-4
+  reward_clip: 5.0
+  reward_coef: 0.0
+  update_every_steps: 999999999
+
+replay:
+  hot_capacity: 16384
+  warm_capacity: 131072
+  cold_max_shards: 6
+  cold_shard_size: 16384
+  per_alpha: 0.6
+  min_size_to_sample: 256
+  sample_every_steps: 999999999
+  batch_size_offpolicy: 128
+  archive_subdir: "replay"
+
+coverage:
+  num_buckets: 16384
+  log_every_steps: 999999999
+
+# --- Training (诊断短跑 200k, resume 20w 970k 已训权重) ---
+train:
+  ppo_clip: 0.2
+  ppo_epochs: 4
+  entropy_coef: 0.03
+  value_coef: 0.5
+  bc_teacher_coef: 0.2
+  gamma: 0.99
+  gae_lambda: 0.95
+  total_steps: 1200000
+  ckpt_every_steps: 50000
+
+independent_eval:
+  eval_every_steps: 50000
+  eval_weights: [2.0, 1.0, 2.0]
+  episodes_per_task: 5
+  max_steps_per_ep: 100
+  eval_epsilon: 0.05
+  eval_seed: 42
+
+viz:
+  frame_every_steps: 10000
