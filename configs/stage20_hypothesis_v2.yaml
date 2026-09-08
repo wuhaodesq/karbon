@@ -323,7 +323,7 @@ train:
   value_coef: 0.5
   gamma: 0.99
   gae_lambda: 0.95
-  total_steps: 800000              # v2: resume 21_1.8M 行为基座, 800K 推理闭环预算
+  total_steps: 1600000              # v2: resume 21_1.8M 行为基座, 800K 推理闭环预算
   ckpt_every_steps: 50000
 
 independent_eval:

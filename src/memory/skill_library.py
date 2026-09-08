@@ -266,7 +266,17 @@ class BoundedSkillLibrary:
     def retrieve_by_embedding(
         self, query: torch.Tensor, min_similarity: float = 0.6
     ) -> tuple[SkillEntry | None, float]:
-        """Retrieve the most similar GPU-tier skill by key_embedding cosine similarity.
+        """Retrieve the most relevant GPU-tier skill by key_embedding cosine.
+
+        M2-fix (2026-09-08): pure cosine argmax systematically returns the
+        NEWEST skill — adjacent episodes have near-identical obs embeddings,
+        so the just-created skill (key = last episode's first hidden state)
+        is always the nearest neighbor (measured: 78% of retrievals hit a
+        skill created within the last 50 ids; only 9% went back to older
+        skills). Retrieval now picks the highest-SCORE skill among all
+        candidates above ``min_similarity`` (value = reward + usage -
+        recency), so old-but-valuable skills are reused instead of always
+        the newest candidate.
 
         Args:
             query: 1-D embedding tensor derived from current observation.
@@ -288,11 +298,17 @@ class BoundedSkillLibrary:
             return None, 0.0
         others = torch.stack(keys, dim=0)
         cos = F.cosine_similarity(q_flat, others, dim=1)
-        best_idx = int(cos.argmax().item())
-        best_sim = float(cos[best_idx].item())
-        if best_sim >= min_similarity:
-            return self._gpu[valid[best_idx]], best_sim
-        return None, 0.0
+        # Candidates above threshold; choose by SCORE (value), sim as tiebreak.
+        cands = [
+            (float(cos[i]), self._score(self._gpu[valid[i]]), valid[i])
+            for i in range(len(cos))
+            if float(cos[i]) >= min_similarity
+        ]
+        if not cands:
+            return None, 0.0
+        cands.sort(key=lambda t: (t[1], t[0]), reverse=True)
+        best_sim, _, best_idx = cands[0]
+        return self._gpu[valid[best_idx]], best_sim
 
     def _merge(self, existing: SkillEntry, new: SkillEntry) -> None:
         """Fuse ``new`` into ``existing`` (weighted by usage counts).

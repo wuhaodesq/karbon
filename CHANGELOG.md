@@ -5,6 +5,20 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### 待办 · 训练完成后 (s20hyp 续训 800k→1.6M 运行中)
+
+- **M2 检索偏斜修复** (2026-09-08): 诊断确认 78% 检索命中最近新建技能
+  (相邻 episode obs 嵌入相似 → 纯 cosine argmax 总选最新), 仅 9% 回到旧
+  技能。修复: `retrieve_by_embedding` 改为 cosine 达标候选中按 score
+  (reward+usage-recency) 选最高 → 高价值旧技能可被复用。随续训生效。
+- **M2 状态修正** (PLAN.md): "usage_count 恒 1" 过时 — 800k ckpt GPU tier
+  72% 技能 usage_count>1 (median 2.0, max 14)。弱达成, 缺口 = 复用深度
+  + 检索偏斜 + 跨任务 (M3) 未验证。
+- **Stage 20 闭环验证**: propose→probe→verify (30k+, 99.9%) 与规则沉淀
+  (kanren 73) 强; 但规则→行为调制极弱 (symbolic matched 续训段仅 2 次,
+  logic fired 0 次)。待消融实验区分: 规则=记忆蒸馏 (M6 用) vs 应调制
+  行为 (设计原意)。训练完成后设计规则激活实验。
+
 ### Stage 20 · 假设-演绎引擎 v2 — 推理闭环回归主线 (2026-09-07) 🚀
 
 - **背景**: 20u-22 行为层验证 (环境修复 + teacher 训练) 偏离了
