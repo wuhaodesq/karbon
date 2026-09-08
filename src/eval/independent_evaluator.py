@@ -263,7 +263,7 @@ class IndependentEvaluator:
             done = False
             while not done:
                 with torch.no_grad():
-                    out = model(self._obs_to_tensor(obs, self._device))
+                    out = model(self._obs_to_tensor(obs, self._device), update_gru=False)  # 20hyp: never advance train GRU state
                 logits = out[0] if isinstance(out, (tuple, list)) else out
                 a = self._eval_action(logits, rng)
                 a = min(int(a), env.action_space_n - 1)
@@ -304,7 +304,7 @@ class IndependentEvaluator:
             actions_taken = []
             while not done:
                 with torch.no_grad():
-                    out = model(self._obs_to_tensor(obs, self._device), skill_delta=skill_delta)
+                    out = model(self._obs_to_tensor(obs, self._device), skill_delta=skill_delta, update_gru=False)  # 20hyp
                 logits = out[0] if isinstance(out, (tuple, list)) else out
                 a = self._eval_action(logits, rng)
                 a = min(int(a), env.action_space_n - 1)
@@ -340,7 +340,7 @@ class IndependentEvaluator:
             )
             obs = env.reset()
             with torch.no_grad():
-                _ = model(self._obs_to_tensor(obs, self._device))
+                _ = model(self._obs_to_tensor(obs, self._device), update_gru=False)  # 20hyp
             slots = getattr(model, "_last_slots", None)
             if slots is not None:
                 pred = number_sense(slots).argmax(dim=-1).item()
@@ -394,7 +394,11 @@ class IndependentEvaluator:
             if record_states:
                 states.append(obs.copy())  # type: ignore[union-attr]
             with torch.no_grad():
-                out = model(self._obs_to_tensor(obs, self._device))
+                # update_gru=False: evaluator must not advance the training
+                # policy's persistent GRU state (batch-size mismatch polluted
+                # _gru_state to (1,32,128), crashing the next single-env
+                # rollout forward). Stage 20hyp fix.
+                out = model(self._obs_to_tensor(obs, self._device), update_gru=False)
             logits = out[0] if isinstance(out, (tuple, list)) else out
             a = int(torch.argmax(logits, dim=-1).item())
             step_out = env.step(a)
@@ -459,7 +463,7 @@ class IndependentEvaluator:
                 obs = env.reset()
                 for _ in range(self._cfg.max_steps_per_ep):
                     with torch.no_grad():
-                        out = model(self._obs_to_tensor(obs, self._device))
+                        out = model(self._obs_to_tensor(obs, self._device), update_gru=False)  # 20hyp: never advance train GRU state
                     logits = out[0] if isinstance(out, (tuple, list)) else out
                     a = int(torch.argmax(logits, dim=-1).item())
                     step_out = env.step(a)

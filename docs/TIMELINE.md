@@ -108,12 +108,20 @@ timeline
 
 ## Current Status / 当前状态
 
-- **Completed**: Stage 0-17 (全部完成)
-- **Training**: Stage 18 (组合式成长 + ToM, 531K/1M 步, est. age 3.5y)
-- **est. age**: 3.5y (4 个里程碑通过, ToM 0.523 接近 0.6 阈值)
-- **Next**: Stage 18 完成 -> Stage 19 自我叙事 (10-12y) -> Stage 20 假设-演绎 (12-13y)
+- **Completed**: Stage 0-19 (全部完成; Stage 18 组合成长 sealed, Stage 19 自我叙事 1.3M sealed)
+- **In progress**: Stage 20 (假设-演绎引擎, 12-13y) — v2 推理闭环验证完成:
+  hypothesis propose→probe→verify→kanren 全链路 (30k+ 验证, 73 规则),
+  far/cross 0.36 跨 5 任务稳健 (means_ends/physics 满分保持)。量化退出
+  标准未达 (op 0.6 需方法改进, ToM 0.55 需专项)。上限诊断: teacher
+  3obj=0.89/8obj=0.72 → 0.6 物理可达。
+- **est. age**: 3.5-4.0y (ToM 推进中; Stage 20 目标为形式运算级推理雏形)
+- **Next**: Stage 20 推理闭环完成 -> Stage 21 递归元认知 (13-14y)
 - **Architecture**: Stage 19-20 当前架构可扩展 (雏形已验证), Stage 21-22 需要新架构
 - **North Star Gap**: 13-15 岁 (递归元认知 + 抽象概念) 需要全新认知框架, 未验证
+
+> **注意 (2026-09-07)**: 训练配置的 `stage: 20` 及 CHANGELOG 的 20a-20z/21/22
+> 实验编号均属宏观 Stage 20 (假设-演绎) 的执行子系列 — 与宏观阶段编号同名易混淆,
+> 但内容同属 Stage 20 的 object_permanence 专项。
 
 ### 实际执行顺序
 
@@ -132,11 +140,12 @@ Stage 16 (神经符号) ✅ kanren=True · 因果 36 边 · rules=28 · imagine_
     ↓
 Stage 17 (环境改造+元反思) ✅ dev_age=0.5 · est_age=3.5y · means_ends=1.0 · intuitive_physics=1.0
     ↓
-Stage 18 (组合式成长) ⏳ 训练中 (531K/1M) · 心理理论并行 (0.512 -> 0.6+)
+Stage 18 (组合式成长) ✅ sealed · ToM 并行推进
     ↓
-Stage 19 (自我叙事引擎) · 10-12y · 当前架构可扩展
+Stage 19 (自我叙事引擎) ✅ 1.3M sealed (Narrative Loop, 10-12y)
     ↓
-Stage 20 (假设-演绎引擎) · 12-13y · 当前架构可扩展
+Stage 20 (假设-演绎引擎) ⏳ 进行中 (12-13y) · 20a-22 行为层已通 (cross 0.16/far 0.44
+    @1.8M best) · 推理闭环 (HypothesisTester→kanren) 待实现
     ↓
 Stage 21 (递归元认知) · 13-14y · 需要新架构
     ↓

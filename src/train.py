@@ -2606,6 +2606,14 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             # Stage 20v: initialize GRU state on first step (episode start).
             if _use_gru and model.get_gru_state() is None:
                 model.reset_gru_state(n_envs, device)
+            # Stage 20hyp: some cognitive module forward (batch>1, no_grad,
+            # update_gru default) can pollute _gru_state to (1,32,128).
+            # Rollout only ever needs env-0's state — clamp to batch 0 so a
+            # polluted state cannot crash the buffer store (4096 vs 128).
+            if _use_gru:
+                _gs = model.get_gru_state()
+                if _gs is not None and _gs.shape[1] > n_envs:
+                    model._gru_state = _gs[:, :n_envs].contiguous()
             # Stage 20v: store GRU state BEFORE this step's forward (the
             # state at the start of the step, so PPO can recompute).
             _gru_state_to_store = None

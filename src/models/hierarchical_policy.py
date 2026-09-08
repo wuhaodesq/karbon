@@ -360,8 +360,11 @@ class HierarchicalActorCritic(nn.Module):
             elif _state.device != h.device:
                 _state = _state.to(h.device)
             elif _state.shape[1] != h.shape[0]:
-                # batch-size change (e.g. PPO mini-batch vs rollout single)
-                _state = _state[:1].expand(1, h.shape[0], -1).contiguous()
+                # batch-size change (e.g. PPO mini-batch vs rollout single).
+                # Slice the BATCH dim (dim 1), not the num_layers dim (dim 0
+                # is always 1, so [:1] was a no-op and expand crashed when
+                # shrinking 32->1). Stage 20hyp fix.
+                _state = _state[:, :1].expand(1, h.shape[0], -1).contiguous()
             h_seq = h.unsqueeze(1)  # (B, 1, d_model)
             h_gru, new_state = self.gru(h_seq, _state)
             h = h_gru.squeeze(1)  # (B, d_model)

@@ -5,6 +5,41 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20 · 假设-演绎引擎 v2 — 推理闭环回归主线 (2026-09-07) 🚀
+
+- **背景**: 20u-22 行为层验证 (环境修复 + teacher 训练) 偏离了
+  stage20_design.md 的推理闭环设计 — 那些配置把 hypothesis_tester 全关了
+  (极简化副作用), 纯 teacher/PPO 硬灌行为。行为层成果: cross 0.16/far
+  0.25-0.44 单 seed, 但多 seed 暴露布局泛化脆弱 (seed123=0.00)。
+- **v2 回归**: `stage20_hypothesis_v2.yaml` 融合完整认知栈
+  (HypothesisTester + LogicEngine + kanren + narrative + ToM) + 环境修复
+  语义 (arrival_reveal, 越界防护) + 行为基座 resume (21_1.8M best)。
+- **推理闭环全链路** (train.py L2656-2737, 早已写好但被配置关闭):
+  propose (just_occluded → propose_hypothesis) → probe (get_probe_action
+  覆盖动作走向 last_known) → verify (reveal/到达/超时 → feedback) →
+  verified 写入 logic_engine "IF occluded THEN track" 规则。
+- **修复 2 个 GRU bug** (v2 打开认知栈后暴露):
+  1. `hierarchical_policy.py:364`: `_state[:1]` 截 num_layers 维 (恒 1)
+     而非 batch 维 → expand 32→1 崩溃 → `[:, :1]`;
+  2. `independent_evaluator.py`: 5 处 model() 调用漏 `update_gru=False`
+     → no_grad 下把训练 GRU 状态污染为 batch=32 → rollout 存储崩溃。
+- **训练**: 800k 步 sealed。hypothesis stats: proposed 24k+,
+  **verified 30k+ (99.9%, 0 timeout)**; kanren rules=73 (含遮挡-追踪规则);
+  mean_ret 90+; 无崩溃。
+- **最终评测 (800k, 5 任务 3/5/8/12/16 物体)**:
+  - far object_permanence = 0.36 (0.31-0.39 全任务稳定)
+  - cross = 0.36 (0.31-0.44)
+  - **means_ends=1.00, intuitive_physics=0.8-1.0 满分保持** (完整认知栈
+    并行训练无退化)
+  - 对比: 21_1.8M 单 seed 0.45 但 seed123=0.00 (泛化脆弱); 22 布局随机
+    0.04-0.12; **v2 用 800k 步实现行为训练 1.8M 做不到的跨任务稳健**。
+- **上限诊断** (teacher=1.0 far 探针): 3obj=0.894 / 8obj=0.720 /
+  16obj=0.585 — **0.6 物理可达, 瓶颈在策略"发现+决策"而非评测口径**
+  (teacher 有完美事件信息+最优导航; 策略靠视觉+3-slot 近似)。
+- **诚实状态**: 机制目标 ✅ (推理闭环 work); 量化退出标准 ❌ (op 0.36 vs
+  0.6, ToM 0.31 vs 0.55, est.age <12y)。0.6 需针对性方法改进 (探针覆盖/
+  主动发现/视觉消失检测), 非单纯延长训练 (350k→800k far 已证不升反降)。
+
 ### Stage 21 · far 主动搜索 — object_permanence 全面达标 (2026-09-04) 🏆
 
 - **20z 判决后的 far 专项**: cross=0.16 ✅ 但 far=0.06-0.07 ❌ — 策略学会
