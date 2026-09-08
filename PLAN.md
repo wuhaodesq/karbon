@@ -40,7 +40,7 @@ These milestones are **steps toward** the 8–15 goal, not substitutes for it. �
 | M5 | **Perpetual retention** 永续保持 | ≥10 tasks retained across many days without catastrophic forgetting | 6 |
 | M6 | **Compositional growth** 组合式成长 | new skills built by composing older skills (toward juvenile-level reasoning) | post-6 |
 
-**Honest current status / 当前诚实状态：** M1 达成;**M2 尚未达成**——技能库目前只"存"不"取"(`usage_count` 恒为 1)。M2 是通往终点的第一级真实台阶,在它闭合前后续里程碑无根基。这是回到主线后的第一优先级。
+**Honest current status / 当前诚实状态：** M1 达成;**M2 弱达成 (2026-09-08 实测更新)**——技能库闭环 (检索→注入→record_use) 实际在工作: Stage 20 800k ckpt 的 GPU tier (256 技能) 中 72% usage_count>1 (median 2.0, max 14), 此前"恒为 1"的判断基于 Stage 4 时代已过时。真实缺口: (a) 复用深度浅 (median 2); (b) 检索偏斜最近创建技能 (判别力/评分不足); (c) 跨任务复用 (M3) 未验证。M2 是通往终点的第一级真实台阶, 深化其闭环仍是主线第一优先级。
 
 **Analogy / 类比：** at its current frontier, a from-scratch autonomous learner like this is closer to *an insect / simple animal that keeps learning* than to a child. That is not failure — it is the honest research frontier. The value is the **learning paradigm** (grows without collapsing), not the intelligence altitude.
 **Learning driver**: Intrinsic motivation (RND → Learning Progress)
