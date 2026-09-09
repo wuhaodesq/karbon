@@ -2643,7 +2643,13 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                     proprio=prop_t, proprio_hook=_hook,
                                     update_gru=False)  # 20v: don't advance GRU state
                 _ep_first_key = h.detach().cpu()  # saved for skill creation at episode end
-                matched, sim = skills.retrieve_by_embedding(_ep_first_key)
+                # M2-fix#2: retrieval now picks highest-SCORE among cosine
+                # candidates (fix#1), but that admitted weakly-related old
+                # skills (sim down to 0.60) whose injection perturbed the
+                # policy (far 0.36@800k -> 0.20@1.6M, timed exactly with
+                # fix#1). Raise the bar: only inject if the skill is BOTH
+                # relevant (sim>=0.85) and valuable — otherwise act freely.
+                matched, sim = skills.retrieve_by_embedding(_ep_first_key, min_similarity=0.85)
                 if matched is not None:
                     active_skill = matched
                     logger.info("[skills] retrieved skill #%d (sim=%.3f)", matched.id, sim)
