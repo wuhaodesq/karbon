@@ -5,6 +5,27 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20-ToM · 心智理论真实训练 — 孤儿模块接入学习回路 (2026-09-10) 🚀
+
+- **背景**: milestone 的 ToM 评测与 op 同源 (遮挡搜索行为), 且 TheoryOfMind
+  模块从未被优化 (perspective/belief/action 头无梯度; 历史 0.51 = 结构
+  先验非技能)。env 的 caregiver 静止 → false-belief 场景缺失。
+- **实现**:
+  1. env (`three_d_world.py`): caregiver gaze 行为 — 每 20 步关注最近可见
+     物体; 物体被挡/移走时 last_seen **冻结** (过期信念 = false belief);
+     50% crossing 故意移动 caregiver 注视目标制造 false-belief 场景;
+     新 `read_caregiver_state()` 真值接口 (信念位置 vs 实际位置/gaze 方向/
+     可见集/stale 标志)。
+  2. `theory_of_mind.py`: `belief_position_head` (信念位置解码) + forward
+     输出带梯度的 `belief_raw`/`belief_pos`。
+  3. `train.py`: 每 4 帧 ToM 训练步 (Adam lr 3e-4, gaze 动作 CE + 信念位置
+     MSE, policy 侧 detach), `[tom] stats` 诊断 (act_acc/belief_err/
+     stale_frac)。
+- **首测**: act_acc 0.70 (随机 0.125), belief_err 0.015 — 模块真的在学。
+- **已知缺口**: stale_frac 仅 0.009 — 镜像后 LOS 常未被墙挡, false-belief
+  实际发生率低; 待观察或加"瞬移不可见期"强化。
+- **训练**: 1.2M→2M (ToM 训练段, resume 1.2M best ckpt)。
+
 ### M2 fix#2 验证成功 — "延长退化"根因确认并修复 (2026-09-09) ✅
 
 - **验证**: 800k best + 400k 训练 (M2 fix#2 阈值 0.85) → 1.2M eval:
