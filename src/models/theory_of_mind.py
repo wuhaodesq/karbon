@@ -95,6 +95,15 @@ class TheoryOfMind(nn.Module):
             nn.Linear(perspective_hidden, 1),
         )
 
+        # Stage 20-ToM training: decode the BELIEVED object position from the
+        # belief state. Supervised by the caregiver's last-seen position —
+        # which stays stale when the object moves/gets occluded (false belief).
+        self.belief_position_head = nn.Sequential(
+            nn.Linear(d_model, perspective_hidden),
+            nn.GELU(),
+            nn.Linear(perspective_hidden, 2),
+        )
+
         # Running belief states for each other agent
         self._belief_states: dict[str, torch.Tensor] = {}
 
@@ -224,9 +233,13 @@ class TheoryOfMind(nn.Module):
             other_slots = self.predict_perspective(self_slots, pos, object_positions)
             result[f"{name}_perspective_slots"] = other_slots
 
-            # Belief update
+            # Belief update (keep the grad-carrying tensor for training; the
+            # persistent _belief_states copy stays detached for next-step use).
             aggregated = other_slots.mean(dim=(0, 1)) if other_slots.dim() == 3 else other_slots.mean(dim=0)
-            self.update_belief(name, aggregated.detach())
+            belief_raw = self.update_belief(name, aggregated.detach().reshape(1, -1))
+            result[f"{name}_belief_raw"] = belief_raw
+            # Stage 20-ToM: believed object position (false-belief signal).
+            result[f"{name}_belief_pos"] = self.belief_position_head(belief_raw)
 
             # Predicted action
             result[f"{name}_predicted_action"] = self.predict_other_action(name)

@@ -550,6 +550,16 @@ class ThreeDWorld:
         self._trace_geom_ids: list[int] = []  # parallel to objects
         self._rng = np.random.RandomState(seed)
 
+        # Stage 20-ToM: caregiver gaze behavior + false-belief tracking.
+        # The caregiver "watches" the nearest visible object; when the object
+        # is occluded/moved away, its believed position (last_seen) stays
+        # stale = a false belief the learner can observe and reason about.
+        self._cg_gaze_id: int = -1
+        self._cg_last_seen: tuple[float, float] | None = None
+        self._cg_gaze_every: int = 20  # re-pick gaze target cadence
+        self._cg_last_gaze_dir: int = 0  # last discrete gaze direction (0-7)
+        self._cg_belief_stale: bool = False
+
         # Object library
         self._object_lib = _generate_object_library(min(num_objects, 500), seed or 42)
 
@@ -925,8 +935,18 @@ class ThreeDWorld:
         if self._object_crossing_every > 0 and self._num_occluders > 0 \
                 and self._step_count % self._object_crossing_every == 0:
             try:
-                _ci = int(self._object_crossing_fixed_object) if self._object_crossing_fixed_object >= 0 \
-                    else int(self._rng.randint(0, self._num_objects))
+                # Stage 20-ToM: 50% of crossings deliberately move the object
+                # the caregiver is currently watching — the caregiver's belief
+                # (last_seen) then goes stale = a FALSE BELIEF the learner can
+                # observe. Without this, stale_frac stayed ~0 and the ToM
+                # module only ever learned ordinary gaze prediction.
+                _ci = None
+                if (self._cg_gaze_id >= 0 and self._cg_gaze_id not in self._crossing_hold
+                        and self._rng.rand() < 0.5):
+                    _ci = int(self._cg_gaze_id)
+                if _ci is None:
+                    _ci = int(self._object_crossing_fixed_object) if self._object_crossing_fixed_object >= 0 \
+                        else int(self._rng.randint(0, self._num_objects))
                 if _ci in self._crossing_hold:
                     if self._object_crossing_fixed_object >= 0:
                         _ci = (self._object_crossing_fixed_object + 1) % self._num_objects
@@ -1175,6 +1195,11 @@ class ThreeDWorld:
         self._occ_signal_active = []
         self._occ_signal_just_occluded = []
         self._occ_signal_just_revealed = []
+        # Stage 20-ToM: reset caregiver gaze/belief state on scene rebuild.
+        self._cg_gaze_id = -1
+        self._cg_last_seen = None
+        self._cg_last_gaze_dir = 0
+        self._cg_belief_stale = False
         for gid in self._trace_geom_ids:
             self._model.geom_pos[gid] = [0.0, 0.0, 100.0]
         self._prev_obj_dist = [0.0] * self._num_objects
@@ -1252,6 +1277,9 @@ class ThreeDWorld:
                         })
                 except Exception:
                     continue  # legit: per-object loop, obj_ may be gone
+
+        # --- Stage 20-ToM: caregiver gaze / false-belief tracking ---
+        self._update_caregiver_gaze()
 
         # --- occlusion_events (3D: far objects with multi-step agent trajectory) ---
         learner_id = self._model.body("learner").id
@@ -1486,6 +1514,101 @@ class ThreeDWorld:
                 if self._occluder_orient_bonus > 0.0:
                     self._reveal_bonus_pending = max(
                         self._reveal_bonus_pending, self._occluder_orient_bonus)
+
+    def _update_caregiver_gaze(self) -> None:
+        """Stage 20-ToM: caregiver gaze + stale-belief tracking.
+
+        - Every ``_cg_gaze_every`` steps, the caregiver re-picks the nearest
+          object it can SEE (dist<2.5, LOS clear) as its gaze target.
+        - While the target stays visible, ``_cg_last_seen`` tracks its live
+          position (the caregiver's belief stays current).
+        - When the target becomes occluded (wall or teleport), ``_cg_last_seen``
+          FREEZES at the old position — the caregiver now holds a FALSE belief
+          the learner can observe (gaze fixed on empty/old spot).
+        - The discrete gaze direction (8-dir 0-7) is the caregiver's
+          "action" label for Theory-of-Mind action prediction.
+        """
+        try:
+            cg = self._model.body("caregiver")
+            cx = float(self._data.xpos[cg.id, 0])
+            cy = float(self._data.xpos[cg.id, 1])
+
+            def _obj_pos(i: int) -> tuple[float, float]:
+                b = self._model.body(f"obj_{i}")
+                return (float(self._data.xpos[b.id, 0]), float(self._data.xpos[b.id, 1]))
+
+            # Re-pick gaze target periodically (or if none yet).
+            if self._cg_gaze_id < 0 or self._step_count % self._cg_gaze_every == 0:
+                best, bd = -1, 1e9
+                for i in range(self._num_objects):
+                    ox, oy = _obj_pos(i)
+                    d = math.hypot(cx - ox, cy - oy)
+                    if d < 2.5 and d < bd and not self._line_of_sight_blocked(cx, cy, ox, oy):
+                        best, bd = i, d
+                if best >= 0:
+                    self._cg_gaze_id = best
+
+            # Track last-seen when the target is visible; freeze otherwise.
+            self._cg_belief_stale = False
+            if self._cg_gaze_id >= 0:
+                ox, oy = _obj_pos(self._cg_gaze_id)
+                visible = (math.hypot(cx - ox, cy - oy) < 2.5
+                           and not self._line_of_sight_blocked(cx, cy, ox, oy))
+                if visible:
+                    self._cg_last_seen = (ox, oy)
+                else:
+                    self._cg_belief_stale = True  # false belief active
+
+            # Discrete gaze direction (8-dir) toward believed position.
+            tx, ty = (self._cg_last_seen if self._cg_last_seen is not None
+                      else (_obj_pos(self._cg_gaze_id) if self._cg_gaze_id >= 0 else (cx, cy)))
+            dx, dy = tx - cx, ty - cy
+            if abs(dx) > 1e-6 or abs(dy) > 1e-6:
+                ang = math.atan2(dy, dx)
+                self._cg_last_gaze_dir = int(((ang + math.pi) / (2 * math.pi)) * 8) % 8
+        except Exception:
+            pass  # legit: caregiver/objects may be absent in odd scenes
+
+    def read_caregiver_state(self) -> dict:
+        """Stage 20-ToM: ground-truth caregiver state for ToM supervision.
+
+        Returns a dict with:
+          - pos: caregiver xy
+          - gaze_id: currently watched object id (-1 none)
+          - last_seen: believed object position (stale when occluded)
+          - actual_target: the watched object's REAL position (differs from
+            last_seen exactly when the belief is stale = false belief)
+          - stale: bool, true when the caregiver holds a false belief
+          - gaze_dir: discrete 8-dir gaze action (0-7)
+          - visible_ids: object ids the caregiver can currently see
+        """
+        out: dict = {
+            "pos": (-1.2, 0.8), "gaze_id": self._cg_gaze_id,
+            "last_seen": self._cg_last_seen, "actual_target": None,
+            "stale": bool(self._cg_belief_stale),
+            "gaze_dir": int(self._cg_last_gaze_dir), "visible_ids": [],
+        }
+        try:
+            cg = self._model.body("caregiver")
+            cx = float(self._data.xpos[cg.id, 0])
+            cy = float(self._data.xpos[cg.id, 1])
+            out["pos"] = (cx, cy)
+            vis = []
+            for i in range(self._num_objects):
+                b = self._model.body(f"obj_{i}")
+                ox = float(self._data.xpos[b.id, 0])
+                oy = float(self._data.xpos[b.id, 1])
+                if math.hypot(cx - ox, cy - oy) < 2.5 and \
+                        not self._line_of_sight_blocked(cx, cy, ox, oy):
+                    vis.append(i)
+            out["visible_ids"] = vis
+            if self._cg_gaze_id >= 0:
+                b = self._model.body(f"obj_{self._cg_gaze_id}")
+                out["actual_target"] = (
+                    float(self._data.xpos[b.id, 0]), float(self._data.xpos[b.id, 1]))
+        except Exception:
+            pass  # legit: objects/caregiver absent
+        return out
 
     def _line_of_sight_blocked(
         self, ax: float, ay: float, ox: float, oy: float,

@@ -1396,6 +1396,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     divergent_gen: Any = None
     # Stage 20 hypothesis-deduction counters (diagnostics)
     _hyp_stats = {"proposed": 0, "probed": 0, "verified": 0, "timeout": 0}
+    # Stage 20-ToM: training stats for the (previously untrained) ToM module.
+    _tom_stats = {"n": 0, "loss": 0.0, "act_ok": 0, "belief_err": 0.0, "stale": 0}
     transformational: Any = None
     thought_action: Any = None
     narrative_loop: NarrativeLoopController | None = None
@@ -1671,13 +1673,21 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # --- Theory of Mind ---
     tom_cfg = config.get("theory_of_mind")
     theory_of_mind: TheoryOfMind | None = None
+    tom_optimizer = None
     if tom_cfg and bool(tom_cfg.get("enabled", False)):
         theory_of_mind = TheoryOfMind(
             d_model=int(model_cfg.get("hidden_size", 128)),
             num_actions=num_actions,
             num_slots=int(model_cfg.get("slot_num_slots", 7)),
         ).to(device)
-        logger.info("TheoryOfMind enabled")
+        # Stage 20-ToM: give the module a real learning signal (it was an
+        # untrained orphan — perspective/action/belief heads never received
+        # gradients; the old 0.51 milestone was structural prior, not skill).
+        tom_optimizer = torch.optim.Adam(
+            theory_of_mind.parameters(),
+            lr=float(tom_cfg.get("tom_lr", 3.0e-4)),
+        )
+        logger.info("TheoryOfMind enabled (trainable, lr=%.1e)", 3.0e-4)
 
     # --- Homeostatic Drives ---
     drives_cfg = config.get("homeostatic_drives")
@@ -2749,6 +2759,60 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                     pass
                     except Exception as _he:
                         logger.debug("[hypothesis] loop failed: %s", _he)
+
+            # --- Stage 20-ToM: train the Theory-of-Mind module on caregiver
+            # gaze/belief ground truth (module detaches the policy side, only
+            # its own heads learn). Every 4th step to bound the overhead.
+            if (theory_of_mind is not None and tom_optimizer is not None
+                    and n_envs == 1 and state.step % 4 == 0
+                    and model._last_slots is not None):
+                try:
+                    _cg = env.read_caregiver_state()
+                    if _cg["gaze_id"] >= 0:
+                        _tom_slots = model._last_slots.detach()
+                        _cg_pos = torch.tensor(
+                            [[_cg["pos"][0], _cg["pos"][1], 0.0]],
+                            dtype=torch.float32, device=device)
+                        _objs = []
+                        for _oi in range(env._num_objects):
+                            _ob = env._model.body(f"obj_{_oi}")
+                            _objs.append([
+                                float(env._data.xpos[_ob.id, 0]),
+                                float(env._data.xpos[_ob.id, 1]),
+                                float(env._data.xpos[_ob.id, 2]),
+                            ])
+                        _opos = torch.tensor(_objs, dtype=torch.float32, device=device)
+                        _tout = theory_of_mind(
+                            _tom_slots, {"caregiver": _cg_pos}, _opos)
+                        _tom_loss = torch.zeros((), device=device)
+                        # Action head: predict the caregiver's gaze direction.
+                        _pa = _tout["caregiver_predicted_action"]
+                        _ta = torch.tensor([int(_cg["gaze_dir"])], device=device)
+                        _tom_loss = _tom_loss + F.cross_entropy(_pa, _ta)
+                        # Belief head: predict the caregiver's BELIEVED object
+                        # position (stale last_seen when the belief is false).
+                        _bpos = _tout["caregiver_belief_pos"]
+                        if _cg["last_seen"] is not None:
+                            _tpos = torch.tensor(
+                                [[_cg["last_seen"][0] / 2.0, _cg["last_seen"][1] / 2.0]],
+                                dtype=torch.float32, device=device)
+                            _bl = F.mse_loss(_bpos, _tpos)
+                            _tom_loss = _tom_loss + _bl
+                            _tom_stats["belief_err"] += float(_bl.item())
+                        tom_optimizer.zero_grad(set_to_none=True)
+                        _tom_loss.backward()
+                        torch.nn.utils.clip_grad_norm_(
+                            theory_of_mind.parameters(), 0.5)
+                        tom_optimizer.step()
+                        _tom_stats["n"] += 1
+                        _tom_stats["loss"] += float(_tom_loss.item())
+                        with torch.no_grad():
+                            if int(_pa.argmax(dim=-1).item()) == int(_cg["gaze_dir"]):
+                                _tom_stats["act_ok"] += 1
+                            if _cg["stale"]:
+                                _tom_stats["stale"] += 1
+                except Exception as _te:
+                    logger.debug("[tom] train step failed: %s", _te)
             t_model_end = time.perf_counter()
 
             # --- Stage 19: narrative step hook (FiLM thought, no grad) ---
@@ -4493,6 +4557,17 @@ and state.step % 50000 < rollout_capacity):
         # --- Stage 20 hypothesis-deduction diagnostics ---
         if state.step % 5000 < rollout_capacity and _hyp_stats["proposed"] > 0:
             logger.info("[hypothesis] stats: %s", {k: v for k, v in _hyp_stats.items()})
+
+        # --- Stage 20-ToM diagnostics (trainable ToM module) ---
+        if state.step % 5000 < rollout_capacity and _tom_stats["n"] > 0:
+            _tn = max(1, _tom_stats["n"])
+            logger.info(
+                "[tom] stats: n=%d loss=%.4f act_acc=%.3f belief_err=%.4f stale_frac=%.3f",
+                _tom_stats["n"], _tom_stats["loss"] / _tn,
+                _tom_stats["act_ok"] / _tn, _tom_stats["belief_err"] / _tn,
+                _tom_stats["stale"] / _tn)
+            _tom_stats.update({"n": 0, "loss": 0.0, "act_ok": 0,
+                               "belief_err": 0.0, "stale": 0})
 
         # --- Disk guard: keep <70% so ckpt save never hits ENOSPC (Stage 19:
         # replay cold shards filled the 30G system disk twice, crashing
