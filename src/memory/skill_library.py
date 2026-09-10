@@ -412,8 +412,17 @@ class BoundedSkillLibrary:
                 path = self._shard_path(idx)
                 entries = []
         entries.append(s)
-        with path.open("wb") as f:
-            pickle.dump(entries, f, protocol=pickle.HIGHEST_PROTOCOL)
+        try:
+            with path.open("wb") as f:
+                pickle.dump(entries, f, protocol=pickle.HIGHEST_PROTOCOL)
+        except OSError as exc:
+            # Disk full / quota exceeded must NOT kill long training runs
+            # (crashed stage20-ToM @1.7M with an uncaught ENOSPC here).
+            # The skill is simply evicted unarchived — loud, safe fallback.
+            logger.warning(
+                "[skills] archive write failed (%s) — skill #%d evicted "
+                "unarchived; training continues", exc, s.id)
+            return
         if idx not in self._known_shards:
             self._known_shards.append(idx)
             self._known_shards.sort()
