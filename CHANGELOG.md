@@ -5,6 +5,24 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20-ToM 首轮成果 — false-belief 学习信号方向正确 (2026-09-11) 🔬
+
+- **2M 训练完成**: ToM 模块首次真实训练 800k 步 (1.2M→2M)。
+  [tom] stats: act_acc 0.74-0.80 (随机 0.125), belief_err 0.05-0.07。
+- **op 保持不退化**: far 0.37 (0.33-0.41 全任务), intuitive_physics=1.00
+  满分 — ToM 训练段与主体能力兼容。
+- **false-belief 专项诊断** (分离测试: 预测更接近"过期信念" or "实际位置"):
+  - stale=False: err_believed==err_actual==0.949m (物体未动, 两真值相同)
+  - **stale=True: err_believed=0.918m < err_actual=0.992m → BELIEVED
+    (false-belief 方向正确)**
+- **判定**: 弱阳性 — 模型确实倾向在信念过期时预测旧位置 (false-belief
+  理解存在), 但信号弱 (差 0.074m) 且绝对精度低 (0.95m; 信念位置解码头
+  从抽象 GRU 状态重建精确位置的通道尚浅)。机制级成功 (学习回路闭合),
+  能力初级。
+- **已知缺陷**: stale_frac 训练中仅 0.5-18% (镜像后 LOS 常未被墙挡) —
+  false-belief 素材密度受限。
+- **继续**: ToM 深化训练 2M→3M 运行中 (给 false-belief 信号更多梯度)。
+
 ### Stage 20-ToM · 心智理论真实训练 — 孤儿模块接入学习回路 (2026-09-10) 🚀
 
 - **背景**: milestone 的 ToM 评测与 op 同源 (遮挡搜索行为), 且 TheoryOfMind
