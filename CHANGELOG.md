@@ -5,6 +5,20 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20-ToM 深化完成 (3M sealed) — false-belief 优势扩大 4.4x (2026-09-12) ✅
+
+- **3M 训练完成**: kanren rules 128 (73→106→128), eval_trail 0.91
+  (此前 0.74), hypothesis verified 79k。
+- **ToM false-belief 诊断 (2M→3M)**:
+  - stale 场景: err_vs_believed 0.918→1.457, err_vs_actual 0.992→1.786
+  - **优势差 0.074m→0.329m (4.4x)** — "预测过期信念"优势从 8% 扩大到
+    18%, false-belief 理解随训练深化。样本 n 237→635 (场景覆盖更广)。
+- **op 保持**: far 0.33 (0.28-0.36, 轻微波动), **means_ends=1.00 全任务,
+  physics=1.00 全任务** (ToM 深化与主体能力兼容)。
+- **Stage 20-ToM 总结**: 孤儿模块→真实学习回路→初步 false-belief 能力。
+  机制级成功; 绝对精度仍低 (1.5m, 信念位置解码头从抽象状态重建位置的
+  通道尚浅), 后续可加深深层结构或提高 stale 素材密度。
+
 ### Stage 20-ToM 首轮成果 — false-belief 学习信号方向正确 (2026-09-11) 🔬
 
 - **2M 训练完成**: ToM 模块首次真实训练 800k 步 (1.2M→2M)。
