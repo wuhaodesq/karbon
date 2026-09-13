@@ -249,6 +249,79 @@ class MultimodalFusion(nn.Module):
 
 
 # =====================================================================
+# Tiny dependency-free text encoder (Stage 19 narrative-FiLM enabler)
+# =====================================================================
+
+
+class TinyTextEncoder(nn.Module):
+    """Trainable, dependency-free text encoder for short self-narratives.
+
+    CLIP downloads are not available on offline training hosts, so the
+    narrative→FiLM path needs a local encoder. Design:
+
+    - Deterministic hashed word-bag: each token maps to a bucket via
+      ``zlib.crc32`` (stable across processes/resumes, unlike Python's
+      salted ``hash()``).
+    - Bucket embeddings (trainable) → mean pool → linear projection to
+      ``d_model``.
+    - FiLM heads learn from PPO gradients through ``ThoughtActionLoop``;
+      the encoder embedding table can also be updated by its own grad.
+
+    Bounded: fixed bucket count, no growing structures (Axiom 1).
+    """
+
+    def __init__(
+        self,
+        d_model: int = 128,
+        num_buckets: int = 4096,
+        freeze: bool = False,
+    ) -> None:
+        super().__init__()
+        self._d_model = int(d_model)
+        self._num_buckets = int(num_buckets)
+        self.embedding = nn.Embedding(self._num_buckets, d_model)
+        nn.init.normal_(self.embedding.weight, std=0.02)
+        self.proj = nn.Linear(d_model, d_model)
+        if freeze:
+            for p in self.parameters():
+                p.requires_grad_(False)
+
+    @property
+    def d_model(self) -> int:
+        return self._d_model
+
+    @property
+    def embed_dim(self) -> int:
+        return self._d_model
+
+    @property
+    def capacity(self) -> int:
+        return self._num_buckets
+
+    def _buckets(self, text: str) -> torch.LongTensor:
+        import zlib
+        toks = [t for t in str(text).lower().split() if t]
+        if not toks:
+            return torch.zeros(1, dtype=torch.long,
+                               device=self.embedding.weight.device)
+        ids = [zlib.crc32(t.encode("utf-8")) % self._num_buckets for t in toks]
+        return torch.tensor(ids, dtype=torch.long,
+                            device=self.embedding.weight.device)
+
+    def encode_text(self, text: "str | list[str]") -> torch.Tensor:
+        """Return (1, d_model) embedding for a string (list: mean of items)."""
+        if isinstance(text, (list, tuple)):
+            embs = [self.encode_text(str(t)) for t in text]
+            return torch.stack(embs, dim=0).mean(dim=0, keepdim=False)
+        ids = self._buckets(text)
+        pooled = self.embedding(ids).mean(dim=0)  # (d_model,)
+        return self.proj(pooled).unsqueeze(0)     # (1, d_model)
+
+    def forward(self, text: "str | list[str]") -> torch.Tensor:
+        return self.encode_text(text)
+
+
+# =====================================================================
 # Instruction-conditioned actor-critic
 # =====================================================================
 

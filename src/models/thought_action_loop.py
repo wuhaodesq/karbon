@@ -128,10 +128,12 @@ class ThoughtActionLoop(nn.Module):
         if not self._has_active_thought:
             return vision_feats  # no thought → no modulation
 
-        # Apply FiLM: scale + shift based on the cached thought embedding
+        # Apply FiLM: scale + shift based on the cached thought embedding.
+        # Single projection pass (was called twice with identical input).
         lang = self._cached_lang_embedding.unsqueeze(0).expand(vision_feats.shape[0], -1)
-        gamma = 1.0 + 0.1 * torch.tanh(self.film_projection(lang))  # scale around 1
-        beta = 0.1 * torch.tanh(self.film_projection(lang))         # small shift
+        proj = torch.tanh(self.film_projection(lang))
+        gamma = 1.0 + 0.1 * proj   # scale around 1
+        beta = 0.1 * proj          # small shift
         return gamma * vision_feats + beta
 
     def maybe_think(
@@ -184,10 +186,12 @@ class ThoughtActionLoop(nn.Module):
             try:
                 with torch.no_grad():
                     lang_emb = self.language_encoder.encode_text(thought_text)
-                    # Cache the embedding
                     if lang_emb.dim() == 2:
                         lang_emb = lang_emb.mean(dim=0)
-                    self._cached_lang_embedding.copy_(lang_emb.to(self._cached_lang_embedding.device))
+                    # Plain assignment (no copy_ — AGENTS §12: inplace ops on
+                    # buffers can invalidate stale autograd graphs).
+                    self._cached_lang_embedding = lang_emb.detach().to(
+                        self._cached_lang_embedding.device)
                     self._has_active_thought = True
             except Exception as exc:
                 logger.debug("Thought encoding failed: %s", exc)

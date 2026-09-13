@@ -307,6 +307,10 @@ class HierarchicalActorCritic(nn.Module):
         self._last_sub_goal: torch.Tensor | None = None
         self._last_slots: torch.Tensor | None = None
         self._last_belief: torch.Tensor | None = None  # 20t: belief from h_raw
+        # Stage 19-FiLM: optional narration→hidden modulation hook (set by
+        # train.py from ThoughtActionLoop.modulate). In the graph on purpose
+        # so the FiLM projection learns from the PPO objective.
+        self._film_fn: "Any | None" = None
 
     def forward(
         self, obs_u8: torch.Tensor, return_hidden: bool = False,
@@ -374,6 +378,15 @@ class HierarchicalActorCritic(nn.Module):
                 self._gru_state_override = None  # consumed
             elif update_gru and not torch.is_grad_enabled():
                 self._gru_state = new_state.detach()
+
+        # Stage 19-FiLM: narration-conditioned modulation of the hidden state
+        # (identity when no thought is cached). Kept differentiable so the
+        # FiLM projection receives PPO gradients.
+        if self._film_fn is not None:
+            try:
+                h = self._film_fn(h)
+            except Exception:
+                pass  # legit: never break the forward pass on narration failure
 
         # Stage 20t: compute belief from h_raw (BEFORE proprio injection) so
         # the belief head cannot cheat by reading the env slot cue. The
@@ -456,6 +469,14 @@ class HierarchicalActorCritic(nn.Module):
     def set_symbol_bias_fn(self, fn: "Any | None") -> None:
         """Attach the Stage 19 symbol-bias callback (from train.py)."""
         self._symbol_bias_fn = fn
+
+    def set_film_fn(self, fn: "Any | None") -> None:
+        """Attach the Stage 19-FiLM narration hook h -> h' (from train.py).
+
+        Called on the hidden state every forward; identity when no thought
+        is cached. Differentiable (FiLM projection learns from PPO).
+        """
+        self._film_fn = fn
 
     @property
     def current_sub_goal(self) -> torch.Tensor:

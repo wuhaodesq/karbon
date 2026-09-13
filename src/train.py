@@ -1474,14 +1474,24 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             health.register("transformational", transformational)
             logger.info("TransformationalCreativityEngine enabled")
 
-        # Thought-action loop
+        # Thought-action loop (Stage 19-FiLM: narration -> hidden modulation)
         if cognitive_cfg and bool(cognitive_cfg.get("thought_action_enabled", False)):
             from src.models.thought_action_loop import ThoughtActionLoop
+            from src.models.language_encoder import TinyTextEncoder
+            _tiny_lang = TinyTextEncoder(
+                d_model=int(model_cfg.get("hidden_size", 384)),
+            ).to(device)
             thought_action = ThoughtActionLoop(
                 d_model=int(model_cfg.get("hidden_size", 384)),
+                language_encoder=_tiny_lang,
                 think_every_steps=int(cognitive_cfg.get("think_every_steps", 50)),
             ).to(device)
-            logger.info("ThoughtActionLoop enabled (every %d steps)", thought_action._think_every)
+            # Wire narration → hidden modulation (FiLM) into the policy.
+            if hasattr(model, "set_film_fn"):
+                model.set_film_fn(thought_action.modulate)
+            logger.info(
+                "ThoughtActionLoop enabled (every %d steps, FiLM wired, "
+                "tiny-text-encoder)", thought_action._think_every)
 
         # Model grower
         if advanced_cfg and bool(advanced_cfg.get("model_grower_enabled", False)):
@@ -1863,6 +1873,10 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             identity_narrative=identity_narrative,
             symbol_backend=symbol_backend,
             thought_loop=thought_action if thought_action is not None else None,
+            # Stage 19-FiLM: share the tiny text encoder so the narrative
+            # text can be encoded into the thought-loop's FiLM cache.
+            language_encoder=(getattr(thought_action, "language_encoder", None)
+                              if thought_action is not None else None),
             narrative_every_episodes=int(narrative_cfg.get("narrative_every_episodes", 10)),
             symbol_bias_weight=float(narrative_cfg.get("symbol_bias_weight", 0.1)),
         )
@@ -2818,9 +2832,13 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             # --- Stage 19: narrative step hook (FiLM thought, no grad) ---
             if narrative_loop is not None and n_envs == 1:
                 try:
-                    narrative_loop.step_hook(
+                    _thought = narrative_loop.step_hook(
                         hidden.squeeze(0).detach() if hidden.dim() == 2 else hidden.detach(),
                     )
+                    # Stage 19-FiLM: surface generated thoughts so the
+                    # narration→decision path is observable in logs.
+                    if _thought:
+                        logger.info("[thought] %s", str(_thought)[:120])
                 except Exception as _nsh:
                     logger.warning("[narrative] step_hook failed: %s", _nsh)
 
