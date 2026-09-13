@@ -942,7 +942,7 @@ class ThreeDWorld:
                 # module only ever learned ordinary gaze prediction.
                 _ci = None
                 if (self._cg_gaze_id >= 0 and self._cg_gaze_id not in self._crossing_hold
-                        and self._rng.rand() < 0.5):
+                        and self._rng.rand() < 0.7):
                     _ci = int(self._cg_gaze_id)
                 if _ci is None:
                     _ci = int(self._object_crossing_fixed_object) if self._object_crossing_fixed_object >= 0 \

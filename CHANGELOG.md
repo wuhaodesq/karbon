@@ -5,6 +5,24 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 20-ToM 深化 II 完成 (4M sealed) — false-belief 优势 3x 再扩大 (2026-09-13) 🏆
+
+- **4M 训练**: eval_trail 0.91-1.15 (新高, 3M 为 0.91), kanren 128 规则,
+  act_acc 期末 0.78-0.83。
+- **FB 优势差曲线 (2M→3M→4M)**:
+  | ckpt | err_believed | err_actual | 优势差 |
+  |------|-------------|-----------|--------|
+  | 2M | 0.918 | 0.992 | 0.074 |
+  | 3M | 1.457 | 1.786 | 0.329 |
+  | **4M** | **2.005** | **2.990** | **0.985 (3x)** |
+  — "预测过期信念 vs 实际位置"的区分度每 1M 步扩大 ~3 倍, false-belief
+  理解持续深化。绝对精度仍受信念解码头通道限制 (2m), 但相对区分度是
+  false-belief 的核心指标。
+- **op 保持**: far 0.37 (0.33-0.41), **means_ends=1.00 全任务,
+  physics=1.00 全任务** — 4M 为综合最优 ckpt。
+- **stale 素材**: crossing 命中注视目标 50%→70% (深化 II), 3d-sparse
+  窗口 stale_frac 达 0.178。
+
 ### Stage 20-ToM 深化完成 (3M sealed) — false-belief 优势扩大 4.4x (2026-09-12) ✅
 
 - **3M 训练完成**: kanren rules 128 (73→106→128), eval_trail 0.91
