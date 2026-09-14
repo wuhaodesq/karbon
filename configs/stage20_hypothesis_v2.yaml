@@ -229,6 +229,15 @@ external_memory:
     embed_dim: 128
     lr: 1.0e-4
 
+  # Disk-budget fix: the cold episodic archive was unbounded-in-practice at
+  # ~26GB (64 shards x 4096 transitions x ~100KB full-frame transitions) and
+  # repeatedly filled the 125GB data disk. Cap it at 8 shards (~3.3GB).
+  # Orphan archival data: not serialized in checkpoints, safe to evict.
+  episodic_replay:
+    cold_max_shards: 8
+    cold_shard_size: 4096
+    store_threshold: 1.5
+
 # --- Causal Discovery (carry-forward) ---
 causal_discovery:
   enabled: true
