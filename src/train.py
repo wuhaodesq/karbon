@@ -2162,6 +2162,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             ("self_model_state",         self_model,                   None),
             ("logic_engine_state",       logic_engine,                 None),
             ("narrative_loop_state",     narrative_loop,               None),
+            ("thought_action_state",     thought_action,               None),
         ]
         for key, module, _opt in _restore_map:
             if module is not None and key in _extra:
@@ -4639,6 +4640,11 @@ and state.step % 50000 < rollout_capacity):
                 extra["self_model_state"] = self_model.state_dict()
             if narrative_loop is not None:
                 extra["narrative_loop_state"] = narrative_loop.state_dict()
+            if thought_action is not None:
+                # Stage 19-FiLM: persist the ThoughtActionLoop + its TinyTextEncoder
+                # (FiLM projection learns from PPO; losing it on resume would
+                # silently reset the narration→decision modulation to identity).
+                extra["thought_action_state"] = thought_action.state_dict()
             if logic_engine is not None:
                 extra["logic_engine_state"] = logic_engine.state_dict()
             if reflection_loop is not None:
