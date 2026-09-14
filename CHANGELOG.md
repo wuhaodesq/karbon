@@ -5,6 +5,24 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Stage 19-FiLM 消融 — 路径通但效力≈0 (诚实负结果, 2026-09-14) 🔬
+
+- **接线完成**: ThoughtActionLoop + TinyTextEncoder + FiLM hook 全链路修复
+  (4 断点: 模块创建/离线文本编码器/调用点/权重持久化), 5.2M ckpt 含
+  thought_action_state (film_projection std=0.0508 已训练)。
+- **消融 (同 seed, 开/关叙事 FiLM 调制)**:
+  - seed=7: TVD=0.001, arrive 0.098 vs 0.082
+  - seed=42: TVD=0.000, arrive 0.096 vs 0.065
+  — **动作分布差异 ≈0, 到达率无提升 (ON 略低, 噪声级)**。
+- **判定**: **"接线 ≠ 影响"**。原因: (1) FiLM 强度设计 ±10% 太弱,
+  策略不敏感; (2) thought 单一 ("Continuing." 常数 embedding → 近似常数
+  偏移); (3) 训练让策略 coexist 了微扰。
+- **下一步方向 (若续)**: 更强调制 (或直接调制动作层) / thought 多样化
+  (assessment 阈值更敏感) / 叙事→技能-子目标级耦合。
+- **运维教训**: 训练运行中禁止 rm -rf replay/episodic 目录 (内存索引
+  404 → 崩溃, 本次损失 ~6k 步); episodic cold 上限已修 (8 shards/3.3G,
+  原默认 64 shards/~26G 是三次磁盘满的结构性根因)。
+
 ### Stage 20-ToM 深化 II 完成 (4M sealed) — false-belief 优势 3x 再扩大 (2026-09-13) 🏆
 
 - **4M 训练**: eval_trail 0.91-1.15 (新高, 3M 为 0.91), kanren 128 规则,
