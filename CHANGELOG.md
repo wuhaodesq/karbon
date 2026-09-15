@@ -5,6 +5,25 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### 叙事→决策耦合三次尝试总结 (2026-09-15) 🔬 — 架构级规律确认
+
+- **v3 动作层加性 bias 亦失败**: action_bias_head (zero-init) 训练后
+  输出仍全零 (min=max=std=0.0000), 消融 TVD=0.000 (3 seeds)。
+  根因: PPO 对不同样本希望不同动作偏置 → 共享 bias 的**平均梯度
+  相互抵消** → 停在零-init 鞍点。
+- **三次失败共同规律**:
+  | 尝试 | 机制 | 失败原因 |
+  |------|------|---------|
+  | FiLM v1 | hidden ±10% | 被下游 proprio 注入淹没 |
+  | FiLM v2 | 强度 5x + 叙事锁 | 投影输出 std 0.05 → 实际 ±2.5%, 仍淹没 |
+  | Action bias v3 | logits 加性 | 样本间梯度抵消 → 恒零死锁 |
+  — **外挂式叙事模块难以获得决策影响力 (架构级, 非调参)**。
+- **正确方向 (关键洞察)**: 叙事影响"想做什么" (任务/目标/课程选择)
+  而非"怎么做" (动作微调)。路径经环境/数据分布, 绕开弱扰动淹没;
+  更符合发育逻辑 (身份决定探索什么)。实现: narrative → curriculum
+  采样偏好调制。
+- **5.8M sealed**: eval_trail 0.97 全窗一致 (历史最佳一致性), kanren 128。
+
 ### FiLM v2 消融 — 强度提升无效, 死亡螺旋确认 (第二次否定, 2026-09-15) 🔬
 
 - **v2 增强**: film_strength 0.1→0.5 (5x) + narrative-priority lock
