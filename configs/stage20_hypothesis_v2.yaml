@@ -116,6 +116,7 @@ cognitive:
   # every forward; the FiLM projection learns from the PPO objective.
   thought_action_enabled: true
   think_every_steps: 200
+  film_strength: 0.5    # v2: modulation +-50% (was +-10%, ablation TVD=0)
   self_model_enabled: true
   self_model_d_model: 128              # = hidden_size (Bug E 修复)
   self_model_hidden: 64
@@ -337,7 +338,7 @@ train:
   value_coef: 0.5
   gamma: 0.99
   gae_lambda: 0.95
-  total_steps: 5200000              # v2: resume 21_1.8M 行为基座, 800K 推理闭环预算
+  total_steps: 5500000              # v2: resume 21_1.8M 行为基座, 800K 推理闭环预算
   ckpt_every_steps: 50000
 
 independent_eval:

@@ -199,6 +199,13 @@ class NarrativeLoopController(nn.Module):
                     tl = self.thought_loop
                     tl._cached_lang_embedding = lang_emb.to(tl._cached_lang_embedding.device)
                     tl._has_active_thought = True
+                    # v2: narration takes priority over per-thought text —
+                    # the identity narrative is the personality-level
+                    # modulator (refreshes every N episodes); fast thoughts
+                    # must not dilute it (previous ablation: thoughts
+                    # overwrote it every 200 steps with a constant string).
+                    if hasattr(tl, "set_narrative_lock"):
+                        tl.set_narrative_lock(True)
             except Exception as _e:
                 logger.debug("[narrative] FiLM encoding failed: %s", _e)
 

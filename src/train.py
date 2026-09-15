@@ -1485,6 +1485,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 d_model=int(model_cfg.get("hidden_size", 384)),
                 language_encoder=_tiny_lang,
                 think_every_steps=int(cognitive_cfg.get("think_every_steps", 50)),
+                film_strength=float(cognitive_cfg.get("film_strength", 0.5)),
             ).to(device)
             # Wire narration → hidden modulation (FiLM) into the policy.
             if hasattr(model, "set_film_fn"):

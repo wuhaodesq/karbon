@@ -5,6 +5,22 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### FiLM v2 消融 — 强度提升无效, 死亡螺旋确认 (第二次否定, 2026-09-15) 🔬
+
+- **v2 增强**: film_strength 0.1→0.5 (5x) + narrative-priority lock
+  (慢叙事驱动 FiLM, 快 thought 不再覆盖) + 5.2M→5.5M 重训。
+- **消融 (3 seeds, 叙事驱动, strength 0.5)**:
+  - seed=7/42/123: **TVD 全 0.000** (动作 argmax 逐位相同)
+  - arrive: OFF 0.078-0.125 vs ON 0.043-0.104 (无正向增益)
+- **根因 (结构性)**: film_projection 输出 std 仅 0.05 → tanh≈±0.05 →
+  实际调制 ±2.5% (强度乘小值仍小); h 后路 proprio 注入量级更高 →
+  淹没。**死亡螺旋**: 弱影响→弱梯度→输出不成长→持续弱影响。
+- **判定**: FiLM-单点弱调制无法调参获得决策影响力 (v1/v2 一致)。
+  正确方向 = 结构性耦合: (a) **动作层**: 叙事→logits 加性偏置 (如
+  symbol_bias 但由叙事文本驱动, 梯度直接); (b) 子目标层: 叙事条件化
+  manager 输出。
+- **运维**: 5.5M sealed (eval_trail 0.91-0.97, kanren 128)。
+
 ### Stage 19-FiLM 消融 — 路径通但效力≈0 (诚实负结果, 2026-09-14) 🔬
 
 - **接线完成**: ThoughtActionLoop + TinyTextEncoder + FiLM hook 全链路修复

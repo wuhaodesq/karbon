@@ -78,11 +78,22 @@ class ThoughtActionLoop(nn.Module):
         inner_dialogue: InnerDialogue | None = None,
         language_encoder: Any | None = None,
         think_every_steps: int = 50,
+        film_strength: float = 0.5,
     ) -> None:
         super().__init__()
         self._d_model = d_model
         self._think_every = max(1, int(think_every_steps))
         self._step_count = 0
+
+        # Stage 19-FiLM v2: modulation amplitude. The first ablation measured
+        # TVD=0.000 at the old hard-coded +-0.1 — the policy was insensitive
+        # to a 10% hidden perturbation. Default now +-0.5 (config-tunable).
+        self._film_strength = float(film_strength)
+        # Narrative-priority lock: set when the (slow) identity narrative
+        # refreshes the FiLM cache; the (fast) per-thought encoder then
+        # does NOT overwrite it — narration is meant to be the personality-
+        # level modulator, thoughts only fill in when no narrative exists.
+        self._narrative_lock: bool = False
 
         # Components (all optional — graceful degradation)
         self.self_model = self_model
@@ -129,11 +140,11 @@ class ThoughtActionLoop(nn.Module):
             return vision_feats  # no thought → no modulation
 
         # Apply FiLM: scale + shift based on the cached thought embedding.
-        # Single projection pass (was called twice with identical input).
+        # Single projection pass; amplitude from _film_strength (v2: 0.5).
         lang = self._cached_lang_embedding.unsqueeze(0).expand(vision_feats.shape[0], -1)
         proj = torch.tanh(self.film_projection(lang))
-        gamma = 1.0 + 0.1 * proj   # scale around 1
-        beta = 0.1 * proj          # small shift
+        gamma = 1.0 + self._film_strength * proj   # scale around 1
+        beta = self._film_strength * proj          # shift
         return gamma * vision_feats + beta
 
     def maybe_think(
@@ -182,7 +193,12 @@ class ThoughtActionLoop(nn.Module):
         thought_text = self._generate_thought(assessment, reflection)
 
         # --- 4. Encode thought → language embedding ---
-        if self.language_encoder is not None and thought_text:
+        # v2: narration has priority — if the slow identity narrative has
+        # refreshed the FiLM cache, per-thought text does NOT overwrite it
+        # (thoughts are fast/noisy; the narrative is the personality-level
+        # modulator). Thoughts only drive the FiLM when no narrative exists.
+        if (self.language_encoder is not None and thought_text
+                and not self._narrative_lock):
             try:
                 with torch.no_grad():
                     lang_emb = self.language_encoder.encode_text(thought_text)
@@ -228,7 +244,21 @@ class ThoughtActionLoop(nn.Module):
         return self._cached_lang_embedding.clone()
 
     def reset(self) -> None:
-        """Clear the cached thought (e.g., at episode boundaries)."""
-        self._cached_lang_embedding.zero_()
+        """Clear the cached thought (e.g., at episode boundaries).
+
+        Note: the narrative lock is NOT cleared here — the identity
+        narrative persists across episodes (it refreshes every N episodes).
+        """
+        self._cached_lang_embedding = torch.zeros(
+            self._d_model, device=self._cached_lang_embedding.device,
+            dtype=self._cached_lang_embedding.dtype)
         self._has_active_thought = False
         self._step_count = 0
+
+    def set_narrative_lock(self, locked: bool) -> None:
+        """Narration-priority lock (set by NarrativeLoopController).
+
+        When True, per-thought encodings will not overwrite the FiLM cache
+        (the slow identity narrative owns the modulation).
+        """
+        self._narrative_lock = bool(locked)
