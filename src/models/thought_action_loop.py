@@ -79,11 +79,30 @@ class ThoughtActionLoop(nn.Module):
         language_encoder: Any | None = None,
         think_every_steps: int = 50,
         film_strength: float = 0.5,
+        num_actions: int = 0,
     ) -> None:
         super().__init__()
         self._d_model = d_model
         self._think_every = max(1, int(think_every_steps))
         self._step_count = 0
+        self._num_actions = int(num_actions)
+
+        # Stage 19-FiLM v3: ACTION-LEVEL narration coupling. The hidden-FiLM
+        # route measured TVD=0 (twice) — a weak multiplicative perturbation
+        # is drowned downstream. An ADDITIVE logit bias driven by the same
+        # narrative embedding has a direct, strong gradient path to the
+        # decision (same mechanism as the proven kanren symbol bias).
+        if self._num_actions > 0:
+            self.action_bias_head = nn.Sequential(
+                nn.Linear(d_model, d_model),
+                nn.GELU(),
+                nn.Linear(d_model, self._num_actions),
+            )
+            # start near zero bias (identity policy) but learnable
+            nn.init.zeros_(self.action_bias_head[-1].weight)
+            nn.init.zeros_(self.action_bias_head[-1].bias)
+        else:
+            self.action_bias_head = None
 
         # Stage 19-FiLM v2: modulation amplitude. The first ablation measured
         # TVD=0.000 at the old hard-coded +-0.1 — the policy was insensitive
@@ -262,3 +281,16 @@ class ThoughtActionLoop(nn.Module):
         (the slow identity narrative owns the modulation).
         """
         self._narrative_lock = bool(locked)
+
+    def narrative_logit_bias(self) -> "torch.Tensor | None":
+        """Stage 19-FiLM v3: action-level narrative bias.
+
+        Returns a (num_actions,) additive logit bias derived from the cached
+        narrative embedding, or None when inactive. Additive on logits — the
+        gradient path to the decision is direct (unlike hidden-FiLM, which
+        measured TVD=0). Mirrors the proven kanren symbol-bias mechanism.
+        """
+        if self.action_bias_head is None or not self._has_active_thought:
+            return None
+        lang = self._cached_lang_embedding.unsqueeze(0)  # (1, d_model)
+        return self.action_bias_head(lang).squeeze(0)    # (num_actions,)

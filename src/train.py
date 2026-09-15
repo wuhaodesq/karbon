@@ -1486,10 +1486,15 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 language_encoder=_tiny_lang,
                 think_every_steps=int(cognitive_cfg.get("think_every_steps", 50)),
                 film_strength=float(cognitive_cfg.get("film_strength", 0.5)),
+                num_actions=num_actions,
             ).to(device)
             # Wire narration → hidden modulation (FiLM) into the policy.
             if hasattr(model, "set_film_fn"):
                 model.set_film_fn(thought_action.modulate)
+            # Stage 19-FiLM v3: narration → additive logit bias (direct
+            # decision influence; the hidden-FiLM route measured TVD=0).
+            if hasattr(model, "set_narrative_logit_fn"):
+                model.set_narrative_logit_fn(thought_action.narrative_logit_bias)
             logger.info(
                 "ThoughtActionLoop enabled (every %d steps, FiLM wired, "
                 "tiny-text-encoder)", thought_action._think_every)

@@ -311,6 +311,9 @@ class HierarchicalActorCritic(nn.Module):
         # train.py from ThoughtActionLoop.modulate). In the graph on purpose
         # so the FiLM projection learns from the PPO objective.
         self._film_fn: "Any | None" = None
+        # Stage 19-FiLM v3: optional narration→logits additive bias hook.
+        # Direct decision influence (hidden-FiLM measured TVD=0 twice).
+        self._narrative_logit_fn: "Any | None" = None
 
     def forward(
         self, obs_u8: torch.Tensor, return_hidden: bool = False,
@@ -443,6 +446,16 @@ class HierarchicalActorCritic(nn.Module):
                 # Never let a broken bias hook break the forward pass
                 pass
 
+        # Stage 19-FiLM v3: narration → additive logit bias (narrative-driven,
+        # differentiable so the action_bias_head learns from PPO).
+        if self._narrative_logit_fn is not None:
+            try:
+                _nb = self._narrative_logit_fn()
+                if _nb is not None:
+                    action_logits = action_logits + _nb.to(action_logits.device)
+            except Exception:
+                pass  # legit: narration bias must never break the forward
+
         if return_hidden:
             return action_logits, worker_value, h
         return action_logits, worker_value
@@ -477,6 +490,14 @@ class HierarchicalActorCritic(nn.Module):
         is cached. Differentiable (FiLM projection learns from PPO).
         """
         self._film_fn = fn
+
+    def set_narrative_logit_fn(self, fn: "Any | None") -> None:
+        """Attach the Stage 19-FiLM v3 narrative→logits bias hook.
+
+        Returns a (num_actions,) additive bias or None. Differentiable so
+        the narrative action_bias_head learns directly from PPO.
+        """
+        self._narrative_logit_fn = fn
 
     @property
     def current_sub_goal(self) -> torch.Tensor:
