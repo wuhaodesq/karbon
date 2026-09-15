@@ -109,11 +109,19 @@ timeline
 ## Current Status / 当前状态
 
 - **Completed**: Stage 0-19 (全部完成; Stage 18 组合成长 sealed, Stage 19 自我叙事 1.3M sealed)
-- **In progress**: Stage 20 (假设-演绎引擎, 12-13y) — v2 推理闭环验证完成:
-  hypothesis propose→probe→verify→kanren 全链路 (30k+ 验证, 73 规则),
-  far/cross 0.36 跨 5 任务稳健 (means_ends/physics 满分保持)。量化退出
-  标准未达 (op 0.6 需方法改进, ToM 0.55 需专项)。上限诊断: teacher
-  3obj=0.89/8obj=0.72 → 0.6 物理可达。
+- **In progress**: Stage 20 (假设-演绎引擎, 12-13y) — 推理闭环机制完成并验证:
+  propose→probe→verify→kanren 全链路 (累计 100k+ 验证, kanren 128 规则);
+  **M2 记忆注入污染修复后主体持续健康长训至 6M+** (far/cross 0.36-0.37
+  跨 5 任务稳定, means_ends/physics 满分; 6M 段 mean_ret=125.97)。
+  **ToM 真实训练回路**: false-belief 优势 0.074→0.329→0.985m
+  (2M→3M→4M), act_acc 0.70-0.78。
+  **叙事→决策耦合突破口**: 三次动作层尝试 (FiLM v1/v2、action-bias v3)
+  均 TVD=0 (架构级规律: 外挂弱扰动被淹没/梯度抵消); 改走数据分布路径
+  — narrative 身份特质 → 课程任务选择 (v4), 首次获得因果影响力;
+  v4 课程指针 bug 修复 (ac189cc) 后验证: 偏好与切换时间戳完全同步,
+  切换恢复规律 (每 20,480 步; 旧代码 200k 步仅 1 次)。
+  量化退出标准未达 (op 0.37 vs 0.6; ToM 长训中 vs 0.55)。上限诊断:
+  teacher 3obj=0.89/8obj=0.72 → 0.6 物理可达, 差距在"发现/决策"能力。
 - **est. age**: 3.5-4.0y (ToM 推进中; Stage 20 目标为形式运算级推理雏形)
 - **Next**: Stage 20 推理闭环完成 -> Stage 21 递归元认知 (13-14y)
 - **Architecture**: Stage 19-20 当前架构可扩展 (雏形已验证), Stage 21-22 需要新架构
