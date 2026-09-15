@@ -4516,37 +4516,44 @@ and state.step % 50000 < rollout_capacity):
             and _curr_switch > 0
             and state.step - last_curr_switch_step >= _curr_switch
         ):
-            # Peek next task WITHOUT advancing _next_seq_index.
-            # Only call sample_task() (which advances index) if we actually switch.
-            next_task = curriculum.peek_next()
-            if next_task is not None and (curr_active_task is None or next_task.id != curr_active_task.id):
-                # Stage 19 v4: narration-driven task selection — the identity
-                # narrative's traits bias WHICH task to train next. It chooses
-                # "what to do" (data distribution) rather than perturbing
-                # actions (FiLM v1/v2/v3 all measured TVD≈0).
-                new_task = None
-                if narrative_loop is not None and narrative_loop.has_active_narrative:
-                    try:
-                        _items = [
-                            (t.id, float(t.spec.get("difficulty", 0.5)))
-                            for t in curriculum._tasks.values()
-                            if curr_active_task is None or t.id != curr_active_task.id
-                        ]
-                        _pref = narrative_loop.task_preference(_items)
-                        if _pref is not None and _items:
-                            _idx = int(np.random.choice(len(_items), p=_pref))
-                            new_task = curriculum._tasks[_items[_idx][0]]
-                            logger.info(
-                                "[narrative] task preference -> %s (id=%d, p=%.2f)",
-                                new_task.tag, new_task.id, float(_pref[_idx]))
-                    except Exception as _npe:
-                        logger.debug("[narrative] task preference failed: %s", _npe)
-                if new_task is None:
-                    # Actually advance and switch (fallback: sequential order)
-                    new_task = curriculum.sample_task()
-                elif curriculum.config.mode == "sequential":
-                    # keep the sequential pointer coherent for the fallback
-                    curriculum.sample_task()
+            # Stage 19 v4: choose the TARGET task. Narration preference first
+            # (it chooses WHAT to do — the data distribution); sequential
+            # order is the fallback. Guarded so the pick always differs from
+            # the current task: a same-task "switch" only resets the timer,
+            # and with a preference loop that never restores the sequential
+            # pointer, the cadence could stall entirely (observed stuck at
+            # 3d-many in the v4 debut — the pointer-advance coupling was the
+            # bug: it made peek_next coincide with the current task).
+            new_task = None
+            if narrative_loop is not None and narrative_loop.has_active_narrative:
+                try:
+                    _items = [
+                        (t.id, float(t.spec.get("difficulty", 0.5)))
+                        for t in curriculum._tasks.values()
+                        if curr_active_task is None or t.id != curr_active_task.id
+                    ]
+                    _pref = narrative_loop.task_preference(_items)
+                    if _pref is not None and _items:
+                        _idx = int(np.random.choice(len(_items), p=_pref))
+                        new_task = curriculum._tasks[_items[_idx][0]]
+                        logger.info(
+                            "[narrative] task preference -> %s (id=%d, p=%.2f)",
+                            new_task.tag, new_task.id, float(_pref[_idx]))
+                except Exception as _npe:
+                    logger.debug("[narrative] task preference failed: %s", _npe)
+            if new_task is None:
+                # fallback: sequential order; skip the current task (at most
+                # one full cycle over the task pool).
+                for _try in range(len(curriculum._tasks) + 1):
+                    _cand = curriculum.sample_task()
+                    new_task = _cand
+                    if curr_active_task is None or _cand.id != curr_active_task.id:
+                        break
+            if new_task is None or (curr_active_task is not None
+                                    and new_task.id == curr_active_task.id):
+                # nothing to switch to (single-task pool) — reset the timer
+                last_curr_switch_step = state.step
+            else:
                 last_curr_switch_step = state.step
                 logger.info(
                     "Curriculum switch @ step=%d: task=%s (id=%d) → %s (id=%d)",
@@ -4568,9 +4575,6 @@ and state.step % 50000 < rollout_capacity):
                 # Stage 20w#2: restore train mode after curriculum switch —
                 # EWC consolidation may have set model to eval().
                 model.train()
-            else:
-                # Same task — just reset the timer so we don't re-check every step.
-                last_curr_switch_step = state.step
 
         # --- Independent evaluator: periodic 3D scoring (observation only) ---
         # Scores curiosity / drive / task independently.
