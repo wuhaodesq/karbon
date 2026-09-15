@@ -31,12 +31,13 @@ def _rollout_like_states() -> list[dict]:
         "count_trials": [],
         "object_contact_order": [1],
     })
-    # Step 3: occlusion begins, agent near last-known
+    # Step 3: occlusion begins, agent approaches within the arrival radius of
+    # the last-known position (criterion since a01f50f: best_d < min(0.7*start_d, 0.8))
     states.append({
         "force_motion_pairs": [],
         "occlusion_events": [{
             "last_known": (5.0, 5.0),
-            "agent_traj_during_occ": [(0.0, 0.0), (3.0, 3.0)],
+            "agent_traj_during_occ": [(0.0, 0.0), (4.5, 4.5)],
         }],
         "count_trials": [],
     })

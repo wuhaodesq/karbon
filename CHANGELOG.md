@@ -5,6 +5,26 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### v4 课程指针修复验证 + 6M 里程碑 + 自动续训链 (2026-09-16) ✅
+
+- **v4 指针修复上线并验证** (ac189cc, v5 段 6M→6.5M): 课程切换恢复规律
+  (每 20,480 步), 叙事偏好与切换时间戳完全同步 (偏好→任务 立即切换,
+  01:17:50 / 01:45:03 / 02:13:02 三处逐条对齐); 对比修复前 v4 段:
+  200k 步仅 1 次切换 (停滞在 3d-many)。修复语义: 偏好选择不再推进
+  顺序指针; 顺序回退跳过当前任务 (最多一圈); 同任务只重置计时器。
+- **6M 里程碑**: v4 段完成 (mean_ret=125.97, episodes=326);
+  ckpt_stage20_006000000.pt 已备份至 autodl-tmp/karbon_ckpts/。
+- **自动续训链 (ops)**: watch_chain.sh — 训练退出后自动: 清理旧 ckpt
+  (保留 5 个) → 备份段起 ckpt 至数据盘 → total_steps +500k → 续训。
+  崩溃守卫 (连续 3 次启动无步进即停), `touch /root/STOP_CHAIN` 平滑停止。
+  夜间接续 6.5M→7M→7.5M→8M→8.5M, 云端零空转 (§14 磁盘/异常防护)。
+- config total_steps 6M→6.5M (v5 段); 6M ckpt 起叙事偏好日志时间戳与
+  Curriculum switch 完全一致 — 修复后偏好直接决定切换时刻。
+- fix: 对齐 `tests/test_run_developmental_eval.py` 客体永存 fixture 与
+  到达式判据 (a01f50f 起 `best_d < min(0.7*start_d, 0.8)`): 原轨迹
+  (0,0)→(3,3) 仅走到路程 42%, 不满足 0.8m 到达半径 → 失败; 轨迹改为
+  (0,0)→(4.5,4.5) (距目标 0.71m)。判据语义不变 (到达=追踪成功)。
+
 ### 叙事→决策耦合三次尝试总结 (2026-09-15) 🔬 — 架构级规律确认
 
 - **v3 动作层加性 bias 亦失败**: action_bias_head (zero-init) 训练后
