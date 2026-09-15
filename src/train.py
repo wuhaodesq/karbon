@@ -4520,8 +4520,33 @@ and state.step % 50000 < rollout_capacity):
             # Only call sample_task() (which advances index) if we actually switch.
             next_task = curriculum.peek_next()
             if next_task is not None and (curr_active_task is None or next_task.id != curr_active_task.id):
-                # Actually advance and switch
-                new_task = curriculum.sample_task()
+                # Stage 19 v4: narration-driven task selection — the identity
+                # narrative's traits bias WHICH task to train next. It chooses
+                # "what to do" (data distribution) rather than perturbing
+                # actions (FiLM v1/v2/v3 all measured TVD≈0).
+                new_task = None
+                if narrative_loop is not None and narrative_loop.has_active_narrative:
+                    try:
+                        _items = [
+                            (t.id, float(t.spec.get("difficulty", 0.5)))
+                            for t in curriculum._tasks.values()
+                            if curr_active_task is None or t.id != curr_active_task.id
+                        ]
+                        _pref = narrative_loop.task_preference(_items)
+                        if _pref is not None and _items:
+                            _idx = int(np.random.choice(len(_items), p=_pref))
+                            new_task = curriculum._tasks[_items[_idx][0]]
+                            logger.info(
+                                "[narrative] task preference -> %s (id=%d, p=%.2f)",
+                                new_task.tag, new_task.id, float(_pref[_idx]))
+                    except Exception as _npe:
+                        logger.debug("[narrative] task preference failed: %s", _npe)
+                if new_task is None:
+                    # Actually advance and switch (fallback: sequential order)
+                    new_task = curriculum.sample_task()
+                elif curriculum.config.mode == "sequential":
+                    # keep the sequential pointer coherent for the fallback
+                    curriculum.sample_task()
                 last_curr_switch_step = state.step
                 logger.info(
                     "Curriculum switch @ step=%d: task=%s (id=%d) → %s (id=%d)",

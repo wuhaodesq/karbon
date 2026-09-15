@@ -244,6 +244,40 @@ class NarrativeLoopController(nn.Module):
         """Return the (num_actions,) logit bias or None (no bias)."""
         return self._symbol_bias
 
+    def task_preference(self, items: "list[tuple[int, float]]") -> "list[float] | None":
+        """Stage 19 v4: narration chooses WHAT to do (task selection).
+
+        Maps the identity traits onto task-difficulty preferences — the
+        coupling route that bypasses the drowned weak-perturbation problem
+        (hidden-FiLM v1/v2 and action-bias v3 all measured TVD≈0):
+        narration influences the DATA distribution (which task to practice),
+        not action deltas.
+
+        Args:
+            items: list of (task_id, difficulty in [0,1]).
+
+        Returns:
+            Normalized preference weights aligned with ``items``, or None
+            when no narrative exists yet.
+        """
+        t = self._last_traits
+        if not t or not items:
+            return None
+        op = float(t.get("openness", 0.5))
+        co = float(t.get("conscientiousness", 0.5))
+        ne = float(t.get("neuroticism", 0.5))
+        w: list[float] = []
+        for _tid, diff in items:
+            d = max(0.0, min(1.0, float(diff)))
+            # openness → approach novel/hard; conscientiousness → steady
+            # mid-difficulty practice; neuroticism → prefer easy/safe.
+            score = (0.5 + op * d) \
+                + (0.5 + co * (1.0 - abs(d - 0.5) * 2.0)) \
+                + (0.5 + ne * (1.0 - d))
+            w.append(max(1e-3, score))
+        s = sum(w)
+        return [x / s for x in w]
+
     # ---------------------------------------------------------------- state
 
     def reset_episode_state(self) -> None:
