@@ -5,6 +5,32 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### 符号规则回路审计 + seg2 修复验证 (2026-09-17 凌晨) 🔬
+
+- **seg2 两修复实测生效**: reflection `end_episode failed` 830→**0** (seg2
+  已产出 54 条真实教训: "Episode result: succeeded, return=66.9 /
+  Confident and successful — task becoming familiar."); eval 值域开始波动
+  (cur 0.20/0.22/0.24/0.30, tsk 0.91/1.08/0.97/0.93, 原冻结 0.18/0.97)。
+- **sym=0.00 深挖 → "规则使用端"三层断裂** (ckpt `symbolic_state` 剖析:
+  64 规则 total_usage=997, **total_success=0**):
+  1. **apply 是诊断性的**: train.py:4392-4407 每迭代对 `batch.obs[0:1]`
+     计算带偏 logits 后**丢弃** (仅打日志); 训练动作选择从不经过符号层
+     → **规则不影响决策**。
+  2. **feedback() 从未调用**: `NeuralSymbolicLayer.feedback(reward)`
+     (neural_symbolic.py:564, 更新 success_count/confidence) 全仓无调用点;
+     apply 路径直接 `usage_count += 1` (L416) 绕过 `Rule.update()` →
+     success 恒 0, confidence 永不从结果学习。
+  3. **唯一实际影响是环境奖励**: 匹配写 `env._logic_bonus_action`, env 对
+     `action % 8 == rule_action` 的下个 rollout 加 +0.3 奖励
+     (three_d_world.py:2069) — 遗留 Minigrid 8-动作耦合, 偏置"奖励"而非
+     "决策"; 且 `[logic]` engine 0 次触发、kanren acc≈0.499。
+  → 与 FiLM v1/v2/v3 同构: **又一"外挂模块未闭环"** (第四例)。
+- **TODO (需用户决策, 勿夜间擅自改训练行为)**: 规则→行为两条候选路线:
+  (a) 数据分布路线: 规则→任务/目标选择 (同叙事 v4 的有效先例);
+  (b) 动作路线: 在真实动作采样路径应用 bias + 步后 `feedback(reward)`
+  闭环。两者都改变训练行为, 上之前需设消融门 (规则 bias 是否改变动作
+  分布, 防 FiLM 式淹没/抵消)。
+
 ### v4 课程指针修复验证 + 6M 里程碑 + 自动续训链 (2026-09-16) ✅
 
 - **v4 指针修复上线并验证** (ac189cc, v5 段 6M→6.5M): 课程切换恢复规律
