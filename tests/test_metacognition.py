@@ -122,6 +122,21 @@ def test_reflection_loop_recent_summary():
     assert 0.4 < summary["mean_return"] < 0.7
 
 
+def test_reflection_loop_aligns_trajectory_to_model_dtype():
+    """Regression: record_step stores CPU tensors; end_episode must align the
+    stacked trajectory to the SelfModel's device/dtype before forward.
+    A float64 trajectory against a float32 model raises the same class of
+    mismatch as the CUDA device error seen in training logs (830x/segment:
+    "input tensor at cpu and parameter tensor at cuda:0")."""
+    sm = SelfModel(d_model=D_MODEL)
+    loop = ReflectionLoop(sm, max_reflections=8, reflection_every_episodes=1)
+    h = torch.randn(1, D_MODEL, dtype=torch.float64)
+    loop.record_step(h, action=0, reward=0.5, done=True)
+    r = loop.end_episode(episode_return=0.5)
+    assert r is not None
+    assert 0.0 <= r.mean_confidence <= 1.0
+
+
 def test_reflection_loop_state_dict_roundtrip():
     sm = SelfModel(d_model=D_MODEL)
     loop = ReflectionLoop(sm, max_reflections=16, reflection_every_episodes=1)

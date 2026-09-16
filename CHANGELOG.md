@@ -24,6 +24,17 @@ All notable changes to this project are documented here.
   到达式判据 (a01f50f 起 `best_d < min(0.7*start_d, 0.8)`): 原轨迹
   (0,0)→(3,3) 仅走到路程 42%, 不满足 0.8m 到达半径 → 失败; 轨迹改为
   (0,0)→(4.5,4.5) (距目标 0.71m)。判据语义不变 (到达=追踪成功)。
+- fix: `ReflectionLoop.end_episode` 设备/类型对齐 — `record_step` 以
+  CPU 存储轨迹, SelfModel 在 CUDA → 每个 episode 反思失败
+  ("input tensor at cpu and parameter at cuda:0"; v5 段 830 次, v4 332 次,
+  **反思学习信号长期未生效**)。修复: forward 前
+  `hiddens.to(param.device, param.dtype)`; 新增回归测试 (float64 轨迹,
+  修复前报 "mat1 and mat2 must have the same dtype" 同类错误) 且服务器
+  CUDA 实测通过。无需重启即部署, 7M 段 (seg2) 起生效。
+- 观察: v5 段 24 次 switch 与偏好日志 **24/24 时间戳同步** (修复行为稳定);
+  kanren symbol 后端 acc≈0.499 (query 2.4M) — 规则使用端待专项;
+  identity openness 降至 0.00 (abstract_reasoning 事件类型统计, 合法输出,
+  偏好因此转向稳健任务 — 特质漂移→课程偏好的机制表现)。
 
 ### 叙事→决策耦合三次尝试总结 (2026-09-15) 🔬 — 架构级规律确认
 

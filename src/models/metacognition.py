@@ -292,6 +292,13 @@ class ReflectionLoop:
 
         # Stack hidden states and get self-assessments (temporal if supported)
         hiddens = torch.stack([t["hidden"].reshape(-1) for t in self._trajectory])  # (T, d_model)
+        # record_step stores CPU tensors (memory-friendly); the SelfModel may
+        # live on CUDA and/or another dtype -> align before forward.
+        # 轨迹以 CPU 存储; SelfModel 可能在 GPU — 前向之前对齐设备/类型,
+        # 否则每 episode 都会报 "input tensor at cpu and parameter at cuda".
+        _p = next(self.self_model.parameters(), None)
+        if _p is not None:
+            hiddens = hiddens.to(device=_p.device, dtype=_p.dtype)
         with torch.no_grad():
             if self._temporal:
                 assessments = self.self_model.forward(hiddens.unsqueeze(0))  # (1, T, d_model)
