@@ -34,6 +34,17 @@ All notable changes to this project are documented here.
   且服务器 CUDA 实测通过。已部署, 7M 段 (seg2) 起生效。
   注: 反思产出 (lessons/thought 文本) 经 inner_dialogue 与 FiLM 思路径
   影响, 此前全部缺失。
+- fix(eval): `IndependentEvaluator` 两处度量缺陷 (用户质疑 "eval 4 小时
+  纹丝不动" 后排查, 380 条 stage20 历史全量核实) — (a) `_measure_symbolic`
+  读错 key (`total_matches/total_queries`) 而 `RuleMemory.summary()` 实际
+  返回 `total_success/total_usage` → **sym 自始至终 0.000, 从未真正测量**;
+  (b) 3D 探针 (cur/drv/tsk) 固定布局 + 贪婪 argmax + eval_seed 未接入 3D
+  路径 → 确定性回放, 数值只能整段跳变 (历史确实变过: cur 0.18↔1.0、
+  tsk 0.74↔1.15; 但粒度粗、数百万步无信息)。修复: key 映射 (保留
+  legacy fallback) + 每次 eval 用演进 eval_seed 重建探针布局 (random
+  基线同 seed 协变), 新增 `tests/test_independent_evaluator.py` (4 用例,
+  含回归断言), 服务器实测通过 (0.7/0.0/0.5 + 布局差异)。效果: seg2 起
+  [eval] 数值将真实波动, sym 首次反映规则成功率。
 - 观察: v5 段 24 次 switch 与偏好日志 **24/24 时间戳同步** (修复行为稳定);
   kanren symbol 后端 acc≈0.499 (query 2.4M) — 规则使用端待专项;
   identity openness 降至 0.00 (abstract_reasoning 事件类型统计, 合法输出,

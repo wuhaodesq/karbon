@@ -160,10 +160,14 @@ class IndependentEvaluator:
         # Derive a per-eval seed from the step so successive evals use
         # different environment layouts and exploration sequences.
         self._cfg.eval_seed = int((self._cfg.eval_seed * 31 + step) % (2**31 - 1))
-        # 1. 3D Physics
-        cur = self._measure_curiosity(model)
-        drv = self._measure_drive(model, drives_module)
-        tsk, vs_random = self._measure_task(model)
+        seed = self._cfg.eval_seed
+        # 1. 3D Physics — probe layouts are re-sampled every eval (seed) so a
+        # flat score means stable behaviour, not replayed identical episodes.
+        # 3D 探针每次 eval 用新布局 (seed): 分数持平 = 行为稳定, 而非回放同一
+        # 组固定 episode (旧实现确定性回放, 数百万步无信息)。
+        cur = self._measure_curiosity(model, seed)
+        drv = self._measure_drive(model, drives_module, seed)
+        tsk, vs_random = self._measure_task(model, seed)
 
         # 2. MiniGrid — navigation
         nav5 = self._measure_minigrid_sr(model, "MiniGrid-Empty-5x5-v0")
@@ -176,7 +180,7 @@ class IndependentEvaluator:
         gen6 = self._measure_minigrid_sr(model, "MiniGrid-Empty-6x6-v0")
 
         # 5. Number sense
-        num = self._measure_number_sense(model, number_sense)
+        num = self._measure_number_sense(model, number_sense, seed)
 
         # 6. Symbolic reasoning
         sym = self._measure_symbolic(symbolic_layer)
@@ -325,7 +329,7 @@ class IndependentEvaluator:
     # --- Number-sense scorer ---
 
     def _measure_number_sense(
-        self, model: nn.Module, number_sense: object | None,
+        self, model: nn.Module, number_sense: object | None, seed: int = 42,
     ) -> float:
         """Accuracy of cardinality prediction on PhysicsSandbox with known counts."""
         if number_sense is None:
@@ -335,7 +339,7 @@ class IndependentEvaluator:
         total = 0
         for n_obj in counts:
             env = PhysicsSandbox(
-                num_objects=n_obj, seed=42, max_episode_steps=1,
+                num_objects=n_obj, seed=seed + n_obj, max_episode_steps=1,
                 render_size=64, gravity=-9.8, action_force=50.0,
             )
             obs = env.reset()
@@ -354,23 +358,32 @@ class IndependentEvaluator:
 
     @staticmethod
     def _measure_symbolic(symbolic_layer: object | None) -> float:
-        """Rule match rate from symbolic layer."""
+        """Rule success rate from symbolic layer.
+
+        RuleMemory.summary() reports ``total_success`` / ``total_usage``
+        (successful rule uses / total uses).  The earlier implementation
+        read ``total_matches`` / ``total_queries`` — keys the summary never
+        had — so this metric silently stayed 0.000 for the whole run
+        (380/380 stage-20 evals).  Falls back to the old key names for
+        compatibility with other rule stores.
+        """
         if symbolic_layer is None:
             return 0.0
         try:
             rm = symbolic_layer.rule_memory
             s = rm.summary()
-            matched = int(s.get("total_matches", s.get("n_matches", 0)))
-            total = int(s.get("total_queries", 1))
+            matched = int(s.get("total_success",
+                                s.get("total_matches", s.get("n_matches", 0))))
+            total = int(s.get("total_usage", s.get("total_queries", 1)))
             return min(1.0, matched / max(total, 1))
         except Exception:
             return 0.0
 
     @staticmethod
-    def _make_env(num_objects: int) -> PhysicsSandbox:
+    def _make_env(num_objects: int, seed: int = 0) -> PhysicsSandbox:
         return PhysicsSandbox(
             num_objects=num_objects,
-            seed=0,
+            seed=seed,
             max_episode_steps=200,
             render_size=64,
             gravity=-9.8,
@@ -408,9 +421,9 @@ class IndependentEvaluator:
                 break
         return ep_ret, states
 
-    def _random_baseline(self, env: PhysicsSandbox) -> float:
+    def _random_baseline(self, env: PhysicsSandbox, seed: int = 42) -> float:
         rets: list[float] = []
-        rng = np.random.RandomState(42)
+        rng = np.random.RandomState(seed % (2**31 - 1))
         for _ in range(self._cfg.episodes_per_task):
             obs = env.reset(seed=int(rng.randint(0, 2**31 - 1)))
             ep_ret = 0.0
@@ -426,9 +439,9 @@ class IndependentEvaluator:
 
     # --- dimension scorers ---
 
-    def _measure_curiosity(self, model: nn.Module) -> float:
+    def _measure_curiosity(self, model: nn.Module, seed: int = 0) -> float:
         """State-visitation diversity across tasks, normalized vs random."""
-        env = self._make_env(num_objects=10)
+        env = self._make_env(num_objects=10, seed=seed)
         all_states: list[np.ndarray] = []
         for _ in range(self._cfg.episodes_per_task):
             _, states = self._rollout_episode(model, env, record_states=True)
@@ -446,7 +459,8 @@ class IndependentEvaluator:
         diversity = len(buckets) / (self._cfg.episodes_per_task * 10.0)
         return min(1.0, diversity)
 
-    def _measure_drive(self, model: nn.Module, drives_module: object | None) -> float:
+    def _measure_drive(self, model: nn.Module, drives_module: object | None,
+                       seed: int = 0) -> float:
         """Fraction of steps where homeostatic drives are satisfied.
 
         Calls the real ``tick()`` interface with parameters estimated from
@@ -455,7 +469,7 @@ class IndependentEvaluator:
         """
         if drives_module is None:
             return 1.0
-        env = self._make_env(num_objects=10)
+        env = self._make_env(num_objects=10, seed=seed)
         satisfied_count = 0
         total_steps = 0
         try:
@@ -496,7 +510,7 @@ class IndependentEvaluator:
             return 0.5
         return satisfied_count / total_steps
 
-    def _measure_task(self, model: nn.Module) -> tuple[float, float]:
+    def _measure_task(self, model: nn.Module, seed: int = 0) -> tuple[float, float]:
         """Pure env reward on 3 task configs, normalised vs random."""
         task_configs = [
             (3, "few"),
@@ -506,15 +520,15 @@ class IndependentEvaluator:
         agent_scores: list[float] = []
         random_scores: list[float] = []
         for n_obj, _name in task_configs:
-            env = self._make_env(num_objects=n_obj)
+            env = self._make_env(num_objects=n_obj, seed=seed)
             # Agent
             rets: list[float] = []
             for _ in range(self._cfg.episodes_per_task):
                 r, _ = self._rollout_episode(model, env)
                 rets.append(r)
             agent_scores.append(float(np.mean(rets)))
-            # Random
-            random_scores.append(self._random_baseline(env))
+            # Random (same per-eval seed so the baseline co-varies with layouts)
+            random_scores.append(self._random_baseline(env, seed=seed))
         # Normalise each task score as ratio vs random (clamped to 0-2)
         ratios = []
         for a, r in zip(agent_scores, random_scores):
