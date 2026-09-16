@@ -137,6 +137,22 @@ def test_reflection_loop_aligns_trajectory_to_model_dtype():
     assert 0.0 <= r.mean_confidence <= 1.0
 
 
+def test_reflection_loop_clears_trajectory_on_forward_failure():
+    """A failed forward must not leak the trajectory into the next episode
+    (contract: end_episode always consumes the recorded steps)."""
+
+    class _Boom(SelfModel):
+        def forward(self, hidden_state):
+            raise RuntimeError("boom")
+
+    sm = _Boom(d_model=D_MODEL)
+    loop = ReflectionLoop(sm, max_reflections=8, reflection_every_episodes=1)
+    loop.record_step(torch.randn(1, D_MODEL), action=0, reward=0.0, done=True)
+    with pytest.raises(RuntimeError):
+        loop.end_episode(episode_return=0.0)
+    assert len(loop._trajectory) == 0
+
+
 def test_reflection_loop_state_dict_roundtrip():
     sm = SelfModel(d_model=D_MODEL)
     loop = ReflectionLoop(sm, max_reflections=16, reflection_every_episodes=1)

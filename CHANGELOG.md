@@ -27,10 +27,13 @@ All notable changes to this project are documented here.
 - fix: `ReflectionLoop.end_episode` 设备/类型对齐 — `record_step` 以
   CPU 存储轨迹, SelfModel 在 CUDA → 每个 episode 反思失败
   ("input tensor at cpu and parameter at cuda:0"; v5 段 830 次, v4 332 次,
-  **反思学习信号长期未生效**)。修复: forward 前
-  `hiddens.to(param.device, param.dtype)`; 新增回归测试 (float64 轨迹,
-  修复前报 "mat1 and mat2 must have the same dtype" 同类错误) 且服务器
-  CUDA 实测通过。无需重启即部署, 7M 段 (seg2) 起生效。
+  **反思学习信号长期未生效**)。修复: (1) forward 前
+  `hiddens.to(param.device, param.dtype)`; (2) 轨迹清空移入 `finally`
+  (失败时原会跨 episode 无限累积, 修复前 830 次失败即 830 轮泄漏)。
+  新增 2 个回归测试 (float64 轨迹同类错误; forward 失败必须清空轨迹)
+  且服务器 CUDA 实测通过。已部署, 7M 段 (seg2) 起生效。
+  注: 反思产出 (lessons/thought 文本) 经 inner_dialogue 与 FiLM 思路径
+  影响, 此前全部缺失。
 - 观察: v5 段 24 次 switch 与偏好日志 **24/24 时间戳同步** (修复行为稳定);
   kanren symbol 后端 acc≈0.499 (query 2.4M) — 规则使用端待专项;
   identity openness 降至 0.00 (abstract_reasoning 事件类型统计, 合法输出,

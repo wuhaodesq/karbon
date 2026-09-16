@@ -290,45 +290,50 @@ class ReflectionLoop:
             self._trajectory.clear()
             return r if self._episode_count % self._every == 0 else None
 
-        # Stack hidden states and get self-assessments (temporal if supported)
-        hiddens = torch.stack([t["hidden"].reshape(-1) for t in self._trajectory])  # (T, d_model)
-        # record_step stores CPU tensors (memory-friendly); the SelfModel may
-        # live on CUDA and/or another dtype -> align before forward.
-        # 轨迹以 CPU 存储; SelfModel 可能在 GPU — 前向之前对齐设备/类型,
-        # 否则每 episode 都会报 "input tensor at cpu and parameter at cuda".
-        _p = next(self.self_model.parameters(), None)
-        if _p is not None:
-            hiddens = hiddens.to(device=_p.device, dtype=_p.dtype)
-        with torch.no_grad():
-            if self._temporal:
-                assessments = self.self_model.forward(hiddens.unsqueeze(0))  # (1, T, d_model)
-            else:
-                assessments = self.self_model.forward(hiddens)
+        try:
+            # Stack hidden states and get self-assessments (temporal if supported)
+            hiddens = torch.stack([t["hidden"].reshape(-1) for t in self._trajectory])  # (T, d_model)
+            # record_step stores CPU tensors (memory-friendly); the SelfModel may
+            # live on CUDA and/or another dtype -> align before forward.
+            # 轨迹以 CPU 存储; SelfModel 可能在 GPU — 前向之前对齐设备/类型,
+            # 否则每 episode 都会报 "input tensor at cpu and parameter at cuda".
+            _p = next(self.self_model.parameters(), None)
+            if _p is not None:
+                hiddens = hiddens.to(device=_p.device, dtype=_p.dtype)
+            with torch.no_grad():
+                if self._temporal:
+                    assessments = self.self_model.forward(hiddens.unsqueeze(0))  # (1, T, d_model)
+                else:
+                    assessments = self.self_model.forward(hiddens)
 
-        conf = float(assessments["confidence"].mean().item())
-        fam = float(assessments["familiarity"].mean().item())
-        prog = float(assessments["progress"].mean().item())
+            conf = float(assessments["confidence"].mean().item())
+            fam = float(assessments["familiarity"].mean().item())
+            prog = float(assessments["progress"].mean().item())
 
-        # Generate adjustments
-        adjustments: dict[str, float] = {}
-        if fam < 0.3:
-            adjustments["exploration_epsilon_boost"] = 0.05
-        if conf < 0.3 and episode_return < 0:
-            adjustments["learning_rate_boost"] = 1.5
-        if conf > 0.9 and episode_return > 0.5:
-            adjustments["exploration_epsilon_decay"] = 0.95
+            # Generate adjustments
+            adjustments: dict[str, float] = {}
+            if fam < 0.3:
+                adjustments["exploration_epsilon_boost"] = 0.05
+            if conf < 0.3 and episode_return < 0:
+                adjustments["learning_rate_boost"] = 1.5
+            if conf > 0.9 and episode_return > 0.5:
+                adjustments["exploration_epsilon_decay"] = 0.95
 
-        reflection = EpisodeReflection(
-            episode_return=episode_return,
-            mean_confidence=conf,
-            mean_familiarity=fam,
-            mean_progress=prog,
-            success=episode_return > 0,
-            adjustments=adjustments,
-        )
+            reflection = EpisodeReflection(
+                episode_return=episode_return,
+                mean_confidence=conf,
+                mean_familiarity=fam,
+                mean_progress=prog,
+                success=episode_return > 0,
+                adjustments=adjustments,
+            )
 
-        self._reflections.append(reflection)
-        self._trajectory.clear()
+            self._reflections.append(reflection)
+        finally:
+            # Always clear: a failed forward must not leak the trajectory into
+            # the next episode (it would grow unboundedly and cascade).
+            # 无论成败都清空轨迹, 防止失败时跨 episode 累积 (§13 根治)。
+            self._trajectory.clear()
 
         if self._episode_count % self._every == 0:
             return reflection
