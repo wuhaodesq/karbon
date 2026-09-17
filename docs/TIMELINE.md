@@ -108,22 +108,29 @@ timeline
 
 ## Current Status / 当前状态
 
-- **Completed**: Stage 0-19 (全部完成; Stage 18 组合成长 sealed, Stage 19 自我叙事 1.3M sealed)
+- **Completed**: Stage 0-19 — Stage 18 组合成长 sealed; **Stage 19 自我叙事
+  验证指标"叙事影响行为"于 2026-09-16 首次达成** (v4 数据分布路线:
+  身份特质→课程任务选择, 偏好↔切换 24/24 时间戳同步; 动作层 FiLM v1/v2、
+  action-bias v3 三次 TVD=0 已作为架构级否定记录在案)。
 - **In progress**: Stage 20 (假设-演绎引擎, 12-13y) — 推理闭环机制完成并验证:
-  propose→probe→verify→kanren 全链路 (累计 100k+ 验证, kanren 128 规则);
-  **M2 记忆注入污染修复后主体持续健康长训至 6M+** (far/cross 0.36-0.37
-  跨 5 任务稳定, means_ends/physics 满分; 6M 段 mean_ret=125.97)。
+  propose→probe→verify→kanren 全链路 (累计 100k+ 验证, kanren 128 规则)。
   **ToM 真实训练回路**: false-belief 优势 0.074→0.329→0.985m
-  (2M→3M→4M), act_acc 0.70-0.78。
-  **叙事→决策耦合突破口**: 三次动作层尝试 (FiLM v1/v2、action-bias v3)
-  均 TVD=0 (架构级规律: 外挂弱扰动被淹没/梯度抵消); 改走数据分布路径
-  — narrative 身份特质 → 课程任务选择 (v4), 首次获得因果影响力;
-  v4 课程指针 bug 修复 (ac189cc) 后验证: 偏好与切换时间戳完全同步,
-  切换恢复规律 (每 20,480 步; 旧代码 200k 步仅 1 次)。
-  量化退出标准未达 (op 0.37 vs 0.6; ToM 长训中 vs 0.55)。上限诊断:
+  (2M→3M→4M), act_acc 0.70-0.81。
+  **2026-09-17 符号链路审计 (诚实化检查)**: 发现并修复 5 处"声明完成但
+  实际断链"的回路 — reflection (830 次/段设备错配, 0 教训)、eval 度量
+  (sym 读错 key/3D 探针确定性回放)、LogicEngine (投影空间错配 +
+  `Quantifier.ALWAYS` 不存在被裸 except 吞掉, "verified→logic"从未运行)、
+  kanren 假指标 (自查询+硬币 acc 0.499, feedback 零消费)。闭环从"声明"
+  变为"真实可运行"; 规则使用端的**行为化** (规则→任务选择) 与 openness
+  事件口径修复进行中 (见 §Next)。
+  **M2 长训在途** (6M→8.5M 自动链接力; 6M 段 mean_ret=125.97)。
+  量化退出标准未达 (**op 0.37 vs 0.6**; ToM 评测值长训中)。上限诊断:
   teacher 3obj=0.89/8obj=0.72 → 0.6 物理可达, 差距在"发现/决策"能力。
 - **est. age**: 3.5-4.0y (ToM 推进中; Stage 20 目标为形式运算级推理雏形)
-- **Next**: Stage 20 推理闭环完成 -> Stage 21 递归元认知 (13-14y)
+- **Next** (发育化排序, 2026-09-17 定): ① 规则→任务选择 (符号知识进入
+  "学什么"的决策, M4 自主课程方向) → ② openness 事件口径 (特质必须反映
+  经历) → ③ Stage 20 硬门: op 0.6 方法改进 (探针覆盖/主动发现, 通关钥匙)。
+  完成后 → Stage 21 递归元认知 (13-14y)
 - **Architecture**: Stage 19-20 当前架构可扩展 (雏形已验证), Stage 21-22 需要新架构
 - **North Star Gap**: 13-15 岁 (递归元认知 + 抽象概念) 需要全新认知框架, 未验证
 
@@ -150,10 +157,13 @@ Stage 17 (环境改造+元反思) ✅ dev_age=0.5 · est_age=3.5y · means_ends=
     ↓
 Stage 18 (组合式成长) ✅ sealed · ToM 并行推进
     ↓
-Stage 19 (自我叙事引擎) ✅ 1.3M sealed (Narrative Loop, 10-12y)
+Stage 19 (自我叙事引擎) ✅ 1.3M sealed (Narrative Loop, 10-12y) ·
+    验证指标 "叙事影响行为" 2026-09-16 达成 (v4 身份→课程, 24/24 同步)
     ↓
-Stage 20 (假设-演绎引擎) ⏳ 进行中 (12-13y) · 20a-22 行为层已通 (cross 0.16/far 0.44
-    @1.8M best) · 推理闭环 (HypothesisTester→kanren) 待实现
+Stage 20 (假设-演绎引擎) ⏳ 进行中 (12-13y) · 推理闭环机制验证 (100k+ verify,
+    kanren 128 规则) · 2026-09-17 链路审计修复 5 处静默断链 (reflection/
+    eval/logic/kanren/symbolic) · 硬门未达 (op 0.37 vs 0.6, 差距在发现/决策)
+    · 规则→任务选择 + openness 口径 进行中
     ↓
 Stage 21 (递归元认知) · 13-14y · 需要新架构
     ↓
@@ -194,9 +204,9 @@ Stage 23 (开放世界永续学习) · 15y+ · 新架构整合
 | 15 | 3D 核心知识 | 当前架构 | ThreeDWorld 迁移 + 因果发现 | KL 0.35, Recon 1.68, 因果 23 边 | ✅ |
 | 16 | 神经符号 | 当前架构 | kanren + 规则 + 逻辑推理 | 因果 36 边, rules=28, imagine_updates=1467 | ✅ |
 | 17 | 环境改造+元反思 | 当前架构 | 抓取+链式任务+改进评测 | est_age=3.5y, means_ends=1.0, intuitive_physics=1.0, task=1.135 | ✅ |
-| 18 | 组合式成长 | 当前架构 | 技能组合 + 创造 + ToM并行 | ToM>0.6, est_age=4.0y (目标), means_ends=1.0, intuitive_physics=1.0 | ⏳ 531K/1M |
-| 19 | 自我叙事引擎 | 当前架构可扩展 | 连贯自我叙事 (IdentityNarrative + AutobiographicalMemory + InnerDialogue 整合闭环) | 自传叙事连贯性 + 叙事影响行为, 10-12y | 待开始 |
-| 20 | 假设-演绎引擎 | 当前架构可扩展 | 假设条件下逻辑演绎 (HypothesisTester + ActiveExperimenter + kanren 升级为形式运算级闭环) | 形式推理任务通过率, 12-13y | 待开始 |
+| 18 | 组合式成长 | 当前架构 | 技能组合 + 创造 + ToM并行 | ToM>0.6 (目标); FB 优势 0.985m @4M, means_ends/physics 满分 | 🔄 ToM 长训中 |
+| 19 | 自我叙事引擎 | 当前架构可扩展 | 连贯自我叙事 (IdentityNarrative + AutobiographicalMemory + InnerDialogue 整合闭环) | 自传叙事连贯性 + 叙事影响行为, 10-12y | ✅ sealed 1.3M; 叙事影响行为 2026-09-16 首次达成 (v4) |
+| 20 | 假设-演绎引擎 | 当前架构可扩展 | 假设条件下逻辑演绎 (HypothesisTester + ActiveExperimenter + kanren 升级为形式运算级闭环) | 形式推理任务通过率, 12-13y | ⏳ 闭环机制已验证; 2026-09-17 审计修复 5 处断链; 硬门 op 0.37/0.6 未达 |
 | 21 | 递归元认知 | 需要新架构 | 反思自我监督 (二级自我模型, 监控思考过程本身) | 递归自监控 (知道自己在思考), 13-14y | ❌ 未验证 |
 | 22 | 抽象概念框架 | 需要新架构 | 具体->抽象推理 (概念层级 + 跨概念形式推理) | 抽象概念任务通过率, 14-15y | ❌ 未验证 |
 | 23 | 开放世界永续 | 新架构整合 | 自主目标设定 (扩展世界接入 + 内驱->自主目标 + 无限稳定) | 内在动机替代课程驱动, 100万步+, 15y+ | ❌ 未验证 |

@@ -5,6 +5,31 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### ③ 规则→任务选择 + ④ openness 口径 + TIMELINE 校正 (2026-09-17) ✅ 发育化对齐
+
+- **④ openness 事件口径**: "exploration" 原先要求 `ep_ret ≤ 0.05`, 稠密
+  shaping 下失败 episode 也 >0.05 → **永不触发** → 特质 estimator 输出恒
+  0.00 → v4 叙事偏好的特质输入实为死信号。改为**相对任务基线**:
+  `ep_ret < 0.5 × task_ema_return` (或 ≈0) 记 exploration; 成功/失败/
+  探索三分从此反映经历。
+- **③ KnowledgeLedger (规则→任务选择, M4 方向)**: 新模块
+  `src/curriculum/knowledge_ledger.py`, 每任务有界账本 (≤16 任务, Axiom 1):
+  `ema_ret`(mastery) + `ema_margin`(神经规则匹配边距 → 状态分布熟悉度) +
+  观测数; `preference()` = floor + (1-mastery)·(1-0.5·familiarity), 未观测
+  任务给满探索权重。与叙事偏好**乘性组合** (两信号都须支持才选中) —
+  数据分布路线 (v4 定律), 符号知识进入"学什么"的决策。
+- **接线**: 每训练迭代记录 margin (与 `[symbolic] probe` 日志同步: sim +
+  rules/usage/success); 每 episode 记录回报; 切换点混合采样, 日志分列
+  `[narrative] preference` / `[curriculum] knowledge preference` /
+  `[curriculum] task pick`; ckpt 持久化 (`knowledge_ledger_state`)。
+- 测试 +6 (`tests/test_knowledge_ledger.py`: 有界/偏好方向/未观测权重/
+  地板/roundtrip); 服务器实测 [mastered 0.054, unmastered 0.42, unseen
+  0.526] ✓。**生效: seg4 (8M, ~21:00)**。消融门: 观察 knowledge
+  preference 随训练状态变化 + task pick 响应 (同 v4 的 24/24 验证法)。
+- TIMELINE.md 校正: Stage 19 "叙事影响行为" 标注 2026-09-16 达成 (v4);
+  Stage 20 标注 2026-09-17 审计修复 5 处断链 + 硬门 op 0.37/0.6 未达;
+  执行顺序块与阶段表同步真实进度。
+
 ### 符号链路修复批次 1+2 (2026-09-17) ✅ — 静默失败修复 3 处
 
 - **LogicEngine 从不触发的两重根因 (含第 5 个静默失败)**:

@@ -47,7 +47,12 @@ from src.continual import (
     OnlineEWCConfig,
     SleepConsolidationLoop,
 )
-from src.curriculum import AutoCurriculum, AutoCurriculumConfig, TaskTemplate
+from src.curriculum import (
+    AutoCurriculum,
+    AutoCurriculumConfig,
+    KnowledgeLedger,
+    TaskTemplate,
+)
 from src.envs import MiniGridWrapper
 from src.intrinsic import (
     ExplorationBonus,
@@ -1899,6 +1904,13 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         logger.info("NarrativeLoopController enabled (every %d episodes, symbol_bias=%.2f)",
                     narrative_loop._every, narrative_loop._symbol_bias_weight)
 
+    # --- 2026-09-17: knowledge ledger (symbolic state -> task preference) ---
+    # Symbolic knowledge state (rolling return + rule-match familiarity per
+    # task) votes on WHAT to practice; multiplicative with the narrative
+    # preference — same data-distribution law as v4. 规则→任务选择的发育化。
+    knowledge_ledger = KnowledgeLedger()
+    logger.info("KnowledgeLedger enabled (capacity=%d)", knowledge_ledger.capacity)
+
     # --- Program Synthesis + Active Experimentation + Temporal Abstraction ---
     synth_cfg = config.get("program_synthesis")
     program_synth: ProgramSynthesizer | None = None
@@ -2169,6 +2181,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             ("logic_engine_state",       logic_engine,                 None),
             ("narrative_loop_state",     narrative_loop,               None),
             ("thought_action_state",     thought_action,               None),
+            ("knowledge_ledger_state",   knowledge_ledger,             None),
         ]
         for key, module, _opt in _restore_map:
             if module is not None and key in _extra:
@@ -3467,6 +3480,15 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     except Exception as _sme:
                         logger.warning("[self_model] auxiliary training failed: %s", _sme)
 
+                # --- 2026-09-17: knowledge ledger — episode outcome per task ---
+                if knowledge_ledger is not None:
+                    try:
+                        knowledge_ledger.record_episode(
+                            curr_active_task.id if curr_active_task is not None else -1,
+                            float(ep_ret))
+                    except Exception as _kle:
+                        logger.warning("[curriculum] ledger record failed: %s", _kle)
+
                 # --- Stage 19: narrative loop (memory -> narrative -> bias) ---
                 if narrative_loop is not None:
                     try:
@@ -3475,12 +3497,23 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         # exploratory episodes get a baseline importance so they
                         # survive autobiographical eviction; IdentityNarrative
                         # counts traits by event_type instead of keyword luck.
+                        # 2026-09-17: "exploration" used to require
+                        # ep_ret <= 0.05, which dense shaping never produces ->
+                        # openness pinned at 0.00 and the trait->preference
+                        # input was dead. Exploration is now RELATIVE to the
+                        # task's rolling return: an episode far below the task
+                        # norm (or near zero) counts as aimless probing.
+                        # 探索口径改为相对任务基线, 否则 openness 恒 0。
+                        _task_norm = float(env.summary().get("mean_return", 0.0))
+                        _far_below_norm = (
+                            ep_ret > 0.05 and _task_norm > 0.0
+                            and ep_ret < 0.5 * _task_norm)
                         if ep_ret > 0.5:
                             etype = "success"
                             importance = float(ep_ret)
                             description = f"Completed {task_tag}: return={ep_ret:.2f}"
                             lesson = f"Learned to navigate {task_tag}"
-                        elif ep_ret > 0.05:
+                        elif not _far_below_norm:
                             etype = "failure"
                             importance = 8.0
                             description = f"Failed to reach goal in {task_tag}"
@@ -3488,7 +3521,9 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         else:
                             etype = "exploration"
                             importance = 4.0
-                            description = f"Explored {task_tag} without clear reward"
+                            description = (
+                                f"Explored {task_tag} without clear reward "
+                                f"(return={ep_ret:.2f} vs norm={_task_norm:.2f})")
                             lesson = f"Probed unknown scene {task_tag}"
                         n_last_hidden = (
                             rollout_hidden_states[-1].detach().to(device)
@@ -4421,6 +4456,21 @@ and state.step % 50000 < rollout_capacity):
                     _, _, hidden = model(first_obs, return_hidden=True, update_gru=False)  # 20v
                     logits_check, _ = model(first_obs, update_gru=False)  # 20v
                 final_logits, sym_info = symbolic_layer(hidden, logits_check)
+                # 2026-09-17 instrumentation: the margin is now always reported
+                # (below threshold too) — feed the ledger and log at low rate.
+                if knowledge_ledger is not None and curr_active_task is not None:
+                    knowledge_ledger.record_margin(
+                        curr_active_task.id, float(sym_info.get("rule_sim", 0.0)))
+                if state.step % 100000 < rollout_capacity:
+                    _rm_sum = symbolic_layer.rule_memory.summary()
+                    logger.info(
+                        "[symbolic] probe: sim=%.3f matched=%s rules=%d "
+                        "usage=%d success=%d",
+                        float(sym_info.get("rule_sim", 0.0)),
+                        bool(sym_info.get("rule_matched", False)),
+                        int(_rm_sum.get("num_rules", 0)),
+                        int(_rm_sum.get("total_usage", 0)),
+                        int(_rm_sum.get("total_success", 0)))
                 if sym_info.get("override", False) or sym_info.get("biased", False):
                     logger.info("[symbolic] rule #%d matched (sim=%.2f), action biased",
                                 sym_info.get("rule_id", -1), sym_info.get("rule_sim", 0))
@@ -4560,22 +4610,47 @@ and state.step % 50000 < rollout_capacity):
             # 3d-many in the v4 debut — the pointer-advance coupling was the
             # bug: it made peek_next coincide with the current task).
             new_task = None
+            _items = [
+                (t.id, float(t.spec.get("difficulty", 0.5)))
+                for t in curriculum._tasks.values()
+                if curr_active_task is None or t.id != curr_active_task.id
+            ]
+            _weights = None
+            _npref_log: list[float] = []
+            _kpref_log: list[float] = []
             if narrative_loop is not None and narrative_loop.has_active_narrative:
                 try:
-                    _items = [
-                        (t.id, float(t.spec.get("difficulty", 0.5)))
-                        for t in curriculum._tasks.values()
-                        if curr_active_task is None or t.id != curr_active_task.id
-                    ]
                     _pref = narrative_loop.task_preference(_items)
                     if _pref is not None and _items:
-                        _idx = int(np.random.choice(len(_items), p=_pref))
-                        new_task = curriculum._tasks[_items[_idx][0]]
-                        logger.info(
-                            "[narrative] task preference -> %s (id=%d, p=%.2f)",
-                            new_task.tag, new_task.id, float(_pref[_idx]))
+                        _weights = np.asarray(_pref, dtype=np.float64)
+                        _npref_log = [float(x) for x in _weights]
+                        logger.info("[narrative] preference=%s",
+                                    [round(x, 3) for x in _npref_log])
                 except Exception as _npe:
                     logger.debug("[narrative] task preference failed: %s", _npe)
+            # 2026-09-17: knowledge ledger — symbolic knowledge state (rolling
+            # return + rule-match familiarity per task) votes on WHAT to
+            # practice; multiplicative with the narrative preference so both
+            # signals must favour the task (data-distribution route, v4 law).
+            # 规则→任务选择: 符号知识状态进入"学什么"的决策。
+            if knowledge_ledger is not None and _items:
+                try:
+                    _kpref = knowledge_ledger.preference([tid for tid, _ in _items])
+                    if _kpref is not None:
+                        _kw = np.asarray(_kpref, dtype=np.float64)
+                        _kpref_log = [float(x) for x in _kw]
+                        logger.info("[curriculum] knowledge preference=%s",
+                                    [round(x, 3) for x in _kpref_log])
+                        _weights = _kw if _weights is None else _weights * _kw
+                except Exception as _ke:
+                    logger.warning("[curriculum] knowledge preference failed: %s", _ke)
+            if _weights is not None and _items and float(_weights.sum()) > 0.0:
+                _weights = _weights / _weights.sum()
+                _idx = int(np.random.choice(len(_items), p=_weights))
+                new_task = curriculum._tasks[_items[_idx][0]]
+                logger.info(
+                    "[curriculum] task pick -> %s (id=%d, p=%.2f)",
+                    new_task.tag, new_task.id, float(_weights[_idx]))
             if new_task is None:
                 # fallback: sequential order; skip the current task (at most
                 # one full cycle over the task pool).
@@ -4710,6 +4785,8 @@ and state.step % 50000 < rollout_capacity):
                 extra["self_model_state"] = self_model.state_dict()
             if narrative_loop is not None:
                 extra["narrative_loop_state"] = narrative_loop.state_dict()
+            if knowledge_ledger is not None:
+                extra["knowledge_ledger_state"] = knowledge_ledger.state_dict()
             if thought_action is not None:
                 # Stage 19-FiLM: persist the ThoughtActionLoop + its TinyTextEncoder
                 # (FiLM projection learns from PPO; losing it on resume would
