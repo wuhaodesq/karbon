@@ -528,6 +528,14 @@ class LogicEngine:
         info["unified_variables"] = [
             {"name": v.name, "similarity": s} for v, s in matches
         ]
+        # Best below-threshold similarity for diagnostics (audit 2026-09-17:
+        # the engine was silently unmatchable — raw hidden queried against
+        # projected variable centroids — and the margin is the only way to
+        # see how far matching is).
+        info["best_sim"] = max(
+            (float(v.match(hidden_state)) for v in self._variables.values()),
+            default=0.0,
+        )
 
         if not matches:
             return None, info

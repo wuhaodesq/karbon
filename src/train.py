@@ -2760,13 +2760,28 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                 _hyp_stats["verified"] += 1
                             if not _timed_out and logic_engine is not None:
                                 try:
+                                    from src.models.logic_engine import (
+                                        Quantifier, VariableType,
+                                    )
                                     _cond = "occluded_object"
                                     _exists = any(
                                         r.condition == _cond
                                         for r in logic_engine._rules.values())
                                     if not _exists:
+                                        # Define the variable with a REAL embedding
+                                        # before add_rule: undefined variables are
+                                        # auto-created with random vectors and can
+                                        # never unify (this link was dead).
+                                        if hidden is not None:
+                                            _obj_emb = hidden.squeeze(0).detach()
+                                            if symbolic_layer is not None:
+                                                _obj_emb = symbolic_layer.rule_projection(
+                                                    _obj_emb.to(
+                                                        symbolic_layer.rule_projection.weight.device))
+                                            logic_engine.define_variable(
+                                                "obj", VariableType.STATE, _obj_emb)
                                         logic_engine.add_rule(
-                                            quantifier=logic_engine.Quantifier.ALWAYS,
+                                            quantifier=Quantifier.EXISTENTIAL,
                                             variable_name="obj",
                                             condition=_cond,
                                             action=int(action.item()),
@@ -2776,8 +2791,13 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                         logger.info(
                                             "[hypothesis] verified -> logic rule "
                                             "'IF occluded THEN track'")
-                                except Exception:
-                                    pass
+                                except Exception as _lre:
+                                    # §14: the silent pass here hid that
+                                    # `logic_engine.Quantifier` never existed
+                                    # (AttributeError) — the verified->logic
+                                    # link had never run. Loud now.
+                                    logger.warning(
+                                        "[hypothesis] logic rule add failed: %s", _lre)
                     except Exception as _he:
                         logger.debug("[hypothesis] loop failed: %s", _he)
 
@@ -3362,25 +3382,29 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     except Exception as _e:
                         logger.warning("[symbolic] rule extraction failed (ep_ret=%.1f): %s", ep_ret, str(_e))
 
-                # --- Symbol backend: query + feedback (close the loop) ---
-                if symbol_backend is not None and symbol_backend._rule_count > 0:
+                # --- Symbol backend: honest self-query coverage (2026-09-17 audit) ---
+                # The old loop asked every rule its own condition
+                # (predict_action(rule["if"]) -> tautological self-match) and
+                # counted "correct = predicted in ALL actions taken during the
+                # rollout" (~coin flip: acc=0.499 over 2.9M queries). That fed
+                # meaningless feedback labels and a meaningless accuracy gauge;
+                # get_reinforce_rewards() had no consumer anyway. Until the
+                # rule-use route is redesigned (rules -> task selection), only
+                # report coverage, on a low cadence.
+                if (symbol_backend is not None and symbol_backend._rule_count > 0
+                        and state.step % 100000 < rollout_capacity):
                     try:
-                        actual_actions = set(rollout_actions) if rollout_actions else set()
-                        for rule in symbol_backend._rules_db:
-                            if rule["then"][0] != "action":
-                                continue
+                        action_rules = [r for r in symbol_backend._rules_db
+                                        if r["then"][0] == "action"]
+                        answered = 0
+                        for rule in action_rules:
                             result = symbol_backend.predict_action(rule["if"])
                             if result.answers:
-                                # predict_action answers are ("action", int)
-                                predicted = result.answers[0][1]
-                                correct = predicted in actual_actions
-                                symbol_backend.feedback(
-                                    len(symbol_backend._inference_buffer) - 1, correct)
-                        if symbol_backend._total_queries % 1000 < len(symbol_backend._rules_db):
-                            logger.info("[symbol] queries=%d correct=%d acc=%.3f",
-                                        symbol_backend._total_queries,
-                                        symbol_backend._correct_predictions,
-                                        symbol_backend._correct_predictions / max(1, symbol_backend._total_queries))
+                                answered += 1
+                        logger.info(
+                            "[symbol] action_rules=%d self_answered=%d "
+                            "(tautological self-queries; fake-acc retired)",
+                            len(action_rules), answered)
                     except Exception as _se:
                         logger.warning("[symbol] query failed: %s", _se)
 
@@ -4411,10 +4435,21 @@ and state.step % 50000 < rollout_capacity):
             try:
                 with torch.no_grad():
                     _, _, hidden = model(batch.obs[0:1], return_hidden=True, update_gru=False)  # 20v
-                best_rule, info = logic_engine.reason(hidden.squeeze(0))
+                # LogicEngine variables are built from the neural rules'
+                # PROJECTED condition embeddings, so query in that same space:
+                # passing raw hidden kept cosine below threshold and the
+                # engine was silent for the entire run (2026-09-17 audit).
+                _h_query = hidden.squeeze(0)
+                if symbolic_layer is not None:
+                    _h_query = symbolic_layer.rule_projection(_h_query)
+                best_rule, info = logic_engine.reason(_h_query)
                 if best_rule is not None:
                     logger.info("[logic] rule '%s' fired (conf=%.2f)",
                                 best_rule.condition, best_rule.confidence)
+                elif state.step % 100000 < rollout_capacity:
+                    logger.info("[logic] probe: best_sim=%.3f vars=%d rules=%d",
+                                float(info.get("best_sim", 0.0)),
+                                len(logic_engine._variables), len(logic_engine))
             except Exception as _le:
                 logger.warning("[logic] reasoning failed: %s", _le)
 

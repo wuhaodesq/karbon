@@ -113,6 +113,19 @@ def test_rule_memory_no_match_below_threshold():
     assert rule is None
 
 
+def test_rule_memory_reports_margin_below_threshold():
+    """2026-09-17 audit: match() must still report the best cosine similarity
+    when no rule crosses the threshold, so callers can log how far matching
+    is (the layer had looked dead with no observable margin)."""
+    mem = RuleMemory(max_rules=16, d_model=D_MODEL)
+    emb = torch.randn(D_MODEL)
+    mem.add(condition_embedding=emb, action=3, confidence=0.9)
+    rule, sim = mem.match(-emb, threshold=0.7)  # cosine ≈ -1
+    assert rule is None
+    assert isinstance(sim, float)
+    assert sim < 0.7
+
+
 def test_rule_memory_eviction_keeps_high_confidence():
     mem = RuleMemory(max_rules=4, d_model=D_MODEL)
     # Add 4 high-confidence rules

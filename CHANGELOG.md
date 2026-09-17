@@ -5,6 +5,34 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### 符号链路修复批次 1+2 (2026-09-17) ✅ — 静默失败修复 3 处
+
+- **LogicEngine 从不触发的两重根因 (含第 5 个静默失败)**:
+  (a) **空间错配**: 变量 centroid 来自神经规则的**投影后** embedding, 而
+  `reason()` 收到 **raw hidden** (train.py:4413) → cos 恒低于阈值 → unify
+  恒空。修复: reason 前先过 `symbolic_layer.rule_projection`。
+  (b) **`logic_engine.Quantifier.ALWAYS` 两重不存在** (LogicEngine 无
+  `Quantifier` 类属性 + 枚举无 `ALWAYS` 成员) → AttributeError 被裸
+  `except Exception: pass` 吞掉 → "verified → IF occluded THEN track"
+  **从未运行过**。修复: 正确 import `Quantifier`/`VariableType` 并用
+  `EXISTENTIAL`; "obj" 变量先用真实投影 embedding 定义 (`add_rule` 对未
+  定义变量自动生成**随机**向量, 永不匹配); except 改 loud warning (§14)。
+- **kanren 假指标退役**: 自查询 (`predict_action(rule["if"])` 拿规则自己
+  的条件问自己 → 恒自匹配) + "correct = predicted ∈ rollout 全部动作集"
+  = 硬币 (acc=0.499, 2.9M 次) + `get_reinforce_rewards()` 零消费。改为
+  低频覆盖率日志 (`[symbol] action_rules=... self_answered=...`), 停止喂
+  假 feedback。规则使用端重定向 (规则→任务选择) 待决策。
+- **仪表 (修复③前置)**: `RuleMemory.match()`/`apply()` 与
+  `LogicEngine.reason()` 现在总是暴露 `best_sim` 边距 (低于阈值也报);
+  train.py 每 100k 步输出 `[logic] probe: best_sim=... vars=... rules=...`
+  → 规则匹配率/漂移可定量。
+- 测试 +3 (margin-below-threshold ×2, reason best_sim); 服务器实测
+  (logic fires best_sim=1.000; no-match margin 0.08; -1.0) + train.py
+  编译通过。**生效: 下一段 (8M/seg4) 起**。
+- 仍待决策: ④ openness 事件口径 (`ep_ret≤0.05` 永不触发 "exploration",
+  openness 恒 0); 规则→任务选择重定向; 神经规则反馈闭环 (apply 仍是诊断
+  路径, success 恒 0)。
+
 ### 符号规则回路审计 + seg2 修复验证 (2026-09-17 凌晨) 🔬
 
 - **seg2 两修复实测生效**: reflection `end_episode failed` 830→**0** (seg2

@@ -212,7 +212,10 @@ class RuleMemory:
             threshold: minimum cosine similarity to consider a match.
 
         Returns:
-            (best_rule, similarity) or (None, 0.0) if no match.
+            (best_rule, similarity) — best_rule is None below the threshold,
+            but similarity is still the best cosine so callers can log the
+            margin (audit 2026-09-17: the layer was silently unmatchable and
+            the margin was the only observable).
         """
         if not self._rules:
             return None, 0.0
@@ -402,13 +405,16 @@ class NeuralSymbolicLayer(nn.Module):
         h_projected = self.rule_projection(h)
 
         rule, sim = self.rule_memory.match(h_projected, threshold=self._match_threshold)
+        # Always report the margin (audit 2026-09-17): with the previous
+        # all-or-nothing reporting, a below-threshold match was invisible and
+        # the layer looked dead with no way to see how close it was.
+        info["rule_sim"] = sim
 
         if rule is not None and rule.confidence >= self._override_threshold:
             # Soft bias injection: add preference to rule's action
             # PPO policy network receives gradient and can learn from this bias
             info["rule_matched"] = True
             info["rule_id"] = rule.id
-            info["rule_sim"] = sim
             info["rule_action"] = rule.action
             info["override"] = False  # soft bias, not hard override
             info["biased"] = True
@@ -425,7 +431,6 @@ class NeuralSymbolicLayer(nn.Module):
         if rule is not None:
             info["rule_matched"] = True
             info["rule_id"] = rule.id
-            info["rule_sim"] = sim
             self._last_matched_rule_id = rule.id
 
         # No override: use neural logits

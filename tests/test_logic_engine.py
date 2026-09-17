@@ -205,6 +205,20 @@ def test_reason_returns_none_no_match():
     assert len(info["unified_variables"]) == 0
 
 
+def test_reason_reports_best_sim_when_no_match():
+    """2026-09-17 audit: reason() exposes the best below-threshold similarity
+    so a silently-unmatchable engine is observable (raw-vs-projected space
+    mismatch kept it silent for the whole run)."""
+    engine = LogicEngine(d_model=D_MODEL, match_threshold=0.99)
+    engine.define_variable("key", VariableType.OBJECT, torch.randn(D_MODEL))
+    engine.add_rule(Quantifier.UNIVERSAL, "key", "see(X)", 3, confidence=0.9)
+
+    rule, info = engine.reason(torch.randn(D_MODEL))
+    assert rule is None
+    assert "best_sim" in info
+    assert -1.0 <= float(info["best_sim"]) < 0.99
+
+
 def test_reason_prefers_higher_confidence():
     engine = LogicEngine(d_model=D_MODEL, match_threshold=0.5)
     emb = torch.randn(D_MODEL)
