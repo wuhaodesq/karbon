@@ -325,11 +325,20 @@ class LogicEngine:
         return rule
 
     def _evict_rule(self) -> None:
-        """Evict the rule with lowest confidence × usage."""
+        """Evict rule with lowest confidence × usage.
+
+        Verified rules are consolidated knowledge: never evict them while an
+        empirical rule is available (the hypothesis-verified rule was being
+        evicted by forward-chain-derived rules within seconds, then re-added
+        in a churn loop — 2026-09-18). 已验证规则固化, 不被派生规则挤出。
+        """
         if not self._rules:
             return
+        candidates = [rid for rid, r in self._rules.items() if not r.proof_verified]
+        if not candidates:
+            candidates = list(self._rules)  # all verified: fall back to LRU
         worst_id = min(
-            self._rules,
+            candidates,
             key=lambda rid: self._rules[rid].confidence * (1 + self._rules[rid].usage_count * 0.01),
         )
         del self._rules[worst_id]

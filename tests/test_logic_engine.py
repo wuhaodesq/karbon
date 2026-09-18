@@ -205,6 +205,22 @@ def test_reason_returns_none_no_match():
     assert len(info["unified_variables"]) == 0
 
 
+def test_verified_rules_survive_eviction():
+    """2026-09-18: verified rules are consolidated knowledge and must not be
+    evicted by a flood of empirical rules (the hypothesis-verified rule was
+    being evicted/re-added in a churn loop)."""
+    engine = LogicEngine(d_model=D_MODEL, max_rules=2)
+    engine.define_variable("obj", VariableType.STATE, torch.randn(D_MODEL))
+    engine.add_rule(
+        Quantifier.EXISTENTIAL, "obj", "occluded_object", 1,
+        confidence=0.6, proof_verified=True,
+    )
+    for i in range(5):
+        engine.add_rule(Quantifier.UNIVERSAL, "obj", f"emp_{i}", 0, confidence=0.5)
+    conditions = [r.condition for r in engine._rules.values()]
+    assert "occluded_object" in conditions
+
+
 def test_reason_reports_best_sim_when_no_match():
     """2026-09-17 audit: reason() exposes the best below-threshold similarity
     so a silently-unmatchable engine is observable (raw-vs-projected space
