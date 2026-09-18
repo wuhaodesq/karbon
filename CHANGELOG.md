@@ -26,6 +26,12 @@ All notable changes to this project are documented here.
   地板/roundtrip); 服务器实测 [mastered 0.054, unmastered 0.42, unseen
   0.526] ✓。**生效: seg4 (8M, ~21:00)**。消融门: 观察 knowledge
   preference 随训练状态变化 + task pick 响应 (同 v4 的 24/24 验证法)。
+- **④ 修订 (seg4 实测后)**: 相对回报口径实测**不触发** — 78 个
+  reflection episode 仅 1 个低于中位数 50% (回报分布紧: 39.5-110.5),
+  openness 仍 0.00。改为**行为型定向探索**: 每 episode 统计假设探针步
+  占比 (`_ep_probe_steps`, ≥10% → exploration), 保留"回报远低基线"
+  兜底; 新增低频 `[narrative] event typing: etype=... probes=...` 观测
+  日志 (可直接验证事件分布)。已部署, 下端 (9M) 生效。
 - TIMELINE.md 校正: Stage 19 "叙事影响行为" 标注 2026-09-16 达成 (v4);
   Stage 20 标注 2026-09-17 审计修复 5 处断链 + 硬门 op 0.37/0.6 未达;
   执行顺序块与阶段表同步真实进度。

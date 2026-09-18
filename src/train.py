@@ -1401,6 +1401,9 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     divergent_gen: Any = None
     # Stage 20 hypothesis-deduction counters (diagnostics)
     _hyp_stats = {"proposed": 0, "probed": 0, "verified": 0, "timeout": 0}
+    # 2026-09-17: per-episode hypothesis-probe steps (behavioural exploration
+    # signal for the narrative event typing; reset every episode end).
+    _ep_probe_steps = 0
     # Stage 20-ToM: training stats for the (previously untrained) ToM module.
     _tom_stats = {"n": 0, "loss": 0.0, "act_ok": 0, "belief_err": 0.0, "stale": 0}
     transformational: Any = None
@@ -2746,6 +2749,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                             if _pa is not None:
                                 action = torch.full_like(action, int(_pa))
                                 _hyp_stats["probed"] += 1
+                                _ep_probe_steps += 1
                         # Verify: reveal event, OR agent reached the
                         # hypothesis's last-known position (<1.2), OR timeout
                         # (30 steps) — the latter resets the lock so the loop
@@ -3488,6 +3492,12 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                             float(ep_ret))
                     except Exception as _kle:
                         logger.warning("[curriculum] ledger record failed: %s", _kle)
+                # 2026-09-17: per-episode hypothesis-probe fraction (behavioural
+                # exploration signal). Outcome-based "far below norm" almost
+                # never fires with a stable policy (measured 1/78 episodes),
+                # so directed probing drives the exploration label.
+                _ep_probe_frac = _ep_probe_steps / max(1, len(rollout_actions))
+                _ep_probe_steps = 0
 
                 # --- Stage 19: narrative loop (memory -> narrative -> bias) ---
                 if narrative_loop is not None:
@@ -3508,12 +3518,15 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         _far_below_norm = (
                             ep_ret > 0.05 and _task_norm > 0.0
                             and ep_ret < 0.5 * _task_norm)
+                        # Directed exploration: hypothesis-probe steps.
+                        # 定向探索 = 假设探针步 (回报口径几乎不触发: 实测 1/78)。
+                        _exploring = (_ep_probe_frac >= 0.1) or _far_below_norm
                         if ep_ret > 0.5:
                             etype = "success"
                             importance = float(ep_ret)
                             description = f"Completed {task_tag}: return={ep_ret:.2f}"
                             lesson = f"Learned to navigate {task_tag}"
-                        elif not _far_below_norm:
+                        elif not _exploring:
                             etype = "failure"
                             importance = 8.0
                             description = f"Failed to reach goal in {task_tag}"
@@ -3523,8 +3536,14 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                             importance = 4.0
                             description = (
                                 f"Explored {task_tag} without clear reward "
-                                f"(return={ep_ret:.2f} vs norm={_task_norm:.2f})")
+                                f"(return={ep_ret:.2f} vs norm={_task_norm:.2f}, "
+                                f"probes={_ep_probe_frac:.2f})")
                             lesson = f"Probed unknown scene {task_tag}"
+                        if state.step % 50000 < rollout_capacity:
+                            logger.info(
+                                "[narrative] event typing: %s (ret=%.1f norm=%.1f "
+                                "probes=%.3f)",
+                                etype, ep_ret, _task_norm, _ep_probe_frac)
                         n_last_hidden = (
                             rollout_hidden_states[-1].detach().to(device)
                             if rollout_hidden_states else None)
