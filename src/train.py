@@ -3519,26 +3519,28 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                             ep_ret > 0.05 and _task_norm > 0.0
                             and ep_ret < 0.5 * _task_norm)
                         # Directed exploration: hypothesis-probe steps.
-                        # 定向探索 = 假设探针步 (回报口径几乎不触发: 实测 1/78)。
-                        _exploring = (_ep_probe_frac >= 0.1) or _far_below_norm
-                        if ep_ret > 0.5:
+                        # 定向探索 = 假设探针步, 与结果解耦 (回报口径实测 1/78;
+                        # 且此前 success 判定在前把探针 episode 全盖掉了)。
+                        # Threshold 0.06 from measured probe-fraction
+                        # distribution (median 0.038, p75 0.067).
+                        _exploring = (_ep_probe_frac >= 0.06) or _far_below_norm
+                        if _exploring:
+                            etype = "exploration"
+                            importance = 4.0
+                            description = (
+                                f"Explored {task_tag} (probes={_ep_probe_frac:.2f}, "
+                                f"return={ep_ret:.2f} vs norm={_task_norm:.2f})")
+                            lesson = f"Probed unknown scene {task_tag}"
+                        elif ep_ret > 0.5:
                             etype = "success"
                             importance = float(ep_ret)
                             description = f"Completed {task_tag}: return={ep_ret:.2f}"
                             lesson = f"Learned to navigate {task_tag}"
-                        elif not _exploring:
+                        else:
                             etype = "failure"
                             importance = 8.0
                             description = f"Failed to reach goal in {task_tag}"
                             lesson = f"Goal not reached in {task_tag}"
-                        else:
-                            etype = "exploration"
-                            importance = 4.0
-                            description = (
-                                f"Explored {task_tag} without clear reward "
-                                f"(return={ep_ret:.2f} vs norm={_task_norm:.2f}, "
-                                f"probes={_ep_probe_frac:.2f})")
-                            lesson = f"Probed unknown scene {task_tag}"
                         if state.step % 50000 < rollout_capacity:
                             logger.info(
                                 "[narrative] event typing: %s (ret=%.1f norm=%.1f "
