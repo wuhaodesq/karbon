@@ -5,6 +5,27 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### 10M 多 seed 全量评测 — 硬门进入"台阶"区间 (2026-09-20) ✅
+
+- 10M ckpt 全量评测 (far/cross 双探针, seeds 42/123):
+
+  | 指标 | seed 42 | seed 123 | 门槛 |
+  |------|---------|----------|------|
+  | object_permanence (far) | **0.572** | 0.525 | 0.6 |
+  | object_permanence (cross) | 0.526 | **0.643** ✅ | 0.6 |
+  | theory_of_mind (far/cross) | 0.488 | 0.455 / **0.538** | 0.55 |
+  | means_ends / intuitive_physics | 1.0 / 1.0 | 1.0 / 1.0 | — |
+  | number_sense | 0.625 | 0.45 | — |
+  | systematic_reasoning | 0.295 | 0.30 | 弱门 |
+
+- per-task op (s123 cross): 0.714/0.694/0.668/0.618/0.591 — **4/5 任务
+  个体过 0.6**。
+- **对比历史**: op 0.37 (800k) → 0.53-0.57 far / 0.53-0.64 cross; ToM
+  0.31 → 0.45-0.54。修复 5 处断链 + 300 万步训练后的真实推进, 差距
+  从"沟壑"变成"台阶" (op 跨 seed 在门槛上下波动)。
+- 待办: op 多 seed 稳健性 (跨 0.6 波动) + 形式推理专项 (~0.30) +
+  ToM 冲 0.55。
+
 ### openness 真根因: 双写入者 (2026-09-19 晚) 🔬
 
 - 时效淘汰部署后 openness 仍 0.00 → **ckpt 尸检**: 100/100 事件都是
