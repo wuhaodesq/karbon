@@ -5,6 +5,21 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### openness 真根因: 双写入者 (2026-09-19 晚) 🔬
+
+- 时效淘汰部署后 openness 仍 0.00 → **ckpt 尸检**: 100/100 事件都是
+  `success`, importance=**原始 ep_ret**(54-60), description 带
+  `scene=an episode` 后缀 — 格式指向**第二个写入者**。
+- **根因**: train.py L3639 遗留块 "Enhanced memory" 对每个成功 episode
+  再次 `promote_to_life_event(importance=raw ep_ret, 无 event_type→默认
+  success)` — 与叙事钩子 (正确类型/量纲) **双写**; 遗留路径 importance
+  高一个数量级, 把记忆窗口全部占据。此前对 importance/淘汰的修复
+  全被这条路径绕过。
+- **修复 (§13 单一写入者)**: 删除遗留重复块, 事件统一由
+  `narrative_loop.episode_end_hook` 写入。已部署, 10.5M 段生效。
+- 预期: 新 typed 事件 (~27% exploration) 逐步替换旧 success 窗口,
+  openness 在 1-2 个 segment 内可见 > 0。
+
 ### openness 根因修复 (2026-09-19) ✅ — 自传记忆的"史高事件垄断"
 
 - 现象: 行为型探索事件已产出 (`event typing: exploration` ×24) 但

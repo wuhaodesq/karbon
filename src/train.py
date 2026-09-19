@@ -3636,24 +3636,16 @@ and state.step % 50000 < rollout_capacity):
                     except Exception:
                         pass
 
-                # --- Enhanced memory: promote significant events to life story ---
-                if memory_manager is not None and ep_ret > 0.5:
-                    try:
-                        scene_desc = llm_fusion.describe_scene(
-                            model.encoder(obs_t) if model.use_slots and llm_fusion is not None else obs_t
-                        ) if llm_fusion is not None and llm_fusion.is_available else "an episode"
-                        task = curr_active_task.tag if curr_active_task else "sandbox"
-                        description = f"Completed {task}: return={ep_ret:.2f}, scene={scene_desc[:60]}"
-                        lesson = f"Learned to navigate {task}" if ep_ret > 0.7 else f"Explored {task}"
-                        memory_manager.promote_to_life_event(
-                            step=state.step,
-                            description=description,
-                            importance=float(ep_ret),
-                            episode_id=int(env.summary().get("episodes", 0)),
-                            lesson=lesson,
-                        )
-                    except Exception:
-                        pass
+                # --- Enhanced memory: life-event promotion is handled in ONE
+                # place — the narrative_loop.episode_end_hook below (typed
+                # events success/failure/exploration with aligned importance).
+                # This legacy duplicate promoted a SECOND event per success
+                # episode via promote_to_life_event(importance=raw ep_ret,
+                # no event_type -> default "success"), flooding the bounded
+                # autobiographical window and starving the exploration typing
+                # (forensic 2026-09-19: 100/100 events were success with
+                # importance ~ ep_ret; openness could never rise).
+                # 单一写入者: 遗留重复路径已删除 (双写导致记忆被成功事件垄断)。
 
                 # --- Theory of Mind update ---
                 if theory_of_mind is not None:
