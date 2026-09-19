@@ -5,6 +5,21 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### openness 解冻验证 + 第六处断链: difficulty 字段路径 (2026-09-20) ✅
+
+- **openness 解冻实测**: seg3 (10.5M 起, 单一写入者生效) 首个窗口
+  `[identity] ... openness=0.45`, 第二个窗口 0.30 — 恒 0.00 的历史
+  终结; 身份叙事文本同步变为 "gets curious when the world looks
+  unfamiliar" (openness 段位生效)。三层修复 (口径/淘汰/单写者) 全部
+  在产线验证通过。
+- **第六处断链 (difficulty 字段路径)**: 叙事偏好恒 `[0.25×4]` 的根因 —
+  `TaskTemplate` 构建时 difficulty 被**显式排除出 spec** 存入
+  `t.difficulty`, 而切换点读取 `t.spec.get("difficulty", 0.5)` → 全部
+  落回 0.5 → v4 的 trait→difficulty 映射一直是死输入 (耦合机制真、内容
+  空)。修复: 读 `t.difficulty` 属性。已部署, 11M 段生效; 预期叙事偏好
+  出现任务间差异 (co/openness 驱动)。
+- 另观察: seg3 eval `cur=1.00, tot=0.91` (历史上的高分), 待更多窗口确认。
+
 ### 10M 多 seed 全量评测 — 硬门进入"台阶"区间 (2026-09-20) ✅
 
 - 10M ckpt 全量评测 (far/cross 双探针, seeds 42/123):

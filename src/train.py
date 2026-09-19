@@ -4626,8 +4626,14 @@ and state.step % 50000 < rollout_capacity):
             # 3d-many in the v4 debut — the pointer-advance coupling was the
             # bug: it made peek_next coincide with the current task).
             new_task = None
+            # NOTE (2026-09-20): difficulty lives on the TaskTemplate
+            # attribute — it is excluded from ``spec`` at construction
+            # (see add_task above), so reading spec.get("difficulty") always
+            # fell back to 0.5 for every task, making the narrative
+            # preference permanently flat (0.25 each) and the trait→WHAT
+            # coupling a no-op. Read the attribute.
             _items = [
-                (t.id, float(t.spec.get("difficulty", 0.5)))
+                (t.id, float(getattr(t, "difficulty", 0.5)))
                 for t in curriculum._tasks.values()
                 if curr_active_task is None or t.id != curr_active_task.id
             ]
