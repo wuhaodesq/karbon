@@ -393,9 +393,11 @@ class AutobiographicalMemory:
         self,
         max_events: int = 100,
         promotion_threshold: float = 0.3,  # lowered: most episodes qualify
+        half_life_steps: int = 200_000,
     ) -> None:
         self._max = int(max_events)
         self._threshold = float(promotion_threshold)
+        self._half_life = max(1.0, float(half_life_steps))
         self._events: list[LifeEvent] = []
 
     @property
@@ -431,9 +433,21 @@ class AutobiographicalMemory:
         )
 
         if len(self._events) >= self._max:
-            # Evict least impactful
-            self._events.sort(key=lambda e: e.emotional_weight)
-            self._events.pop(0)
+            # Recency-weighted eviction (2026-09-19): identity is RECENT life,
+            # not the all-time highest-reward episodes. Legacy high-importance
+            # events (raw ep_ret 40-110) were immortal under pure importance
+            # ordering — new low-importance events (exploration 4-8) were
+            # evicted on arrival, so count("exploration") stayed 0 and the
+            # openness trait was pinned at 0.00. 时效加权淘汰: 身份反映近期
+            # 生活, 而非史高回报事件。
+            now = float(step)
+
+            def _score(e: LifeEvent) -> float:
+                age = max(0.0, now - float(e.timestamp_step))
+                return e.emotional_weight * (0.5 ** (age / self._half_life))
+
+            worst = min(self._events, key=_score)
+            self._events.remove(worst)
 
         self._events.append(event)
         self._events.sort(key=lambda e: e.timestamp_step)

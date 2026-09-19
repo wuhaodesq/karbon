@@ -3526,14 +3526,17 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         _exploring = (_ep_probe_frac >= 0.06) or _far_below_norm
                         if _exploring:
                             etype = "exploration"
-                            importance = 4.0
+                            importance = 8.0
                             description = (
                                 f"Explored {task_tag} (probes={_ep_probe_frac:.2f}, "
                                 f"return={ep_ret:.2f} vs norm={_task_norm:.2f})")
                             lesson = f"Probed unknown scene {task_tag}"
                         elif ep_ret > 0.5:
                             etype = "success"
-                            importance = float(ep_ret)
+                            # Cap importance: raw ep_ret (40-110) dwarfed the
+                            # failure(8)/exploration(8) scales and permanently
+                            # occupied the bounded autobiographical window.
+                            importance = min(float(ep_ret), 10.0)
                             description = f"Completed {task_tag}: return={ep_ret:.2f}"
                             lesson = f"Learned to navigate {task_tag}"
                         else:

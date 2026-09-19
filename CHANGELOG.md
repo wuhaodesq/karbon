@@ -5,6 +5,21 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### openness 根因修复 (2026-09-19) ✅ — 自传记忆的"史高事件垄断"
+
+- 现象: 行为型探索事件已产出 (`event typing: exploration` ×24) 但
+  `[identity] openness` 仍 0.00。
+- **根因**: 有界自传记忆 (100 条, 按 importance 淘汰) 被历史高回报事件
+  垄断 — 成功 importance=ep_ret (40-110) 碾压失败 (8)/探索 (4), 且
+  **旧高 importance 事件永远不会被挤出** (新低 importance 事件一到即被
+  淘汰) → `count("exploration")` 恒 0。
+- 修复: (a) `AutobiographicalMemory` 改为**时效加权淘汰**
+  `importance · 0.5^(age/half_life)` (half_life=200k 步, 默认) — 身份
+  反映近期生活而非史高回报, 旧事件可被新经历挤出; (b) importance 量纲
+  对齐 (success `min(ep_ret, 10)`, exploration 8.0)。
+- 测试 +3 (`tests/test_developmental_memory.py`: 时效淘汰/有界/门槛);
+  已部署, **10M 段生效**; 验证点: 下一个 `[identity]` 窗口 openness > 0。
+
 ### ③ 规则→任务选择 + ④ openness 口径 + TIMELINE 校正 (2026-09-17) ✅ 发育化对齐
 
 - **④ openness 事件口径**: "exploration" 原先要求 `ep_ret ≤ 0.05`, 稠密
