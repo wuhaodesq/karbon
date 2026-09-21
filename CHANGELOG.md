@@ -5,6 +5,27 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### op 回归事件与回滚 (2026-09-21) 🔴
+
+- **发现**: op 崩坏 — 逐 event 诊断 (新工具 `scripts/eval/op_failure_diag.py`,
+  分桶 pass/no_move/weak/close): 10M=**0.654** → 10.5M=0.154 → 11M=0.115
+  → 12M=0.163; s18e 独立复核 (10M per-task op 0.63-0.74; 12M 0.17-0.20);
+  means_ends/intuitive_physics 同步下降 (task0 means_ends 1.0→0.33)。
+  主失败模式 = no_move (65-74%: 遮挡时完全不接近 last_known)。
+- **二分**: 退化发生在 **10M→10.5M** 段内 (500k 备份粒度锁定)。
+- **已排除**: 模型结构错层 (184 键全同)、ckpt 损坏 (0 missing)、
+  probe/复述率 (36.9k vs 38.6k)、任务分布、回报 (46-116 正常)、
+  EWC 失败 (自 8.5M 长期存在, 非本次原因)。**机制未锁定** — 无显著训练
+  信号异常, 细粒度证据已随滚动 ckpt 淘汰, 判定为未记录的动力学分岔。
+- **处置 (用户批准, 2026-09-21 21:13)**: 停止 12.25M 训练并保留谱系
+  (backup_stage20_12251904.pt); **从 10M 复训** (total 10.5M 起, chain6
+  接续) — 新链保留 50k 粒度 ckpt, 若退化复现可当场定位机制。
+- **附带发现 (未修, 待专项)**: **EWC 从未生效** —
+  `online_ewc.consolidate()` 内部 `model.eval()` 后做 Fisher backward,
+  cudnn GRU 在 eval 模式必报 "backward can only be called in training
+  mode"; 每段 24-25 次失败, Fisher 永空 → 忘记防护长期缺失 (需独立修复
+  + 消融, 不混入本次复现实验)。
+
 ### openness 解冻验证 + 第六处断链: difficulty 字段路径 (2026-09-20) ✅
 
 - **openness 解冻实测**: seg3 (10.5M 起, 单一写入者生效) 首个窗口
