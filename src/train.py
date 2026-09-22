@@ -1400,7 +1400,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     code_exec_env: Any = None
     divergent_gen: Any = None
     # Stage 20 hypothesis-deduction counters (diagnostics)
-    _hyp_stats = {"proposed": 0, "probed": 0, "verified": 0, "timeout": 0}
+    _hyp_stats = {"proposed": 0, "probed": 0, "verified": 0, "failed": 0, "timeout": 0}
     # 2026-09-17: per-episode hypothesis-probe steps (behavioural exploration
     # signal for the narrative event typing; reset every episode end).
     _ep_probe_steps = 0
@@ -2185,6 +2185,9 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             ("narrative_loop_state",     narrative_loop,               None),
             ("thought_action_state",     thought_action,               None),
             ("knowledge_ledger_state",   knowledge_ledger,             None),
+            # 2026-09-22: probe_net is now trained (probe-outcome learning);
+            # persist its weights + update counter across restarts.
+            ("hypothesis_tester_state",  hypothesis_tester,            None),
         ]
         for key, module, _opt in _restore_map:
             if module is not None and key in _extra:
@@ -2739,43 +2742,51 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                 _hyp_step = state.step
                                 _hyp_stats["proposed"] += 1
                         # Probe: while something is occluded and no hypothesis
-                        # is active, take the least-tested hypothesis's action.
-                        # (probe_net starts untrained ~0.5 < 0.85 threshold ->
-                        # never probes; explicit activation guarantees the
-                        # loop runs. Gated on active occlusion so probing only
-                        # happens during genuine occlusion windows.)
+                        # is active, take a probe action. 2026-09-22: the gate
+                        # is now probe_net (learned from genuine tracking
+                        # outcomes) with an epsilon warmup so rehearsal stays
+                        # alive while the network is still untrained; the old
+                        # scripted always-probe bypass is gone. 学习门控+ε热身。
                         if _hsig["active"] and hypothesis_tester._active_hypothesis_id is None:
-                            _pa = hypothesis_tester.get_probe_action()
-                            if _pa is not None:
-                                action = torch.full_like(action, int(_pa))
-                                _hyp_stats["probed"] += 1
-                                _ep_probe_steps += 1
-                        # Verify: reveal event, OR agent reached the
-                        # hypothesis's last-known position (<1.2), OR timeout
-                        # (30 steps) — the latter resets the lock so the loop
-                        # can never deadlock.
-                        _verified = bool(_hsig["just_revealed"])
-                        if not _verified and _hyp_last_known is not None:
+                            _gate_ok = (hidden is not None
+                                        and hypothesis_tester.should_probe(
+                                            hidden.squeeze(0)))
+                            if _gate_ok or float(np.random.rand()) < hypothesis_tester.probe_epsilon():
+                                _pa = hypothesis_tester.get_probe_action()
+                                if _pa is not None:
+                                    _act = _hsig["active"][0]
+                                    hypothesis_tester.begin_probe_tracking(
+                                        hidden.squeeze(0) if hidden is not None
+                                        else torch.zeros(
+                                            int(model_cfg.get("hidden_size", 384)),
+                                            device=device),
+                                        (_act[1], _act[2]), state.step)
+                                    action = torch.full_like(action, int(_pa))
+                                    _hyp_stats["probed"] += 1
+                                    _ep_probe_steps += 1
+                        # Verify (durable, every step): arrival = success
+                        # (before or at reveal); reveal while far, or the
+                        # 30-step deadline, = failure. Replaces the old
+                        # per-step-local checks whose variables vanished each
+                        # step (timeout never fired; arrival only on the
+                        # occlusion step; feedback degenerated to reveal=1.0).
+                        _probe_outcome = None
+                        if hypothesis_tester._active_hypothesis_id is not None:
                             try:
                                 _lb = env._model.body("learner").id
                                 _ax = float(env._data.xpos[_lb, 0])
                                 _ay = float(env._data.xpos[_lb, 1])
-                                if math.hypot(_ax - _hyp_last_known[0],
-                                              _ay - _hyp_last_known[1]) < 1.2:
-                                    _verified = True
+                                _probe_outcome = hypothesis_tester.check_probe_outcome(
+                                    (_ax, _ay), bool(_hsig["just_revealed"]),
+                                    state.step)
                             except Exception:
-                                pass
-                        if not _verified and _hyp_step is not None \
-                                and state.step - _hyp_step > 30:
-                            _verified = True  # timeout: close the hypothesis
-                            _timed_out = True
-                        if _verified and hypothesis_tester._active_hypothesis_id is not None:
-                            hypothesis_tester.feedback(1.0 if not _timed_out else 0.0)
-                            if _timed_out:
-                                _hyp_stats["timeout"] += 1
-                            else:
+                                _probe_outcome = None
+                        if _probe_outcome is not None:
+                            if _probe_outcome == 1.0:
                                 _hyp_stats["verified"] += 1
-                            if not _timed_out and logic_engine is not None:
+                            else:
+                                _hyp_stats["failed"] += 1
+                        if _probe_outcome == 1.0 and logic_engine is not None:
                                 try:
                                     from src.models.logic_engine import (
                                         Quantifier, VariableType,
@@ -4742,7 +4753,13 @@ and state.step % 50000 < rollout_capacity):
 
         # --- Stage 20 hypothesis-deduction diagnostics ---
         if state.step % 5000 < rollout_capacity and _hyp_stats["proposed"] > 0:
-            logger.info("[hypothesis] stats: %s", {k: v for k, v in _hyp_stats.items()})
+            _hyp_log = {k: v for k, v in _hyp_stats.items()}
+            if hypothesis_tester is not None:
+                try:
+                    _hyp_log.update(hypothesis_tester.probe_learning_summary)
+                except Exception:
+                    pass
+            logger.info("[hypothesis] stats: %s", _hyp_log)
 
         # --- Stage 20-ToM diagnostics (trainable ToM module) ---
         if state.step % 5000 < rollout_capacity and _tom_stats["n"] > 0:

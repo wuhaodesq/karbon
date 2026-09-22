@@ -5,7 +5,34 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
-### op 回归事件与回滚 (2026-09-21) 🔴
+### op 振荡定位 + probe_net 闭环 (2026-09-22) 🔬 → ✅
+
+- **op 是振荡, 不是退化** (回滚复训 + 50k 粒度曲线): 10M=0.654 →
+  10.05M=**0.132** → 10.1M=0.343 → 10.15M=**0.649** → 10.2M≈0.56。
+  策略在"会/不会追踪"两模式间约每 50k 步翻转; "10M→12M 退化"实为
+  振荡采样假象 (10.5/11/12M 恰好都采在低谷)。复训前 100k 步与旧谱系
+  逐步一致 (确定性复现)。
+- **根因 (第 7 处死回路)**: 追踪行为是**脚本化探针脚手架**教的, 从未被
+  agent 学习内化 —
+  1. `probe_net` (学习型探针门控) 从未训练, 训练循环用 explicit
+     activation 完全绕过它;
+  2. 探针验证回路有 per-step 局部变量 bug: 到达检查只在遮挡步生效、
+     timeout 永不触发, feedback 退化为 "reveal 恒 1.0" (半个剧场)。
+- **修复 (probe_net 闭环)**:
+  - 持久化探针记账 `begin_probe_tracking`/`check_probe_outcome`:
+    到达=1.0 / reveal-时仍远=0.0 / 30 步超时=0.0, 跨步有效;
+  - 每次真实结局训练 probe_net (BCE, 有界样本缓冲 256, Adam 1e-3):
+    agent 学习"何时探测有回报" — 从脚本探测到**学习型信息寻求**;
+  - 训练循环改为学习门控 + ε 热身 (0.9→0.05, 2000 次更新衰减), 替换
+    脚本 always-probe;
+  - probe_net 权重随 ckpt 持久化 (`hypothesis_tester_state`); 统计新增
+    `failed` 桶与 probe 学习摘要 (updates/samples/loss)。
+- 测试 +5 (到达/reveal-far/超时/学习/有界); 已部署; 实验
+  `train_probe_s1` 自 10M 启动 (total 10.5M, chain7 接续)。
+- 验证计划: 10.15/10.3/10.45M diag 对照基线 (10.15=0.649) —
+  目标: 振荡幅度收窄、高相位保持 (门 0.6 需持续)。
+
+### op 回归事件与回滚 (2026-09-21) 🔴 *(2026-09-22 修正: 系振荡非退化)*
 
 - **发现**: op 崩坏 — 逐 event 诊断 (新工具 `scripts/eval/op_failure_diag.py`,
   分桶 pass/no_move/weak/close): 10M=**0.654** → 10.5M=0.154 → 11M=0.115

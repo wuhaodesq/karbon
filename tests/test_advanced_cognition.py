@@ -288,3 +288,57 @@ def test_meta_learner_summary():
     assert s["ema_decay"] == 0.9
     assert s["has_meta"] is True
     assert s["num_params"] > 0
+
+
+# =====================================================================
+# Probe-outcome learning (2026-09-22: close the probe_net loop)
+# =====================================================================
+
+
+def _probe_setup(ht: HypothesisTester, hidden: torch.Tensor, step: int = 100):
+    ht.propose_hypothesis(hidden, predicted_action=1)
+    ht.get_probe_action()
+    ht.begin_probe_tracking(hidden, last_known=(0.0, 0.0), step=step)
+
+
+def test_probe_outcome_arrival_is_success():
+    ht = HypothesisTester(d_model=D_MODEL, num_actions=NUM_ACTIONS)
+    _probe_setup(ht, torch.randn(D_MODEL))
+    out = ht.check_probe_outcome((0.5, 0.5), revealed=False, step=105)
+    assert out == 1.0
+    assert ht._active_hypothesis_id is None  # probe cleared
+    assert ht._active_lk is None
+
+
+def test_probe_outcome_reveal_while_far_is_failure():
+    ht = HypothesisTester(d_model=D_MODEL, num_actions=NUM_ACTIONS)
+    _probe_setup(ht, torch.randn(D_MODEL))
+    out = ht.check_probe_outcome((5.0, 5.0), revealed=True, step=101)
+    assert out == 0.0
+
+
+def test_probe_outcome_deadline_is_failure():
+    ht = HypothesisTester(d_model=D_MODEL, num_actions=NUM_ACTIONS)
+    _probe_setup(ht, torch.randn(D_MODEL), step=100)
+    assert ht.check_probe_outcome((5.0, 5.0), revealed=False, step=110) is None
+    assert ht.check_probe_outcome((5.0, 5.0), revealed=False, step=131) == 0.0
+
+
+def test_probe_net_learns_from_outcomes():
+    ht = HypothesisTester(d_model=D_MODEL, num_actions=NUM_ACTIONS, probe_lr=1e-2)
+    h = torch.randn(D_MODEL)
+    for _ in range(60):
+        _probe_setup(ht, h)
+        ht.check_probe_outcome((0.0, 0.0), revealed=False, step=101)  # success
+    assert ht._probe_updates > 0
+    assert ht.should_probe(h)  # p > 0.9 after repeated success training
+    sd = ht.state_dict()
+    assert sd["_probe_updates"] == ht._probe_updates
+
+
+def test_probe_samples_bounded():
+    ht = HypothesisTester(d_model=D_MODEL, num_actions=NUM_ACTIONS, probe_buffer=16)
+    for _ in range(50):
+        _probe_setup(ht, torch.randn(D_MODEL))
+        ht.check_probe_outcome((0.0, 0.0), revealed=False, step=101)
+    assert len(ht._probe_samples) <= 16  # Axiom 1

@@ -30,6 +30,7 @@ All four are **bounded** (fixed-size state, Axiom 1) and **optional**
 from __future__ import annotations
 
 import logging
+import math
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
@@ -96,6 +97,8 @@ class HypothesisTester(nn.Module):
         num_actions: int = 7,
         max_hypotheses: int = 32,
         probe_epsilon: float = 0.1,
+        probe_lr: float = 1e-3,
+        probe_buffer: int = 256,
     ) -> None:
         super().__init__()
         self._d_model = d_model
@@ -113,6 +116,24 @@ class HypothesisTester(nn.Module):
             nn.Linear(64, 1),
             nn.Sigmoid(),
         )
+        # 2026-09-22: close the probe-learning loop. probe_net existed but was
+        # never trained, and the training loop bypassed it with scripted
+        # always-probe activation - the tracking behaviour was rehearsed by
+        # scaffolding, never learned by the agent (op oscillated 0.13-0.65
+        # across 50k-step checkpoints). Now every genuine tracking outcome
+        # (arrival vs reveal-far / deadline) trains probe_net to predict WHEN
+        # probing pays off. 探针闭环: 用真实追踪结局训练 probe_net。
+        self._probe_optim = torch.optim.Adam(self.probe_net.parameters(), lr=float(probe_lr))
+        self._probe_samples: deque = deque(maxlen=int(probe_buffer))  # BOUNDS-OK
+        self._probe_updates = 0
+        self._probe_loss_last = 0.0
+        # Durable probe bookkeeping: the old code used per-step local
+        # variables, so arrival could only be checked on the occlusion step
+        # and the timeout never fired; verification degenerated into
+        # reveal-always-1.0 (theatre). These fields persist across steps.
+        self._active_lk: tuple[float, float] | None = None
+        self._active_step: int | None = None
+        self._active_hidden: torch.Tensor | None = None
 
     @property
     def capacity(self) -> int:
@@ -170,6 +191,105 @@ class HypothesisTester(nn.Module):
                 h.update(result, decay)
                 break
         self._active_hypothesis_id = None
+
+    # --- 2026-09-22: probe-outcome learning (durable scoring + probe_net) ---
+
+    @property
+    def probe_learning_summary(self) -> dict:
+        """Probe-gate learning state (for logs / ckpt diagnostics)."""
+        return {
+            "probe_updates": int(self._probe_updates),
+            "probe_samples": len(self._probe_samples),
+            "probe_loss": round(float(self._probe_loss_last), 4),
+        }
+
+    def probe_epsilon(self) -> float:
+        """Exploration rate for the learned gate.
+
+        High early (keeps the rehearsal alive while probe_net is untrained),
+        decaying with accumulated updates so the learned policy takes over.
+        Warmup 0.9 ≈ the old scripted always-probe, so behaviour stays
+        continuous at the switchover; floor 0.05 keeps minimal exploration.
+        """
+        return max(0.05, 0.9 * (1.0 - min(1.0, self._probe_updates / 2000.0)))
+
+    def begin_probe_tracking(
+        self,
+        hidden_state: torch.Tensor,
+        last_known: tuple[float, float],
+        step: int,
+    ) -> None:
+        """Remember what the active probe predicts (durable across steps)."""
+        self._active_hidden = hidden_state.detach().cpu()
+        self._active_lk = (float(last_known[0]), float(last_known[1]))
+        self._active_step = int(step)
+
+    def check_probe_outcome(
+        self,
+        agent_xy: tuple[float, float],
+        revealed: bool,
+        step: int,
+        arrival_radius: float = 1.2,
+        deadline_steps: int = 30,
+    ) -> float | None:
+        """Score the active probe: 1.0 arrived, 0.0 failed, None pending.
+
+        Arrival (reaching the last-known position within ``arrival_radius``)
+        counts as success - before or at the reveal; a reveal while still far,
+        or exceeding the deadline, counts as failure. 到达=成功; 未到即
+        reveal/超时=失败。On a terminal outcome the hypothesis feedback is
+        applied, probe_net takes one gradient step, and the probe is cleared.
+        """
+        if self._active_hypothesis_id is None or self._active_lk is None:
+            return None
+        d = math.hypot(agent_xy[0] - self._active_lk[0],
+                       agent_xy[1] - self._active_lk[1])
+        success: float | None = None
+        if d < arrival_radius:
+            success = 1.0
+        elif revealed:
+            success = 0.0
+        elif self._active_step is not None and step - self._active_step > deadline_steps:
+            success = 0.0
+        if success is None:
+            return None
+        self.record_probe_outcome(success)
+        self.feedback(success)
+        self._active_lk = None
+        self._active_step = None
+        self._active_hidden = None
+        return success
+
+    def record_probe_outcome(self, success: float) -> float:
+        """Store (hidden, outcome) and take one probe_net gradient step."""
+        if self._active_hidden is not None:
+            self._probe_samples.append((self._active_hidden, float(success)))
+        if len(self._probe_samples) < 8:
+            return 0.0
+        dev = next(self.probe_net.parameters()).device
+        hs = torch.stack([s[0] for s in self._probe_samples]).to(dev)
+        ys = torch.tensor([s[1] for s in self._probe_samples],
+                          dtype=torch.float32, device=dev)
+        pred = self.probe_net(hs).squeeze(-1)
+        loss = F.binary_cross_entropy(pred.clamp(1e-4, 1.0 - 1e-4), ys)
+        self._probe_optim.zero_grad()
+        loss.backward()
+        self._probe_optim.step()
+        self._probe_updates += 1
+        self._probe_loss_last = float(loss.item())
+        return self._probe_loss_last
+
+    # ------------------------------------------------------------------ state
+
+    def state_dict(self, *args, **kwargs):
+        sd = super().state_dict(*args, **kwargs)
+        sd["_probe_updates"] = int(self._probe_updates)
+        return sd
+
+    def load_state_dict(self, state_dict, strict=True):
+        sd = dict(state_dict)
+        self._probe_updates = int(sd.pop("_probe_updates", 0))
+        return super().load_state_dict(sd, strict=strict)
 
     def get_verified_rules(self, min_confidence: float = 0.7, min_tests: int = 3) -> list[Hypothesis]:
         """Return hypotheses that have been tested enough and have high confidence."""
