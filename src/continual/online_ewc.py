@@ -125,67 +125,77 @@ class OnlineEWC:
         Fisher estimator (empirical, diagonal):
             F_i ≈ E_batch[ (∂L/∂θ_i)² ]
         """
-        model.eval()
-        # Determine device from model's first parameter
-        _device = next(model.parameters()).device
-        accum: dict[str, torch.Tensor] = {
-            name: torch.zeros_like(self._fisher[name], device=_device) for name in self._param_names
-        }
-        count = 0
+        # 2026-09-22: Fisher backward requires TRAIN mode. The old
+        # model.eval() here made every consolidation fail on CUDA with
+        # "cudnn RNN backward can only be called in training mode" — EWC
+        # consolidated exactly zero times in the entire Stage-20 run, so the
+        # forgetting-protection this class exists for was never active.
+        # Switch to train for the Fisher pass and restore the caller's mode.
+        _was_training = bool(model.training)
+        model.train()
+        try:
+            # Determine device from model's first parameter
+            _device = next(model.parameters()).device
+            accum: dict[str, torch.Tensor] = {
+                name: torch.zeros_like(self._fisher[name], device=_device) for name in self._param_names
+            }
+            count = 0
 
-        # Iterate up to num_batches
-        it = iter(data_batches)
-        for _ in range(num_batches):
-            try:
-                batch = next(it)
-            except StopIteration:
-                break
+            # Iterate up to num_batches
+            it = iter(data_batches)
+            for _ in range(num_batches):
+                try:
+                    batch = next(it)
+                except StopIteration:
+                    break
 
+                model.zero_grad(set_to_none=True)
+                loss = loss_fn(model, batch)
+                loss.backward()
+
+                for name, p in model.named_parameters():
+                    if name not in accum or p.grad is None:
+                        continue
+                    # Skip params with shape mismatch (cross-env resume)
+                    if accum[name].shape != p.grad.shape:
+                        continue
+                    accum[name] += p.grad.detach().pow(2)
+                count += 1
+
+            if count == 0:
+                logger.warning("consolidate() got zero batches — Fisher not updated")
+                return
+
+            for name in self._param_names:
+                if name not in accum:
+                    continue
+                new_fisher = accum[name] / count
+                # Skip if Fisher shape doesn't match stored shape
+                if self._fisher[name].shape != new_fisher.shape:
+                    self._fisher[name] = new_fisher.clone()
+                    self._anchor[name] = dict(model.named_parameters())[name].detach().clone()
+                    continue
+                # Exponential decay accumulation
+                self._fisher[name] = self.config.gamma * self._fisher[name] + new_fisher
+
+            # Update anchor
+            if self.config.update_anchor_mode == "replace":
+                for name, p in model.named_parameters():
+                    if name in self._anchor:
+                        self._anchor[name] = p.detach().clone()
+            else:  # ema
+                alpha = self.config.anchor_ema_alpha
+                for name, p in model.named_parameters():
+                    if name in self._anchor:
+                        self._anchor[name] = (
+                            alpha * self._anchor[name] + (1 - alpha) * p.detach()
+                        )
+
+            self._has_consolidated_once = True
+            # Clear model grads so callers don't accidentally step on the Fisher-grads
             model.zero_grad(set_to_none=True)
-            loss = loss_fn(model, batch)
-            loss.backward()
-
-            for name, p in model.named_parameters():
-                if name not in accum or p.grad is None:
-                    continue
-                # Skip params with shape mismatch (cross-env resume)
-                if accum[name].shape != p.grad.shape:
-                    continue
-                accum[name] += p.grad.detach().pow(2)
-            count += 1
-
-        if count == 0:
-            logger.warning("consolidate() got zero batches — Fisher not updated")
-            return
-
-        for name in self._param_names:
-            if name not in accum:
-                continue
-            new_fisher = accum[name] / count
-            # Skip if Fisher shape doesn't match stored shape
-            if self._fisher[name].shape != new_fisher.shape:
-                self._fisher[name] = new_fisher.clone()
-                self._anchor[name] = dict(model.named_parameters())[name].detach().clone()
-                continue
-            # Exponential decay accumulation
-            self._fisher[name] = self.config.gamma * self._fisher[name] + new_fisher
-
-        # Update anchor
-        if self.config.update_anchor_mode == "replace":
-            for name, p in model.named_parameters():
-                if name in self._anchor:
-                    self._anchor[name] = p.detach().clone()
-        else:  # ema
-            alpha = self.config.anchor_ema_alpha
-            for name, p in model.named_parameters():
-                if name in self._anchor:
-                    self._anchor[name] = (
-                        alpha * self._anchor[name] + (1 - alpha) * p.detach()
-                    )
-
-        self._has_consolidated_once = True
-        # Clear model grads so callers don't accidentally step on the Fisher-grads
-        model.zero_grad(set_to_none=True)
+        finally:
+            model.train(_was_training)
 
     # ---------------------------------------------------------- penalty
 

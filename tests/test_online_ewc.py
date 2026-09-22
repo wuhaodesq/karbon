@@ -86,6 +86,42 @@ def test_consolidate_marks_as_ready():
     assert ewc.has_consolidated()
 
 
+def test_consolidate_switches_to_train_mode_and_restores_caller_mode():
+    """Fisher backward needs train mode (cudnn GRU: 'backward can only be
+    called in training mode' - the old model.eval() made EWC never
+    consolidate). The caller's mode must be restored afterwards."""
+    torch.manual_seed(0)
+    model = TinyNet()
+    ewc = OnlineEWC(model)
+    model.eval()
+    ewc.consolidate(model, _make_batches(3, 4), _loss_fn, num_batches=3)
+    assert ewc.has_consolidated()
+    assert model.training is False  # caller's eval mode restored
+
+
+def test_consolidate_from_eval_mode_with_recurrent_model():
+    """Closest CPU approximation of the CUDA failure: an RNN model called
+    from eval mode must still consolidate successfully."""
+    class TinyRNN(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.gru = nn.GRU(4, 8, batch_first=True)
+            self.head = nn.Linear(8, 2)
+
+        def forward(self, x):
+            _, h = self.gru(x.unsqueeze(1))
+            return self.head(h[-1])
+
+    torch.manual_seed(0)
+    model = TinyRNN()
+    ewc = OnlineEWC(model)
+    model.eval()
+    ewc.consolidate(model, _make_batches(3, 4), _loss_fn, num_batches=3)
+    assert ewc.has_consolidated()
+    assert any(f.sum() > 0 for f in ewc._fisher.values())
+    assert model.training is False
+
+
 def test_consolidate_fisher_positive():
     torch.manual_seed(0)
     model = TinyNet()
