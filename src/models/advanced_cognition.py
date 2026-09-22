@@ -127,6 +127,7 @@ class HypothesisTester(nn.Module):
         self._probe_samples: deque = deque(maxlen=int(probe_buffer))  # BOUNDS-OK
         self._probe_updates = 0
         self._probe_loss_last = 0.0
+        self._probe_last_error = ""
         # Durable probe bookkeeping: the old code used per-step local
         # variables, so arrival could only be checked on the occlusion step
         # and the timeout never fired; verification degenerated into
@@ -197,11 +198,14 @@ class HypothesisTester(nn.Module):
     @property
     def probe_learning_summary(self) -> dict:
         """Probe-gate learning state (for logs / ckpt diagnostics)."""
-        return {
+        out = {
             "probe_updates": int(self._probe_updates),
             "probe_samples": len(self._probe_samples),
             "probe_loss": round(float(self._probe_loss_last), 4),
         }
+        if self._probe_last_error:
+            out["probe_error"] = self._probe_last_error
+        return out
 
     def probe_epsilon(self) -> float:
         """Exploration rate for the learned gate.
@@ -253,28 +257,48 @@ class HypothesisTester(nn.Module):
             success = 0.0
         if success is None:
             return None
-        self.record_probe_outcome(success)
-        self.feedback(success)
-        self._active_lk = None
-        self._active_step = None
-        self._active_hidden = None
+        # try/finally: a failure in the probe_net update must never wedge the
+        # probe state (the first experiment stalled with the active probe
+        # stuck set - probing dropped from ~38k to 8 and nothing was learned).
+        try:
+            self.record_probe_outcome(success)
+            self.feedback(success)
+        finally:
+            self._active_lk = None
+            self._active_step = None
+            self._active_hidden = None
         return success
 
     def record_probe_outcome(self, success: float) -> float:
         """Store (hidden, outcome) and take one probe_net gradient step."""
         if self._active_hidden is not None:
             self._probe_samples.append((self._active_hidden, float(success)))
+            # take the pending hidden exactly once (repeated appends on a
+            # failure path saturated the buffer to 256 in the first run)
+            self._active_hidden = None
         if len(self._probe_samples) < 8:
             return 0.0
-        dev = next(self.probe_net.parameters()).device
-        hs = torch.stack([s[0] for s in self._probe_samples]).to(dev)
-        ys = torch.tensor([s[1] for s in self._probe_samples],
-                          dtype=torch.float32, device=dev)
-        pred = self.probe_net(hs).squeeze(-1)
-        loss = F.binary_cross_entropy(pred.clamp(1e-4, 1.0 - 1e-4), ys)
-        self._probe_optim.zero_grad()
-        loss.backward()
-        self._probe_optim.step()
+        try:
+            dev = next(self.probe_net.parameters()).device
+            hs = torch.stack([s[0] for s in self._probe_samples]).to(dev)
+            ys = torch.tensor([s[1] for s in self._probe_samples],
+                              dtype=torch.float32, device=dev)
+            # enable_grad: this is called from the rollout loop where the
+            # caller runs under torch.no_grad() (first live run failed with
+            # "element 0 of tensors does not require grad and does not have
+            # a grad_fn" - probe_net never trained).
+            with torch.enable_grad():
+                pred = self.probe_net(hs).squeeze(-1)
+                loss = F.binary_cross_entropy(pred.clamp(1e-4, 1.0 - 1e-4), ys)
+                self._probe_optim.zero_grad()
+                loss.backward()
+                self._probe_optim.step()
+        except Exception as ex:
+            # expose instead of swallowing (§14): the first live run silently
+            # wedged here; the message shows up in [hypothesis] stats now.
+            self._probe_last_error = f"{type(ex).__name__}: {ex}"[:160]
+            return 0.0
+        self._probe_last_error = ""
         self._probe_updates += 1
         self._probe_loss_last = float(loss.item())
         return self._probe_loss_last

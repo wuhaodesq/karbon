@@ -2779,7 +2779,12 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                 _probe_outcome = hypothesis_tester.check_probe_outcome(
                                     (_ax, _ay), bool(_hsig["just_revealed"]),
                                     state.step)
-                            except Exception:
+                            except Exception as _hpe:
+                                # §14: expose, don't swallow — the first probe
+                                # run stalled here silently (probes 38k -> 8).
+                                if state.step % 50000 < rollout_capacity:
+                                    logger.warning(
+                                        "[hypothesis] probe outcome check failed: %s", _hpe)
                                 _probe_outcome = None
                         if _probe_outcome is not None:
                             if _probe_outcome == 1.0:

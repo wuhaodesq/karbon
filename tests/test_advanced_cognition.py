@@ -342,3 +342,35 @@ def test_probe_samples_bounded():
         _probe_setup(ht, torch.randn(D_MODEL))
         ht.check_probe_outcome((0.0, 0.0), revealed=False, step=101)
     assert len(ht._probe_samples) <= 16  # Axiom 1
+
+
+def test_probe_learning_works_under_no_grad_caller():
+    """The rollout loop runs under torch.no_grad(); the probe_net update must
+    still train (first live run died with 'does not require grad')."""
+    ht = HypothesisTester(d_model=D_MODEL, num_actions=NUM_ACTIONS, probe_lr=1e-2)
+    h = torch.randn(D_MODEL)
+    with torch.no_grad():
+        for _ in range(20):
+            _probe_setup(ht, h)
+            ht.check_probe_outcome((0.0, 0.0), revealed=False, step=101)
+    assert ht._probe_updates > 0
+    assert ht._probe_last_error == ""
+
+
+def test_probe_wedge_guard_on_learning_failure():
+    """A failing probe_net update must not wedge the probe state (the first
+    live run stalled: active probe stuck, probing 38k -> 8, buffer saturated).
+    """
+    ht = HypothesisTester(d_model=D_MODEL, num_actions=NUM_ACTIONS)
+
+    def _boom(_x):
+        raise RuntimeError("boom")
+
+    ht.probe_net.forward = _boom
+    for i in range(10):
+        _probe_setup(ht, torch.randn(D_MODEL), step=i)
+        ht.check_probe_outcome((0.0, 0.0), revealed=False, step=i + 1)
+    assert ht._active_hypothesis_id is None  # never wedged
+    assert ht._active_lk is None
+    assert len(ht._probe_samples) <= 10  # one append per outcome, not per step
+    assert "RuntimeError" in ht._probe_last_error
