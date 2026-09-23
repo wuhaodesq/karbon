@@ -5,6 +5,22 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### 形式推理探针 v1 + 后端入口 (2026-09-23, 方案 B) ✅
+
+- **`SymbolBackend.add_fact`/`add_rule`** 公开入口 (有界, 显式前提注入) +
+  `query()` 分支修复: kanren 关系仅镜像事实, 枚举路径实测不可靠 (有事实
+  返 0) 且规则从未编入关系 → query 统一走"事实+单层规则"路径 (语义完备
+  且已测); 关系保留待未来真正的 resolution 工作。
+- **`scripts/eval/formal_reasoning_probe.py`**: 分级演绎电池 —
+  G1 事实检索 (含通配) / G2 单跳演绎 (含通配前提、合取) / G3 组合
+  (地面 Horn 子句 PASS; **多跳链 EXPECTED GAP** — 现匹配器无派生事实链,
+  如实报告) / G4 可靠性 (不可推导查询必须为空); 可选 `--ckpt` 模式查询
+  agent 自身知识 (causal 事实抽样 + 规则清单)。
+- 本地 (kanren 可用): **scorable 8/8 = 1.000, 1 个如实缺口 (多跳)**;
+  新增测试 7 例; 全量测试通过。
+- 该探针为"形式推理任务通过率"提供第一把真实尺子; agent 层面的伴生指标
+  = 训练日志的 hypothesis verified/failed (现 78/22)。
+
 ### 世界物理升级: 物体自由关节 (2026-09-23, 方案 A) ✅
 
 - **问题**: 3D 世界物体无 DOF (静态) → 推物不动 → force→motion 无法测量

@@ -161,6 +161,48 @@ class SymbolBackend:
             })
             self._rule_count += 1
 
+    def add_fact(self, predicate: str, args: tuple) -> bool:
+        """Add a ground fact (bounded by ``max_facts``).
+
+        Public premise-injection entry point used by the formal-reasoning
+        probe and external knowledge injection. 显式注入事实。
+        """
+        if self._fact_count >= self.max_facts:
+            return False
+        key = self._clean_name(str(predicate))
+        if not key:
+            return False
+        if _kanren_available and key not in self._relations:
+            self._relations[key] = Relation()
+        self._facts_db.setdefault(key, []).append(tuple(args))
+        if _kanren_available:
+            facts(self._relations[key], tuple(args))
+        self._fact_count += 1
+        return True
+
+    def add_rule(
+        self,
+        if_predicates: list,
+        then_predicate: tuple,
+        confidence: float = 1.0,
+    ) -> bool:
+        """Add a Horn clause (bounded by ``max_rules``).
+
+        ``if_predicates``: list of (pred, args) with ``"_"`` wildcards;
+        ``then_predicate``: (pred, args). 显式注入规则。
+        """
+        if self._rule_count >= self.max_rules:
+            return False
+        if not then_predicate:
+            return False
+        self._rules_db.append({
+            "if": [tuple(p) for p in if_predicates],
+            "then": tuple(then_predicate),
+            "confidence": float(confidence),
+        })
+        self._rule_count += 1
+        return True
+
     # -------------------------------------------------------- inference
 
     def query(self, predicate: str, args: tuple) -> SymbolResult:
@@ -177,32 +219,33 @@ class SymbolBackend:
         answers = []
         chain = []
 
-        if _kanren_available and predicate in self._relations:
-            x = var()
-            results = run(self.max_resolution_steps, x, self._relations[predicate](*args, x))
-            answers = list(results)
-            chain.append(f"kanren({predicate}{args}) -> {len(answers)} answers")
-        else:
-            # Fallback: simple lookup + forward chaining
-            if predicate in self._facts_db:
-                for fact in self._facts_db[predicate]:
-                    if self._match_args(fact, args):
-                        answers.append(fact)
-                chain.append(f"fact_lookup({predicate}{args}) -> {len(answers)} matches")
+        # 2026-09-23: query() serves the fact+rule semantics directly
+        # (_match_args wildcards + single-level Horn chaining). The kanren
+        # relations mirror facts only; their enumeration shape proved
+        # unreliable in probes (populated relation returned 0 answers) and
+        # rules were never compiled into relations, so the kanren branch was
+        # removed from query(). relations remain maintained for future
+        # proper resolution work.
+        # 事实查询 + 单层规则前向链; kanren 关系仅镜像事实, 枚举路径不可靠已弃用。
+        if predicate in self._facts_db:
+            for fact in self._facts_db[predicate]:
+                if self._match_args(fact, args):
+                    answers.append(fact)
+            chain.append(f"fact_lookup({predicate}{args}) -> {len(answers)} matches")
 
-            # Forward chain through rules
-            for rule in self._rules_db:
-                if_preds = rule["if"]
-                then_pred = rule["then"]
-                if then_pred[0] == predicate:
-                    all_match = True
-                    for cond_pred, cond_args in if_preds:
-                        if not self._check_predicate(cond_pred, cond_args):
-                            all_match = False
-                            break
-                    if all_match:
-                        answers.append(then_pred)
-                        chain.append(f"rule({if_preds} -> {then_pred}, conf={rule['confidence']:.2f})")
+        # Forward chain through rules
+        for rule in self._rules_db:
+            if_preds = rule["if"]
+            then_pred = rule["then"]
+            if then_pred[0] == predicate:
+                all_match = True
+                for cond_pred, cond_args in if_preds:
+                    if not self._check_predicate(cond_pred, cond_args):
+                        all_match = False
+                        break
+                if all_match:
+                    answers.append(then_pred)
+                    chain.append(f"rule({if_preds} -> {then_pred}, conf={rule['confidence']:.2f})")
 
         conf = min(1.0, len(answers) / max(1, len(self._rules_db))) if answers else 0.0
 
