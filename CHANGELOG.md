@@ -5,6 +5,23 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### 世界物理升级: 物体自由关节 (2026-09-23, 方案 A) ✅
+
+- **问题**: 3D 世界物体无 DOF (静态) → 推物不动 → force→motion 无法测量
+  (systematic_reasoning 的 fm_consistency 结构性 0, 详见下条诊断)。
+- **变更**:
+  (a) 每个物体加**带阻尼自由关节** (`<joint type="free" damping=1.0
+  frictionloss=0.1>`) → 接触即产生真实运动;
+  (b) crossing 瞬移改为 qpos 直写 + 清零速度 + mj_forward (自由关节忽略
+  `model.body_pos`, 旧路径失效; 保留静态回退);
+  (c) `_sync_held_object` 同步 z 轴并阻尼全 6 维速度 (此前因无 DOF 恒为
+  no-op; 自由关节后携带物体将真实跟随)。
+- **验证**: 随机行走 300 步 → **22/22 pairs 有真实位移, 3/8 物体被推动**;
+  crossing 800 步无崩溃 (31 事件正常); 碰撞矩阵核对无误 (agent↔物体可推,
+  agent↔家具不卡住, 物体可停家具/地面)。
+- **影响**: 动力学变更 → 11M 重启后策略需适应 (op/physics/fm 观察中);
+  10.75M 已备份为"物理前最佳"。
+
 ### 形式推理门诊断: 卡点在世界物理, 不在能力 (2026-09-23) 🔬
 
 - 全量评测 (10.75M): op 0.70-0.75 / ToM 0.57-0.61 双探针双过门;

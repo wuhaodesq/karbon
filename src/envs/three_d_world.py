@@ -347,7 +347,16 @@ class SceneBuilder:
                 geom = f'<geom type="capsule" size="{sx} {sz}" pos="0 0 0" mass="{obj.mass}" material="obj_{i}_mat"/>'
             else:
                 geom = f'<geom type="box" size="{sx} {sy} {sz}" pos="0 0 0" mass="{obj.mass}" material="obj_{i}_mat"/>'
-            xml += f'    <body name="obj_{i}" pos="{px} {py} {pz}">\n      {geom}\n    </body>\n'
+            # 2026-09-23: objects get a damped FREE JOINT so agent contact
+            # produces real motion. Before this the bodies were static
+            # (0 DOF): data.qvel had shape (2,) (learner only), the
+            # force->motion tracker crashed on every append (swallowed),
+            # and the systematic-reasoning gate had no physical data to
+            # measure. Damping/frictionloss keep pushes short-lived
+            # (tabletop feel) instead of endless sliding.
+            xml += (f'    <body name="obj_{i}" pos="{px} {py} {pz}">\n'
+                    f'      <joint type="free" damping="1.0" frictionloss="0.1"/>\n'
+                    f'      {geom}\n    </body>\n')
 
         # Agents (movable spheres)
         for agent in self._agents:
@@ -1008,11 +1017,27 @@ class ThreeDWorld:
                         if not _crossing_skipped and _fd < 0.4:
                             _crossing_skipped = True
                 if not _crossing_skipped:
-                    # Mirror position across the wall (keep z)
-                    self._model.body_pos[_bid] = np.array([
-                        2.0 * _ocx - _px, 2.0 * _ocy - _py,
-                        float(self._data.xpos[_bid, 2]),
-                    ])
+                    # Mirror position across the wall (keep z).
+                    # 2026-09-23: teleport via qpos — free-jointed objects
+                    # ignore model.body_pos once they own a DOF (the joint
+                    # pose drives xpos). Static fallback kept for safety.
+                    _mx = 2.0 * _ocx - _px
+                    _my = 2.0 * _ocy - _py
+                    _jnt = int(self._model.body_jntadr[_bid])
+                    if _jnt >= 0:
+                        _qadr = int(self._model.jnt_qposadr[_jnt])
+                        self._data.qpos[_qadr] = _mx
+                        self._data.qpos[_qadr + 1] = _my
+                        self._data.qpos[_qadr + 2] = float(self._data.xpos[_bid, 2])
+                        self._data.qpos[_qadr + 3:_qadr + 7] = (1.0, 0.0, 0.0, 0.0)
+                        _dadr = int(self._model.body_dofadr[_bid])
+                        if _dadr >= 0:
+                            self._data.qvel[_dadr:_dadr + 6] = 0.0
+                        mujoco.mj_forward(self._model, self._data)
+                    else:
+                        self._model.body_pos[_bid] = np.array([
+                            _mx, _my, float(self._data.xpos[_bid, 2]),
+                        ])
                     # Keep the object behind the wall for hold steps so the
                     # occlusion persists long enough to be measured by the eval
                     # metric (previously the event closed within 1-2 steps and
@@ -1813,14 +1838,14 @@ class ThreeDWorld:
             target_z = az
             dof = self._model.body_dofadr[held_bid]
             if dof >= 0:
-                # Smoothly move toward target
-                cur_x = self._data.qpos[dof]
-                cur_y = self._data.qpos[dof + 1]
-                self._data.qpos[dof] = cur_x + (target_x - cur_x) * 0.3
-                self._data.qpos[dof + 1] = cur_y + (target_y - cur_y) * 0.3
-                # Reduce velocity to prevent flinging
-                self._data.qvel[dof] *= 0.3
-                self._data.qvel[dof + 1] *= 0.3
+                # Smoothly follow on all three axes (z too, else the object
+                # sags under gravity now that free joints are real).
+                for k, tgt in enumerate((target_x, target_y, target_z)):
+                    cur = self._data.qpos[dof + k]
+                    self._data.qpos[dof + k] = cur + (tgt - cur) * 0.3
+                # Damp linear + angular velocity to prevent flinging
+                for k in range(6):
+                    self._data.qvel[dof + k] *= 0.3
         except Exception as _e:
             _expose_exc("_sync_held_object")
 
