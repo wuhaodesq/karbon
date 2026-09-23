@@ -1276,20 +1276,28 @@ class ThreeDWorld:
                         # displacement. The old code read
                         # ``self._data.qvel[body_id, 0/1]`` — but in this
                         # kinematic-object model qvel is 1-D (shape (2,)),
-                        # so the two-index access ALWAYS raised IndexError,
-                        # was swallowed by the per-object handler, and
-                        # force_motion_pairs stayed empty for the entire
-                        # Stage-20 run (systematic_reasoning's
-                        # fm_consistency component was structurally 0.0;
-                        # 2026-09-23 diagnosis: 0 pairs in 12k eval steps,
-                        # reproduced: qvel=(2,) vs body_id 0..15).
+                        # so the two-index access ALWAYS raised IndexError
+                        # and force_motion_pairs stayed empty (2026-09-23
+                        # diagnosis: 0 pairs in 12k eval steps).
+                        #
+                        # Honesty rule (anti-self-deception): a pair is only
+                        # recorded when the object ACTUALLY MOVED. In the
+                        # current kinematic 3D world objects are static
+                        # (verified: 0 of 309 near-object events displaced
+                        # the object), so counting proximity events would
+                        # let fm_consistency report force->motion
+                        # understanding that does not exist. Static objects
+                        # -> empty pairs -> the component honestly reads 0
+                        # until the world gains real push physics.
                         _prev = (self._obj_prev_xy[i]
                                  if i < len(self._obj_prev_xy) else (ox, oy))
-                        self._force_motion_pairs.append({
-                            "force": (dx, dy),
-                            "velocity_after": (ox - _prev[0], oy - _prev[1]),
-                            "object_id": i,
-                        })
+                        _vx, _vy = ox - _prev[0], oy - _prev[1]
+                        if (abs(_vx) + abs(_vy)) > 1e-4:
+                            self._force_motion_pairs.append({
+                                "force": (dx, dy),
+                                "velocity_after": (_vx, _vy),
+                                "object_id": i,
+                            })
                 except Exception:
                     continue  # legit: per-object loop, obj_ may be gone
 
