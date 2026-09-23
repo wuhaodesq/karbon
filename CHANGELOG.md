@@ -5,6 +5,25 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### 形式推理门诊断: 卡点在世界物理, 不在能力 (2026-09-23) 🔬
+
+- 全量评测 (10.75M): op 0.70-0.75 / ToM 0.57-0.61 双探针双过门;
+  **唯一未过 = systematic_reasoning 0.28** (门 0.6)。分解其三分量:
+  entropy_score≈0.30-0.36 ✓ / rule_score=1.0 ✓ / **fm_consistency=0.0 ✗**。
+- **根因链**:
+  1. 原 tracker 读 `data.qvel[body_id, 0/1]` — 但运动学物体模型 qvel 是
+     一维 (2,), 每次 append 前必抛 IndexError → 被 per-object except 吞掉
+     → force_motion_pairs 自 Stage 20 起恒空 (12000 步 0 对);
+  2. 修复崩溃后**诚实性检查**: 3D 世界物体**完全静态** (309 个近物事件
+     0 位移) → 若按"靠近事件"计数会让 fm_consistency 假性饱和到 1.0 →
+     **回收 (b69ace7 → 9cd3886)**: 仅当物体真实位移才记录 → pairs 如实
+     为空 → 分数如实停在 0.28。
+- **结论**: 该门卡点是**世界物理缺失** (无"推物→物动"动力学), 不是智能体
+  缺"系统逻辑"; op/ToM 门已诚实达成, 这是最后一道门。候选方案:
+  A) 给物体加自由关节 (真实推动力学, 环境升级+需训练适应);
+  B) 以真实形式化探针 (kanren/logic 演绎任务) 重新定义"形式推理通过率";
+  C) 不采纳 (用解锁版=自欺)。待用户决策。
+
 ### EWC 生效 = op 突破振荡 regime change (2026-09-23 凌晨) ✅✅
 
 - EWC 修复部署后, chain7 seg1 (10.5M→) 的 op 全程跳升 (逐 event 诊断,
