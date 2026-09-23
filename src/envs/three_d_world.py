@@ -578,6 +578,9 @@ class ThreeDWorld:
         # --- Developmental signal trackers (Stage 8+) ---
         self._occlusion_events: list[dict] = []
         self._force_motion_pairs: list[dict] = []
+        # Per-object previous positions for velocity_after (bounded:
+        # num_objects entries). 2026-09-23 fm_consistency fix.
+        self._obj_prev_xy: list[tuple[float, float]] = []
         self._count_trials: list[dict] = []
         self._actions: list[int] = []
         self._object_contact_order: list[int] = []
@@ -1186,6 +1189,7 @@ class ThreeDWorld:
         # Reset developmental trackers on scene rebuild
         self._occlusion_events = []
         self._force_motion_pairs = []
+        self._obj_prev_xy: list[tuple[float, float]] = []
         self._count_trials = []
         self._actions = []
         self._object_contact_order = []
@@ -1268,11 +1272,22 @@ class ThreeDWorld:
                     reach = self._contact_reach(i)
                     # Object in front and close enough to be pushed
                     if ux * rel_x + uy * rel_y > 0 and rel_dist < reach:
-                        vx = float(self._data.qvel[body_id, 0])
-                        vy = float(self._data.qvel[body_id, 1])
+                        # velocity_after: the object's ACTUAL per-step
+                        # displacement. The old code read
+                        # ``self._data.qvel[body_id, 0/1]`` — but in this
+                        # kinematic-object model qvel is 1-D (shape (2,)),
+                        # so the two-index access ALWAYS raised IndexError,
+                        # was swallowed by the per-object handler, and
+                        # force_motion_pairs stayed empty for the entire
+                        # Stage-20 run (systematic_reasoning's
+                        # fm_consistency component was structurally 0.0;
+                        # 2026-09-23 diagnosis: 0 pairs in 12k eval steps,
+                        # reproduced: qvel=(2,) vs body_id 0..15).
+                        _prev = (self._obj_prev_xy[i]
+                                 if i < len(self._obj_prev_xy) else (ox, oy))
                         self._force_motion_pairs.append({
                             "force": (dx, dy),
-                            "velocity_after": (vx, vy),
+                            "velocity_after": (ox - _prev[0], oy - _prev[1]),
                             "object_id": i,
                         })
                 except Exception:
@@ -1447,6 +1462,17 @@ class ThreeDWorld:
                     self._object_contact_order.append(i)
             except Exception:
                 continue  # legit: per-object loop, obj_ may be gone
+
+        # Remember object positions for next step's velocity_after
+        # (bounded: one (x, y) tuple per object, 2026-09-23).
+        try:
+            self._obj_prev_xy = [
+                (float(self._data.xpos[self._model.body(f"obj_{i}").id, 0]),
+                 float(self._data.xpos[self._model.body(f"obj_{i}").id, 1]))
+                for i in range(self._num_objects)
+            ]
+        except Exception:
+            self._obj_prev_xy = []  # legit: scene rebuilt mid-call
 
     @staticmethod
     def _approach_ok(d_now: float, d0: float, ratio: float, radius: float) -> bool:
