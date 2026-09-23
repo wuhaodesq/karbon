@@ -1,18 +1,33 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
 ## [Unreleased]
 
-### EWC 修复: 巩固机制首次真正生效 (2026-09-22) ✅
+### EWC 生效 = op 突破振荡 regime change (2026-09-23 凌晨) ✅✅
 
-- OnlineEWC.consolidate() 在 Fisher backward 前调用 `model.eval()` —
+- EWC 修复部署后, chain7 seg1 (10.5M→) 的 op 全程跳升 (逐 event 诊断,
+  50k 粒度): 10.55M=0.689/0.698 (二次测量), 10.60M=0.767/0.775 (二次),
+  10.65M=0.760, 10.70M=0.644 — **四个连续检查点全部 ≥0.64 (三次 ≥0.69)**;
+  复核测量复现 ±0.01。
+- **对比**: 此前三条件共 23 个点 (脚本探针 9 / 无探针 4 / 学习探针 10)
+  全部落在 **0.12-0.66** 振荡 (均值 0.30-0.35)。
+- **解读**: 振荡根因 = **灾难性遗忘**。无 EWC 时每 ~26 分钟的 sleep 周期/
+  任务切换持续侵蚀追踪技能再重学 → 双模式振荡; EWC 首次真正生效
+  (has_consolidated: True, Fisher L1 3.9→64.9, 失败 0 次) 后技能保持 →
+  regime change。"探针门控"仅部分改善 (早段优势、尾段消失) 与"遗忘是
+  主因"一致。
+- 待确认: multi-seed (7/123) 稳健性 (进行中) + 至 11M 的持续窗口 +
+  全量 stage18 eval + ToM 门 (0.55)。
+
+### EWC 修复: consolidate 需在 train 模式跑 Fisher (2026-09-22) ✅
+
+- `OnlineEWC.consolidate()` 在 Fisher backward 前调用 `model.eval()` —
   cudnn GRU 在 eval 模式必报 "backward can only be called in training
   mode" → 每段 24-25 次失败, **Stage 20 全程 EWC 零次巩固** (遗忘防护
   从未生效)。修复: Fisher 通道切 train 模式 + finally 恢复调用者模式。
-- 测试 +2 (模式切换/恢复 + RNN 模型 eval 调用); 已部署, 10.5M 重启生效。
-
+- 测试 +2 (模式切换/恢复 + RNN 模型 eval 调用); 10.5M 重启生效, 效果见上。
 
 ### op 振荡定位 + probe_net 闭环 (2026-09-22) 🔬 → ✅
 
@@ -2790,15 +2805,6 @@ See `docs/stage1_report.md` for the full run card.
 
 ## [Unreleased]
 
-### EWC 修复: 巩固机制首次真正生效 (2026-09-22) ✅
-
-- OnlineEWC.consolidate() 在 Fisher backward 前调用 `model.eval()` —
-  cudnn GRU 在 eval 模式必报 "backward can only be called in training
-  mode" → 每段 24-25 次失败, **Stage 20 全程 EWC 零次巩固** (遗忘防护
-  从未生效)。修复: Fisher 通道切 train 模式 + finally 恢复调用者模式。
-- 测试 +2 (模式切换/恢复 + RNN 模型 eval 调用); 已部署, 10.5M 重启生效。
-
-
 ### Fixed — Cross-stage checkpoint resume (critical bug)
 
 - `src/train.py::train`: when resuming from a checkpoint whose `stage` field
@@ -2937,15 +2943,6 @@ See `docs/stage1_report.md` for the full run card.
 
 ## [Unreleased]
 
-### EWC 修复: 巩固机制首次真正生效 (2026-09-22) ✅
-
-- OnlineEWC.consolidate() 在 Fisher backward 前调用 `model.eval()` —
-  cudnn GRU 在 eval 模式必报 "backward can only be called in training
-  mode" → 每段 24-25 次失败, **Stage 20 全程 EWC 零次巩固** (遗忘防护
-  从未生效)。修复: Fisher 通道切 train 模式 + finally 恢复调用者模式。
-- 测试 +2 (模式切换/恢复 + RNN 模型 eval 调用); 已部署, 10.5M 重启生效。
-
-
 ### Added — Stages 3 / 4 / 5 / 6 wiring (full pipeline integrated end-to-end)
 
 **Stage 3 · World Model**
@@ -3015,15 +3012,6 @@ and included in the checkpoint envelope.
 
 ## [Unreleased]
 
-### EWC 修复: 巩固机制首次真正生效 (2026-09-22) ✅
-
-- OnlineEWC.consolidate() 在 Fisher backward 前调用 `model.eval()` —
-  cudnn GRU 在 eval 模式必报 "backward can only be called in training
-  mode" → 每段 24-25 次失败, **Stage 20 全程 EWC 零次巩固** (遗忘防护
-  从未生效)。修复: Fisher 通道切 train 模式 + finally 恢复调用者模式。
-- 测试 +2 (模式切换/恢复 + RNN 模型 eval 调用); 已部署, 10.5M 重启生效。
-
-
 ### Added — Stage 2 wiring (Hybrid backbone in the training loop)
 
 - `configs/stage2_hybrid.yaml` — Stage 2 config: enables `use_hybrid_backbone`,
@@ -3062,15 +3050,6 @@ start the Hybrid model fresh (expected — different architecture).
 ---
 
 ## [Unreleased]
-
-### EWC 修复: 巩固机制首次真正生效 (2026-09-22) ✅
-
-- OnlineEWC.consolidate() 在 Fisher backward 前调用 `model.eval()` —
-  cudnn GRU 在 eval 模式必报 "backward can only be called in training
-  mode" → 每段 24-25 次失败, **Stage 20 全程 EWC 零次巩固** (遗忘防护
-  从未生效)。修复: Fisher 通道切 train 模式 + finally 恢复调用者模式。
-- 测试 +2 (模式切换/恢复 + RNN 模型 eval 调用); 已部署, 10.5M 重启生效。
-
 
 ### Added — Stage 1 wiring (RND + Bounded Replay + Coverage)
 
@@ -3142,15 +3121,6 @@ See `docs/stage0_report.md` for the full run card.
 
 ## [Unreleased]
 
-### EWC 修复: 巩固机制首次真正生效 (2026-09-22) ✅
-
-- OnlineEWC.consolidate() 在 Fisher backward 前调用 `model.eval()` —
-  cudnn GRU 在 eval 模式必报 "backward can only be called in training
-  mode" → 每段 24-25 次失败, **Stage 20 全程 EWC 零次巩固** (遗忘防护
-  从未生效)。修复: Fisher 通道切 train 模式 + finally 恢复调用者模式。
-- 测试 +2 (模式切换/恢复 + RNN 模型 eval 调用); 已部署, 10.5M 重启生效。
-
-
 ### Added — Nightly / interruptible training
 
 - `scripts/cloud/nightly_run.sh` — one-command starter for off-peak-only
@@ -3174,15 +3144,6 @@ See `docs/stage0_report.md` for the full run card.
 ---
 
 ## [Unreleased]
-
-### EWC 修复: 巩固机制首次真正生效 (2026-09-22) ✅
-
-- OnlineEWC.consolidate() 在 Fisher backward 前调用 `model.eval()` —
-  cudnn GRU 在 eval 模式必报 "backward can only be called in training
-  mode" → 每段 24-25 次失败, **Stage 20 全程 EWC 零次巩固** (遗忘防护
-  从未生效)。修复: Fisher 通道切 train 模式 + finally 恢复调用者模式。
-- 测试 +2 (模式切换/恢复 + RNN 模型 eval 调用); 已部署, 10.5M 重启生效。
-
 
 ### Added — Autosync daemons (periodic GitHub / TOS / rsync push)
 
@@ -3218,15 +3179,6 @@ without manual intervention.
 
 ## [Unreleased]
 
-### EWC 修复: 巩固机制首次真正生效 (2026-09-22) ✅
-
-- OnlineEWC.consolidate() 在 Fisher backward 前调用 `model.eval()` —
-  cudnn GRU 在 eval 模式必报 "backward can only be called in training
-  mode" → 每段 24-25 次失败, **Stage 20 全程 EWC 零次巩固** (遗忘防护
-  从未生效)。修复: Fisher 通道切 train 模式 + finally 恢复调用者模式。
-- 测试 +2 (模式切换/恢复 + RNN 模型 eval 调用); 已部署, 10.5M 重启生效。
-
-
 ### Added — Full-journey planning doc
 
 - `FULL_JOURNEY.md` — Bilingual end-to-end Stage 0–6 timeline, cost matrix,
@@ -3244,15 +3196,6 @@ without manual intervention.
 
 ## [Unreleased]
 
-### EWC 修复: 巩固机制首次真正生效 (2026-09-22) ✅
-
-- OnlineEWC.consolidate() 在 Fisher backward 前调用 `model.eval()` —
-  cudnn GRU 在 eval 模式必报 "backward can only be called in training
-  mode" → 每段 24-25 次失败, **Stage 20 全程 EWC 零次巩固** (遗忘防护
-  从未生效)。修复: Fisher 通道切 train 模式 + finally 恢复调用者模式。
-- 测试 +2 (模式切换/恢复 + RNN 模型 eval 调用); 已部署, 10.5M 重启生效。
-
-
 ### Added — Cloud-training operational scripts
 
 - `scripts/preflight.py` — 10-step pre-training checklist (Python version, torch/CUDA, GPU inventory, Triton, disk, env vars, project imports, bounded check, preset load, 20-step smoke). Exits nonzero on any critical failure.
@@ -3265,15 +3208,6 @@ without manual intervention.
 ---
 
 ## [Unreleased]
-
-### EWC 修复: 巩固机制首次真正生效 (2026-09-22) ✅
-
-- OnlineEWC.consolidate() 在 Fisher backward 前调用 `model.eval()` —
-  cudnn GRU 在 eval 模式必报 "backward can only be called in training
-  mode" → 每段 24-25 次失败, **Stage 20 全程 EWC 零次巩固** (遗忘防护
-  从未生效)。修复: Fisher 通道切 train 模式 + finally 恢复调用者模式。
-- 测试 +2 (模式切换/恢复 + RNN 模型 eval 调用); 已部署, 10.5M 重启生效。
-
 
 ### Added — RTX 5090 / Blackwell support + platform-image (PyTorch 2.8 / CUDA 12.8) support
 
@@ -3302,15 +3236,6 @@ Ubuntu 22.04 / CUDA 12.8** running on RTX 5090 (Blackwell / sm_120).
 
 ## [Unreleased]
 
-### EWC 修复: 巩固机制首次真正生效 (2026-09-22) ✅
-
-- OnlineEWC.consolidate() 在 Fisher backward 前调用 `model.eval()` —
-  cudnn GRU 在 eval 模式必报 "backward can only be called in training
-  mode" → 每段 24-25 次失败, **Stage 20 全程 EWC 零次巩固** (遗忘防护
-  从未生效)。修复: Fisher 通道切 train 模式 + finally 恢复调用者模式。
-- 测试 +2 (模式切换/恢复 + RNN 模型 eval 调用); 已部署, 10.5M 重启生效。
-
-
 ### Added — HuggingFace-format export path (this session)
 
 **Export tooling for TOS / HuggingFace Hub / ARK custom-model upload:**
@@ -3335,15 +3260,6 @@ Ubuntu 22.04 / CUDA 12.8** running on RTX 5090 (Blackwell / sm_120).
 ---
 
 ## [Unreleased]
-
-### EWC 修复: 巩固机制首次真正生效 (2026-09-22) ✅
-
-- OnlineEWC.consolidate() 在 Fisher backward 前调用 `model.eval()` —
-  cudnn GRU 在 eval 模式必报 "backward can only be called in training
-  mode" → 每段 24-25 次失败, **Stage 20 全程 EWC 零次巩固** (遗忘防护
-  从未生效)。修复: Fisher 通道切 train 模式 + finally 恢复调用者模式。
-- 测试 +2 (模式切换/恢复 + RNN 模型 eval 调用); 已部署, 10.5M 重启生效。
-
 
 ### Added — Full local pre-work batch (A–N)
 
@@ -3459,4 +3375,3 @@ Ubuntu 22.04 / CUDA 12.8** running on RTX 5090 (Blackwell / sm_120).
 - 24h VRAM slope: ... GB/day
 - ...
 ```
-
