@@ -75,6 +75,14 @@ env:
   occluder_reveal_bonus: 2.0
   occluder_reveal_ratio: 0.70
   occluder_obs_slots: 3
+  # 2026-09-24: restore the Stage-20b op curriculum lock for the free-joint
+  # physics. Ungated, the contact reward (min(contacts*0.05, 0.5)/step) became
+  # farmable by pushing movable objects (~sustained 0.5/step; mean_ret spiked
+  # to 194 and the policy pivoted from tracking to bulldozing; full eval at
+  # 11.8M: op 0.25-0.36, ToM 0.21-0.30). The lock freezes contact/social/
+  # mobility rewards and keeps occluder tracking + a thin chain/logic tie.
+  # 课程锁: 物理升级后接触奖励可被推物刷分, 重新锁定 op 专项。
+  focus_op_only: true
   # v2: 修复后 crossing 语义 (hold 中不重复镜像/镜像越界检查在代码层已修)
   object_crossing_every: 100          # 多物体随机穿越: 事件密集但不与 hold 冲突
   object_crossing_hold_steps: 10
