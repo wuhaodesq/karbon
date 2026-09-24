@@ -346,7 +346,11 @@ train:
   value_coef: 0.5
   gamma: 0.99
   gae_lambda: 0.95
-  total_steps: 6500000              # v2: resume 21_1.8M 行为基座, 800K 推理闭环预算
+  total_steps: 12500000             # v2: resume 21_1.8M 行为基座; 链式续训当前目标 (12M ckpt -> 12.5M)
+  # NOTE: the auto-resume chain bumps this value server-side each segment.
+  # When deploying a config to the server, MERGE with the server copy —
+  # overwriting once clobbered the chain target and the next segment
+  # finished instantly (12M resume vs 7M target, 2026-09-24).
   ckpt_every_steps: 50000
 
 independent_eval:
