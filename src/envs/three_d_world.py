@@ -921,6 +921,7 @@ class ThreeDWorld:
 
         # Physics step
         mujoco.mj_step(self._model, self._data)
+        self._bounded_object_velocities()
 
         # Sync held object position (virtual grasp)
         if self._held_obj_id is not None:
@@ -1194,6 +1195,20 @@ class ThreeDWorld:
         # Load MuJoCo model
         self._model = mujoco.MjModel.from_xml_string(xml)
         self._data = mujoco.MjData(self._model)
+
+        # 2026-09-25: precompute free-joint DOF addresses for the per-step
+        # velocity bound (_bounded_object_velocities). Free-jointed objects
+        # can be ejected with huge velocity when bodies overlap (MuJoCo
+        # warns "Nan, Inf or huge value in QACC"); the clamp keeps a single
+        # bad contact from blowing up the whole episode / eval run.
+        self._obj_dof_addrs: list[int] = []
+        for i in range(self._num_objects):
+            try:
+                _bid = int(self._model.body(f"obj_{i}").id)
+                _dadr = int(self._model.body_dofadr[_bid]) if _bid >= 0 else -1
+            except Exception:
+                _dadr = -1
+            self._obj_dof_addrs.append(_dadr)
 
         # Initialize renderer
         if self._renderer is not None:
@@ -1850,6 +1865,34 @@ class ThreeDWorld:
             _expose_exc("_sync_held_object")
 
     # ------------------------------------------------------------------ chain tasks
+
+    def _bounded_object_velocities(self) -> None:
+        """Clamp free-joint object velocity and recover from solver blow-ups.
+
+        2026-09-25: with free joints, overlapping bodies can be ejected at
+        hundreds of m/s (MuJoCo "Nan, Inf or huge value in QACC at DOF
+        ..."). A single ejected object then keeps poisoning the rest of
+        the episode: every crossing mirrors it further, contacts explode,
+        and long evals eventually die (12.2M full eval crashed on the
+        16-object task). Clamp translational/angular velocity per step and
+        zero non-finite state so one bad contact stays local.
+        """
+        try:
+            _qvel = self._data.qvel
+            for _dadr in self._obj_dof_addrs:
+                if _dadr < 0:
+                    continue
+                _seg = _qvel[_dadr:_dadr + 6]
+                if not np.all(np.isfinite(_seg)):
+                    _seg[:] = 0.0
+                    continue
+                np.clip(_seg[:3], -3.0, 3.0, out=_seg[:3])
+                np.clip(_seg[3:], -8.0, 8.0, out=_seg[3:])
+            if not np.all(np.isfinite(_qvel)):
+                _qvel[:] = 0.0
+                mujoco.mj_forward(self._model, self._data)
+        except Exception:
+            _expose_exc("_bounded_object_velocities")
 
     def _setup_chain_task(self) -> None:
         """Set up a chain task based on developmental age.

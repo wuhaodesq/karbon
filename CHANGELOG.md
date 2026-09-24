@@ -5,6 +5,34 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### 物理稳定性修复: 自由关节速度钳制 + NaN 恢复 (2026-09-25) 🐛
+
+- **症状**: diag/eval 日志出现 `Nan, Inf or huge value in QACC at DOF 22 —
+  simulation unstable`; 12.2M 全量 eval 在 task4 (16 物体) 无声死掉
+  (11.8M 也同点崩) — 疑似重叠物体被 MuJoCo 以巨大速度弹出后污染整段仿真。
+- **修复** (`three_d_world.py`):
+  (a) 建模时预存物体自由关节 DOF 地址 (`_obj_dof_addrs`);
+  (b) 每步 `mj_step` 后 `_bounded_object_velocities()`: 平移速度钳到
+  ±3 m/s、角速度 ±8 rad/s; 非有限值段清零, 全局非有限时清全部 qvel +
+  mj_forward 恢复。
+- **验证**: 10.75M 严格 diag 修复前后 0.74 vs 0.76 (一致, 钳制不影响正常
+  动力学) 且 **NaN 警告 0 次** (修复前 task0 必现); 本地全量测试通过
+  (mujoco 相关 skip); check-bounds 干净。
+
+### 12.4M 线判死 → 从 10.75M + 物理 + 课程锁重启 (2026-09-25) 🔁
+
+- **数据**: 课程锁期间 400k 步严格 op 从 0.214 单调衰到 0.123-0.175,
+  同时 mean_ret 350→884 暴涨 (刷分增长); 对照实验: 10.75M 备份在同一
+  严格 diag 得 **0.76** (5 任务 0.71-0.84) → 物理-era 策略毁坏确凿,
+  奖励地形问题 (自诱导事件/近距到达可刷) 非测量伪影。
+- **决策 (方案 A)**: 停止 12.4M 线; 从 10.75M 备份 + 物理 + 课程锁重启
+  (chain10), **每段以严格 op diag ≥0.5 自动门控**再续 (250k/段); 物理
+  保留 (以终为始), 防刷分补丁待数据 (先小步验证基线保持)。
+- **诚实化**: 物理-era 的 systematic_reasoning 0.78-0.90 判定为**弱指标
+  伪信号** — `fm_consistency` 实为"推力方向集中度" (`most_common_ratio*3`,
+  方向重复即满分), 非力→运动预测一致性; 该门需重设计为预测/干预测试,
+  在此之前不得计入阶段通过。sysdiag 12.2M 五任务 0.75-0.92 皆由此而来。
+
 ### 形式推理探针 v1 + 后端入口 (2026-09-23, 方案 B) ✅
 
 - **`SymbolBackend.add_fact`/`add_rule`** 公开入口 (有界, 显式前提注入) +

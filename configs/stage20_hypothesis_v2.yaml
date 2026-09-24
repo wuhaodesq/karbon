@@ -346,7 +346,7 @@ train:
   value_coef: 0.5
   gamma: 0.99
   gae_lambda: 0.95
-  total_steps: 12500000             # v2: resume 21_1.8M 行为基座; 链式续训当前目标 (12M ckpt -> 12.5M)
+  total_steps: 10950000             # v2: 恢复链 (chain10) 当前目标; 每段由链条 +250k 自动推进
   # NOTE: the auto-resume chain bumps this value server-side each segment.
   # When deploying a config to the server, MERGE with the server copy —
   # overwriting once clobbered the chain target and the next segment
