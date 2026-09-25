@@ -64,3 +64,55 @@ def test_enumerating_query_with_wildcard():
     be.add_fact("at", ("b",))
     res = be.query("at", ("_",))
     assert len(res.answers) >= 2
+
+
+# ---------------- multi-hop forward chaining (2026-09-25) ----------------
+
+def test_two_hop_chain_resolves():
+    """A rule whose antecedent is only derivable from ANOTHER rule fires."""
+    be = SymbolBackend(max_facts=32, max_rules=16)
+    be.add_fact("on", ("a", "b"))
+    be.add_fact("on", ("b", "c"))
+    be.add_rule([("on", ("a", "b")), ("on", ("b", "c"))],
+                ("on", ("a", "c")), 0.9)
+    be.add_rule([("on", ("a", "c"))], ("finish", ("a",)), 0.9)
+    res = be.query("finish", ("a",))
+    assert len(res.answers) >= 1
+
+
+def test_unreachable_chain_stays_empty():
+    """Under-specified premises must not fabricate derived facts."""
+    be = SymbolBackend(max_facts=32, max_rules=16)
+    be.add_fact("on", ("a", "b"))  # missing on(b, c)
+    be.add_rule([("on", ("a", "b")), ("on", ("b", "c"))],
+                ("on", ("a", "c")), 0.9)
+    be.add_rule([("on", ("a", "c"))], ("finish", ("a",)), 0.9)
+    assert len(be.query("finish", ("a",)).answers) == 0
+    assert len(be.query("on", ("a", "c")).answers) == 0
+
+
+def test_derived_answers_do_not_duplicate_direct_facts():
+    be = SymbolBackend(max_facts=32, max_rules=16)
+    be.add_fact("at", ("a",))
+    be.add_rule([("at", ("a",))], ("at", ("a",)), 1.0)
+    res = be.query("at", ("a",))
+    assert len(res.answers) == 1
+
+
+def test_deep_chain_is_round_capped():
+    """Semantics: up to 2 derived LAYERS plus one query-time rule
+    application (~3 hops). A 4-hop chain must stay underivable."""
+    be = SymbolBackend(max_facts=32, max_rules=16)
+    be.add_fact("on", ("a", "b"))
+    be.add_fact("on", ("b", "c"))
+    be.add_fact("on", ("c", "d"))
+    be.add_fact("on", ("d", "e"))
+    be.add_rule([("on", ("a", "b")), ("on", ("b", "c"))],
+                ("on", ("a", "c")), 0.9)   # layer 1
+    be.add_rule([("on", ("a", "c")), ("on", ("c", "d"))],
+                ("on", ("a", "d")), 0.9)   # layer 2
+    be.add_rule([("on", ("a", "d")), ("on", ("d", "e"))],
+                ("on", ("a", "e")), 0.9)   # layer 3 (out of budget)
+    be.add_rule([("on", ("a", "e"))], ("finish", ("a",)), 0.9)
+    assert len(be.query("on", ("a", "d")).answers) >= 1   # reachable
+    assert len(be.query("finish", ("a",)).answers) == 0   # 4-hop: capped

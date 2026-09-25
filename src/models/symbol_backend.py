@@ -233,6 +233,13 @@ class SymbolBackend:
                     answers.append(fact)
             chain.append(f"fact_lookup({predicate}{args}) -> {len(answers)} matches")
 
+        # Multi-hop derivation layer (2026-09-25): bounded forward chaining
+        # so rules can consume other rules' consequents (G3 composition).
+        derived = self._derive_facts()
+        if derived:
+            chain.append(
+                f"derived({sum(len(v) for v in derived.values())} facts)")
+
         # Forward chain through rules
         for rule in self._rules_db:
             if_preds = rule["if"]
@@ -240,12 +247,23 @@ class SymbolBackend:
             if then_pred[0] == predicate:
                 all_match = True
                 for cond_pred, cond_args in if_preds:
-                    if not self._check_predicate(cond_pred, cond_args):
+                    if not (self._check_predicate(cond_pred, cond_args)
+                            or self._check_derived(derived, cond_pred, cond_args)):
                         all_match = False
                         break
                 if all_match:
-                    answers.append(then_pred)
+                    # answers are ARG TUPLES (same shape as fact lookups and
+                    # the derived layer); a rule conclusion contributes its
+                    # args only, deduped against existing answers.
+                    if then_pred[1] not in answers:
+                        answers.append(then_pred[1])
                     chain.append(f"rule({if_preds} -> {then_pred}, conf={rule['confidence']:.2f})")
+
+        # Query matches against the derived layer as well
+        for fact in derived.get(predicate, []):
+            if self._match_args(fact, args) and fact not in answers:
+                answers.append(fact)
+                chain.append(f"derived_match({predicate}{fact})")
 
         conf = min(1.0, len(answers) / max(1, len(self._rules_db))) if answers else 0.0
 
@@ -412,3 +430,55 @@ class SymbolBackend:
                 if self._match_args(fact, pred_args):
                     return True
         return False
+
+    @staticmethod
+    def _check_derived(derived: dict, pred_name: str, pred_args: tuple) -> bool:
+        """Check a predicate against the derived-fact layer (multi-hop)."""
+        for fact in derived.get(pred_name, []):
+            if SymbolBackend._match_args(fact, pred_args):
+                return True
+        return False
+
+    def _derive_facts(self, max_rounds: int = 2, max_derived: int = 64) -> dict:
+        """Bounded forward chaining over ground Horn rules (multi-hop).
+
+        2026-09-25: closes the G3 composition gap — a rule whose antecedent
+        is only derivable from ANOTHER rule (e.g. on(a,b),on(b,c) -> on(a,c),
+        then on(a,c) -> finish(a)) never fired before because antecedents
+        were checked against direct facts only. Each round applies every
+        rule once against facts plus the PREVIOUS round's derived layer, so
+        the round cap equals the derivation-depth cap and the result does
+        not depend on rule order. Rules with wildcard consequents are
+        skipped (their instantiation needs real unification; appending
+        pre-image wildcards would create false positives).
+        """
+        derived: dict[str, list[tuple]] = {}
+        count = 0
+        for _ in range(max(0, int(max_rounds))):
+            new_layer: dict[str, list[tuple]] = {}
+            for rule in self._rules_db:
+                if count + sum(len(v) for v in new_layer.values()) >= max_derived:
+                    break
+                then_pred, then_args = rule["then"][0], tuple(rule["then"][1])
+                if any(str(a) == "_" or a is None for a in then_args):
+                    continue
+                ok = True
+                for cond_pred, cond_args in rule["if"]:
+                    if not (self._check_predicate(cond_pred, cond_args)
+                            or self._check_derived(derived, cond_pred, cond_args)):
+                        ok = False
+                        break
+                if not ok:
+                    continue
+                if then_args in self._facts_db.get(then_pred, []):
+                    continue
+                if (then_args in new_layer.get(then_pred, [])
+                        or then_args in derived.get(then_pred, [])):
+                    continue
+                new_layer.setdefault(then_pred, []).append(then_args)
+            if not new_layer:
+                break
+            for _pred, _lst in new_layer.items():
+                derived.setdefault(_pred, []).extend(_lst)
+                count += len(_lst)
+        return derived

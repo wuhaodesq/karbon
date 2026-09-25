@@ -4384,7 +4384,18 @@ and state.step % 50000 < rollout_capacity):
                 try:
                     # Feed causal edges as facts
                     if causal_disc is not None:
-                        edges = causal_disc.get_edges() if hasattr(causal_disc, 'get_edges') else []
+                        # 2026-09-25: `get_edges()` never existed on the causal
+                        # discovery object — `hasattr` was always False, so
+                        # add_causal_edges never ran in ANY run and every
+                        # checkpoint carried facts_total=0 (the formal probe's
+                        # ckpt mode queries found nothing to reason over).
+                        # Read the real graph API (same as the concept-graph
+                        # ingestion above).
+                        edges = [
+                            {"src": e.source, "tgt": e.target,
+                             "strength": e.strength}
+                            for e in causal_disc._graph.edges.values()
+                        ]
                         if edges:
                             symbol_backend.add_causal_edges(edges)
                     # Feed induced rules
@@ -4396,8 +4407,21 @@ and state.step % 50000 < rollout_capacity):
                                              "description": r.description}
                                       for r in symbolic_layer.rule_memory._rules.values()}
                         symbol_backend.add_symbolic_rules(rules_dict)
+                    # 2026-09-25: ingestion proof-of-life — log when the fact
+                    # count changes so "facts_total=0" can never hide again.
+                    _fc = int(getattr(symbol_backend, "_fact_count", 0))
+                    if _fc != int(getattr(symbol_backend, "_ingest_log_mark", -1)):
+                        symbol_backend._ingest_log_mark = _fc
+                        if _fc > 0:
+                            logger.info(
+                                "[symbol] facts ingested: total=%d (cap=%d) "
+                                "rules=%d", _fc, symbol_backend.max_facts,
+                                int(getattr(symbol_backend, "_rule_count", 0)))
                 except Exception:
-                    pass
+                    # 2026-09-25: was a bare `pass` — the broken get_edges()
+                    # path stayed invisible for the whole project history.
+                    logger.warning("[symbol] ingestion failed @ step=%d",
+                                   state.step, exc_info=True)
 
             # --- Program Synthesis: active experimentation ---
             if (active_experimenter is not None and active_experimenter.should_test(state.step)

@@ -9,9 +9,9 @@ the policy.
 Task groups:
   G1 retrieval  - ground-fact lookup (kanren relation / fallback dict)
   G2 modus_ponens - single-hop rules, incl. wildcard antecedents
-  G3 composition - ground Horn clauses + a *multi-hop* task that the
-     current matcher cannot serve (no derived-fact chaining). That task is
-     marked expected="gap" and reported separately - the honest gap list.
+  G3 composition - ground Horn clauses + multi-hop chains (bounded
+     forward chaining, added 2026-09-25: rules may consume other rules'
+     consequents; the derived layer is capped at 2 rounds / 64 facts).
   G4 soundness  - non-derivable queries must stay empty (no false positives)
 
 Optional ``--ckpt`` mode additionally loads the checkpoint's
@@ -70,7 +70,7 @@ def _battery() -> list[dict]:
              rules=[([("on", ("a", "b")), ("on", ("b", "c"))],
                      ("on", ("a", "c")), 0.9)],
              query=("on", ("a", "c")), min_answers=1),
-        dict(name="two_hop_needs_derived_fact", group="G3_composition", expected="gap",
+        dict(name="two_hop_needs_derived_fact", group="G3_composition", expected="pass",
              facts=[("on", ("a", "b")), ("on", ("b", "c"))],
              rules=[([("on", ("a", "b")), ("on", ("b", "c"))],
                      ("on", ("a", "c")), 0.9),
@@ -85,6 +85,16 @@ def _battery() -> list[dict]:
              rules=[([("visible", ("k",)), ("near", ("a", "k"))],
                      ("grasp", ("k",)), 0.8)],
              query=("grasp", ("k",)), min_answers=0, max_answers=0),
+        # 2026-09-25: multi-hop must NOT fabricate — the chain premise is
+        # incomplete, so neither the derived fact nor the two-hop query may
+        # appear (guards against a chaining implementation with false
+        # positives on under-specified premises).
+        dict(name="soundness_unreachable_chain", group="G4_soundness", expected="pass",
+             facts=[("on", ("a", "b"))],
+             rules=[([("on", ("a", "b")), ("on", ("b", "c"))],
+                     ("on", ("a", "c")), 0.9),
+                    ([("on", ("a", "c"))], ("finish", ("a",)), 0.9)],
+             query=("finish", ("a",)), min_answers=0, max_answers=0),
     ]
 
 

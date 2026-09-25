@@ -5,6 +5,24 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### 事实摄入接线 + 多跳演绎 (2026-09-25, 方案 C) ✅
+
+- **事实摄入断线修复**（第 6 处静默断链）：`train.py` 的符号摄入块调用
+  `causal_disc.get_edges()` —— 该方法**从不存在**（`hasattr` 恒 False），
+  `add_causal_edges` 从未执行 → 每个 ckpt 的 `facts_total=0`，形式推理
+  探针在空事实库上运行。改为读取真实图 API（`causal_disc._graph.edges`
+  → `{src,tgt,strength}`，与概念图摄入同源），并把裸 `except: pass` 换为
+  带堆栈的 warning；新增 `[symbol] facts ingested: total=...` 变更日志，
+  让该指标不可能再悄悄归零。
+- **多跳前向链**（G3 缺口闭合）：`SymbolBackend._derive_facts()` 有界分层
+  推导（每轮对事实+上轮派生层应用全部规则 → 轮次=深度、与规则顺序无关；
+  容量 64、默认 2 层），`query()` 的规则匹配同时消费派生事实；答案统一为
+  args-tuple 并去重。**探针升级**：双跳用例从 `expected=gap` 转为必须通过，
+  新增反例 `soundness_unreachable_chain`（前提不完整不得捏造）。
+- **验证**：探针本地 **10/10 = 1.000, gaps=0**；新增单测 4 例（双跳可解、
+  不可达为空、答案去重、4 跳有界不可达），symbol 测试 11 项全过；全量
+  测试无失败；check-bounds 干净。
+
 ### 物理稳定性修复: 自由关节速度钳制 + NaN 恢复 (2026-09-25) 🐛
 
 - **症状**: diag/eval 日志出现 `Nan, Inf or huge value in QACC at DOF 22 —
