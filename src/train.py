@@ -802,6 +802,25 @@ def _build_env_from_spec(spec: dict[str, Any], env_cfg: dict[str, Any]):
     )
 
 
+def _apply_rule_outcome_feedback(rules: dict, prev_usage: dict, ep_ret: float) -> dict:
+    """Reward symbolic rules that biased actions this episode.
+
+    2026-09-25: ``RuleMemory.update()`` had no caller in the training loop,
+    so every rule's ``success_count`` stayed 0 and its confidence never
+    reflected experience (the honest rule-quality measure read 0.0
+    structurally). Rules whose ``usage_count`` grew since ``prev_usage``
+    (i.e. actually biased an action selection this episode) receive the
+    episode return as outcome feedback. Returns the new usage snapshot.
+    """
+    now = {rid: int(r.usage_count) for rid, r in rules.items()}
+    for rid, r in rules.items():
+        if now.get(rid, 0) > prev_usage.get(rid, 0):
+            r.update(reward=ep_ret)
+    # Snapshot AFTER the updates: update() bumps usage by 1, so returning the
+    # pre-update map would make the same rule fire again next episode.
+    return {rid: int(r.usage_count) for rid, r in rules.items()}
+
+
 def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     setup_logging("INFO")
     device_info = get_device_info(config.get("device_preferred"))
@@ -2328,6 +2347,11 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         obs = env.reset()
     last_curr_report_step = 0
     last_curr_mean_ret: float = 0.0
+    # 2026-09-25: per-episode rule-outcome feedback bookkeeping (see the
+    # episode-end block): rule success_count was never updated anywhere, so
+    # the honest rule-quality measure read 0.0 structurally. Snapshot usage
+    # counts and reward the rules that actually biased actions this episode.
+    _rule_usage_prev: dict = {}
 
     # Stage 6 knobs
     gr_update_every = int(continual_cfg.get("gr_update_every_steps", 16)) if continual_cfg else 0
@@ -3324,6 +3348,24 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 )
                 _mgr_period_step = 0
                 _mgr_reward_acc.fill(0.0)
+
+            # 2026-09-25: rule outcome feedback — close the hypothesis->rule
+            # learning loop. RuleMemory.update() (success_count / confidence
+            # EMA) had no caller anywhere, so every symbolic rule carried
+            # success_count=0 forever (the honest rule-quality measure read
+            # 0.0 structurally) and rule confidence never reflected
+            # experience. Reward every rule that actually biased an action
+            # this episode (usage delta) with the episode's return.
+            if (symbolic_layer is not None and n_envs == 1
+                    and (step_out.terminated or step_out.truncated)):
+                try:
+                    _rule_usage_prev = _apply_rule_outcome_feedback(
+                        symbolic_layer.rule_memory._rules,
+                        _rule_usage_prev,
+                        float(env.summary().get("last_return", 0.0)))
+                except Exception:
+                    logger.warning("[symbolic] rule outcome feedback failed",
+                                   exc_info=True)
 
             # --- Stage 4 / M2: skill reuse + extraction on episode end ---
             if skills is not None and n_envs == 1 and (step_out.terminated or step_out.truncated):

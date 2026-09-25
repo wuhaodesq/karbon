@@ -53,6 +53,38 @@ def test_rule_success_rate():
     assert r.success_rate == 0.5
 
 
+def test_rule_outcome_feedback_updates_only_used_rules():
+    """2026-09-25 wiring: rules that biased actions this episode get the
+    episode return as outcome feedback; unused rules stay untouched and a
+    repeat call without new usage must not double-update."""
+    from src.train import _apply_rule_outcome_feedback
+
+    used = Rule(id=0, condition_embedding=torch.randn(D_MODEL), action=2,
+                confidence=0.5)
+    idle = Rule(id=1, condition_embedding=torch.randn(D_MODEL), action=3,
+                confidence=0.5)
+    used.usage_count = 2  # biased two actions this episode
+    rules = {0: used, 1: idle}
+
+    prev = _apply_rule_outcome_feedback(rules, {}, ep_ret=1.5)
+    assert used.success_count == 1 and used.confidence > 0.5
+    assert used.usage_count == 3  # 2 biased uses + update()'s own count
+    assert idle.usage_count == 0 and idle.success_count == 0
+
+    prev = _apply_rule_outcome_feedback(rules, prev, ep_ret=1.5)
+    assert used.usage_count == 3 and used.success_count == 1  # no double count
+
+
+def test_rule_outcome_feedback_negative_reward():
+    from src.train import _apply_rule_outcome_feedback
+
+    r = Rule(id=0, condition_embedding=torch.randn(D_MODEL), action=1,
+             confidence=0.8)
+    r.usage_count = 1
+    _apply_rule_outcome_feedback({0: r}, {}, ep_ret=-2.0)
+    assert r.success_count == 0 and r.confidence < 0.8
+
+
 # =====================================================================
 # RuleMemory
 # =====================================================================

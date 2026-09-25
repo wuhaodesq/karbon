@@ -5,6 +5,25 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### 诚实 systematic 度量 v2 + 规则结果反馈接线 (2026-09-25, 方案 C 第 3 步) ✅🔬
+
+- **`scripts/eval/systematic_probe_v2.py`**（替代 fm 方向集中度伪信号）：
+  ① probe_prediction——事件起点问 probe_net p(到达)，与严格结局对照
+  （留存口径）；② rule_quality——usage≥3 规则的加权成功率；③ 动作熵；
+  ④ fm_alignment（力-位移 cos，标注为物理基底 sanity，非能力分）。
+- **首批诚实读数**（离线、零训练成本）：
+  - 10.75M：probe 预测 **0.473（≈随机）**，rule_quality **0.0**（12 条被用
+    规则零成功），fm cos 0.54/76% 正；旧线 12.25M：0.424 / 0.0 / 0.26。
+  - 结论：物理-era 的 systematic 0.78-0.90 确认伪信号；**systematic 能力
+    真实水平 ≈ 随机**（旧 milestone 0.28 才是真话）。
+- **第 7 处静默断链修复**：`RuleMemory.update()`（success_count/confidence）
+  **全仓库无调用者** → 规则质量结构性 0、置信度从不随经验更新。新增
+  `_apply_rule_outcome_feedback`（按 usage 增量给当回合实际参与决策的规则
+  回传情节回报；快照在更新后取，防重复计数——测试抓出并修复），回合结束
+  挂接；单测 2 例（只更新被用规则/负回报/不重复计数）。
+- **含义**：Stage 20 的 systematic 门现在有诚实尺子 + 反馈回路；能力缺口
+  真实存在且可度量，训练方向首次可验证（预测目标 + 规则质量）。
+
 ### 事实摄入接线 + 多跳演绎 (2026-09-25, 方案 C) ✅
 
 - **事实摄入断线修复**（第 6 处静默断链）：`train.py` 的符号摄入块调用
