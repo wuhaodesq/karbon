@@ -790,6 +790,8 @@ def _build_env_from_spec(spec: dict[str, Any], env_cfg: dict[str, Any]):
             occluder_orient_weight=float(spec.get("occluder_orient_weight", env_cfg.get("occluder_orient_weight", 0.0))),
             occluder_orient_bonus=float(spec.get("occluder_orient_bonus", env_cfg.get("occluder_orient_bonus", 0.0))),
             occluder_teacher_force=float(spec.get("occluder_teacher_force", env_cfg.get("occluder_teacher_force", 0.0))),
+            occluder_search_min_start=float(env_cfg.get("occluder_search_min_start", 1.2)),
+            op_reward_clamp=float(env_cfg.get("op_reward_clamp", 100.0)),
         )
     return MiniGridWrapper(
         env_id=env_id,
@@ -876,6 +878,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             occluder_orient_weight=float(env_cfg.get("occluder_orient_weight", 0.0)),
             occluder_orient_bonus=float(env_cfg.get("occluder_orient_bonus", 0.0)),
             occluder_teacher_force=float(env_cfg.get("occluder_teacher_force", 0.0)),
+            occluder_search_min_start=float(env_cfg.get("occluder_search_min_start", 1.2)),
+            op_reward_clamp=float(env_cfg.get("op_reward_clamp", 100.0)),
         )
         n_envs = int(env_cfg.get("num_envs", 1))
         if n_envs > 1:

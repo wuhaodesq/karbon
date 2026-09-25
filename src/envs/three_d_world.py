@@ -458,6 +458,8 @@ class ThreeDWorld:
         occluder_reach_radius: float = 0.8,  # Stage 20k: 触达半径 (与 eval op 硬门槛同构, 判据恒用)
         occluder_reward_radius: float = 0.0,  # Stage 20p: 奖励圈半径 (课程化 2.0→0.8, 0=跟随判据)
         occluder_reach_hold: float = 0.0,  # Stage 20n: 圈内持续分 (max(0, radius-dist)*w, 0=off)
+        occluder_search_min_start: float = 1.2,  # 2026-09-25 anti-farm: only events starting >= this distance pay op rewards
+        op_reward_clamp: float = 100.0,  # 2026-09-25: per-step op-reward cap honored end-to-end (reach=100 must survive)
         occluder_orient_weight: float = 0.0,  # Stage 20m: L1 朝向 - 每步非对称方向塑形 (0=off)
         occluder_orient_bonus: float = 0.0,  # Stage 20m: L1 朝向 - 事件首3步对齐一次性奖励 (0=off)
         object_crossing_every: int = 0,  # Stage 20: 物体穿越墙周期 (0=off)
@@ -493,6 +495,17 @@ class ThreeDWorld:
         self._occluder_reward_radius = float(occluder_reward_radius) \
             if occluder_reward_radius > 0.0 else float(occluder_reach_radius)
         self._occluder_reach_hold = float(occluder_reach_hold)
+        # 2026-09-25 anti-farm: op rewards pay only for search-worthy events
+        # (agent >= search_min_start away when the occlusion began). Near-start
+        # events (push an object behind a wall, crossing at the agent's feet)
+        # were paying the full arrival/hold stream for zero search — with the
+        # free-joint physics this lane dragged strict op from 0.75 to 0.12
+        # while mean_ret climbed 350->1100.
+        self._occluder_search_min_start = float(occluder_search_min_start)
+        # 2026-09-25: per-step op-reward cap, honored end-to-end by
+        # _compute_reward's focus branch (the old hard min(10.0) truncated
+        # reach=100 to 10, making 25 in-circle steps equal one arrival).
+        self._op_reward_clamp = float(op_reward_clamp)
         self._occluder_orient_weight = float(occluder_orient_weight)
         self._occluder_orient_bonus = float(occluder_orient_bonus)
         # Stage 20d: reveal-attribution bonus pending delivery to the next
@@ -1567,8 +1580,12 @@ class ThreeDWorld:
                 d_now, d0, self._occluder_reveal_ratio,
                 self._occluder_reach_radius):
             self._gate_success += 1
-            self._reveal_bonus_pending = max(
-                self._reveal_bonus_pending, self._occluder_reveal_bonus)
+            # 2026-09-25 anti-farm: pay the reveal attribution only for
+            # search-worthy (far-start) events; the tgate metric above stays
+            # ungated so the measurement keeps counting every event.
+            if d0 >= self._occluder_search_min_start:
+                self._reveal_bonus_pending = max(
+                    self._reveal_bonus_pending, self._occluder_reveal_bonus)
         # Stage 20p: reward-circle gate — same arrivals, success judged by
         # the CURRENT curriculum circle (d_now < reward_radius). This is
         # the TEACHING measure; the 0.8m judge above never moves.
@@ -1585,7 +1602,8 @@ class ThreeDWorld:
             _aligned = ev.get("first3_cos", 0.0) / _n3 > 0.5
             if _aligned:
                 self._orient_aligned += 1
-                if self._occluder_orient_bonus > 0.0:
+                if (self._occluder_orient_bonus > 0.0
+                        and d0 >= self._occluder_search_min_start):
                     self._reveal_bonus_pending = max(
                         self._reveal_bonus_pending, self._occluder_orient_bonus)
 
@@ -2035,6 +2053,22 @@ class ThreeDWorld:
             for key, occ in list(self._active_occlusions_3d.items()):
                 lk = occ["last_known"]
                 dist = math.hypot(ax - lk[0], ay - lk[1])
+                # 2026-09-25 anti-farm gate: pay op rewards only for
+                # search-worthy events — the occlusion must have STARTED with
+                # the agent at least `_occluder_search_min_start` away.
+                # Near-start events (agent at the object when it becomes
+                # occluded: it just pushed it behind a wall, a crossing fired
+                # at its feet) used to pay the full arrival/hold stream with
+                # zero search; with movable objects this became the
+                # reward-farming lane (strict op 0.75->0.12 while mean_ret
+                # 350->1100). Metrics (tgate/eval) still count every event;
+                # only the payouts are gated.
+                _far = occ.get("far_start")
+                if _far is None:
+                    _far = dist >= self._occluder_search_min_start
+                    occ["far_start"] = bool(_far)
+                if not _far:
+                    continue
                 # Stage 20m: L1 orientation — first-3-steps direction credit.
                 # "Turned the right way right after the object vanished" is
                 # the simplest, earliest-learnable sub-goal (head_cos was
@@ -2170,7 +2204,11 @@ class ThreeDWorld:
                 reward += self._update_chain_task(0.0, 0.0)
             if self._logic_bonus_action is not None and action >= 0 and action % 8 == self._logic_bonus_action:
                 reward += self._logic_bonus_weight
-            return float(max(0.0, min(10.0, reward)))
+            # 2026-09-25: honor the configured cap end-to-end. The old hard
+            # `min(10.0, reward)` truncated reach=100 to 10 per payout
+            # (Stage-20w raised the inner clamp but this line overrode it),
+            # collapsing the designed arrival:hold ratio from 100:4 to 10:4.
+            return float(max(0.0, min(_clamp + 5.0, reward)))
 
         # Object movement reward
         for i in range(self._model.ngeom):

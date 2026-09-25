@@ -83,6 +83,10 @@ env:
   # mobility rewards and keeps occluder tracking + a thin chain/logic tie.
   # 课程锁: 物理升级后接触奖励可被推物刷分, 重新锁定 op 专项。
   focus_op_only: true
+  # 2026-09-25 反刷分: 只有起点 >= 1.2m 的事件支付 op 奖励 (推物/贴身事件
+  # 不付); 修复 L2173 外层 min(10) 截断 reach=100 -> 10 的半修复 bug。
+  occluder_search_min_start: 1.2
+  op_reward_clamp: 100.0
   # v2: 修复后 crossing 语义 (hold 中不重复镜像/镜像越界检查在代码层已修)
   object_crossing_every: 100          # 多物体随机穿越: 事件密集但不与 hold 冲突
   object_crossing_hold_steps: 10
@@ -346,7 +350,7 @@ train:
   value_coef: 0.5
   gamma: 0.99
   gae_lambda: 0.95
-  total_steps: 10950000             # v2: 恢复链 (chain10) 当前目标; 每段由链条 +250k 自动推进
+  total_steps: 11150000             # v2: 恢复链 (chain10) 当前目标; 每段由链条 +250k 自动推进
   # NOTE: the auto-resume chain bumps this value server-side each segment.
   # When deploying a config to the server, MERGE with the server copy —
   # overwriting once clobbered the chain target and the next segment
