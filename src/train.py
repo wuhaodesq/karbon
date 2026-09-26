@@ -2306,7 +2306,13 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
 
     # P1: reward/return EMA normalization (PopArt-lite)
     # Prevents dead-policy lock when extrinsic rewards are small and uniform.
-    reward_ema = ReturnNormalizer(alpha=0.01)
+    # 2026-09-27: alpha 0.01 -> 0.1 — the op oscillation forensics showed the
+    # value loss exploding to 1.3e3 whenever the return scale swung (~3x
+    # episode-to-episode under the physics-era reward). With a ~100-update
+    # (~4.5h) EMA time constant the normalizer lagged the swings by hours,
+    # so normalized targets/values chased each other out of range. 0.1
+    # tracks the scale within ~10 updates while staying stable.
+    reward_ema = ReturnNormalizer(alpha=0.1)
     ppo_minibatches = int(train_cfg.get("ppo_minibatches", 8))  # P2: mini-batch count
 
     # Stage 1 knobs
@@ -4008,8 +4014,15 @@ and state.step % 50000 < rollout_capacity):
                 # 1e4-5e4 at 17:xx) which fed GAE -> adv explosion -> policy
                 # spiral. Clamping the target breaks that feedback loop while
                 # preserving the ordering.
-                value_loss = F.mse_loss(
-                    values, returns_norm[mb_idx].clamp(-10.0, 10.0)
+                # 2026-09-27: Huber instead of MSE — the target clamp bounds
+                # the TARGET but not the CRITIC: its raw outputs ran to ~46
+                # sigma during the 11.85-12.0M trough (value loss 1.3e3),
+                # feeding GAE garbage into the policy. smooth_l1 caps the
+                # per-sample gradient (linear beyond beta) while still
+                # pulling runaway values back.
+                value_loss = F.smooth_l1_loss(
+                    values, returns_norm[mb_idx].clamp(-10.0, 10.0),
+                    beta=5.0
                 )
                 entropy = dist.entropy().mean()
                 approx_kl = ((batch.logprobs[mb_idx] - new_logprobs).mean()).detach()
