@@ -809,8 +809,14 @@ def _apply_rule_outcome_feedback(rules: dict, prev_usage: dict, ep_ret: float) -
     so every rule's ``success_count`` stayed 0 and its confidence never
     reflected experience (the honest rule-quality measure read 0.0
     structurally). Rules whose ``usage_count`` grew since ``prev_usage``
-    (i.e. actually biased an action selection this episode) receive the
-    episode return as outcome feedback. Returns the new usage snapshot.
+    (i.e. actually biased an action selection this episode) receive
+    ``ep_ret`` as outcome feedback. Returns the new usage snapshot.
+
+    2026-09-26: the caller passes a RELATIVE outcome (episode return minus
+    the running mean), not the raw return — under the fixed reward regime
+    raw returns are always large, so ``reward > 0`` marked every used rule
+    successful, confidence ran away, one rule (#336805) captured the action
+    bias and op collapsed 0.78 -> 0.30 within 100k steps.
     """
     now = {rid: int(r.usage_count) for rid, r in rules.items()}
     for rid, r in rules.items():
@@ -3359,10 +3365,17 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             if (symbolic_layer is not None and n_envs == 1
                     and (step_out.terminated or step_out.truncated)):
                 try:
+                    # 2026-09-26: RELATIVE outcome — raw ep_ret is always
+                    # large in the fixed reward regime, which marked every
+                    # used rule successful and let one rule capture the
+                    # action bias (op 0.78 -> 0.30 at 11.55M). Above-average
+                    # episodes count as success, mirroring the self-model's
+                    # "progress" criterion.
                     _rule_usage_prev = _apply_rule_outcome_feedback(
                         symbolic_layer.rule_memory._rules,
                         _rule_usage_prev,
-                        float(env.summary().get("last_return", 0.0)))
+                        float(env.summary().get("last_return", 0.0))
+                        - float(last_curr_mean_ret))
                 except Exception:
                     logger.warning("[symbolic] rule outcome feedback failed",
                                    exc_info=True)
