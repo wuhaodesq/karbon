@@ -3967,7 +3967,10 @@ and state.step % 50000 < rollout_capacity):
             try:
                 _pb = hypothesis_tester.prediction_batch(max_items=16)
                 if len(_pb) >= 4:
-                    _obs_b = torch.stack([_obs_to_tensor(o, device) for o, _ in _pb])
+                    # cat (not stack): each _obs_to_tensor gives (1,C,H,W);
+                    # cat dim=0 -> (B,C,H,W). stack would make 5-D and crash
+                    # the encoder's permute (first aux segment: 122 failures).
+                    _obs_b = torch.cat([_obs_to_tensor(o, device) for o, _ in _pb], dim=0)
                     _lab = torch.tensor([float(y) for _, y in _pb], device=device)
                     _, _, _h_b = model(_obs_b, return_hidden=True, update_gru=False)
                     _pr = hypothesis_tester.probe_net(_h_b).squeeze(-1).clamp(

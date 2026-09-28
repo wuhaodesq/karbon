@@ -241,7 +241,14 @@ class HypothesisTester(nn.Module):
         if obs is not None:
             try:
                 import numpy as _np
-                self._active_obs = _np.array(obs, copy=True)
+                _arr = _np.array(obs, copy=True)
+                # 2026-09-28: the rollout passes the env obs which can carry a
+                # leading batch dim (1, C, H, W); store the unbatched view or
+                # the aux-loss forward hits a 5-D permute crash (first aux
+                # segment: 122 failed precomputes, consolidation never ran).
+                if _arr.ndim >= 4 and _arr.shape[0] == 1:
+                    _arr = _arr[0]
+                self._active_obs = _arr
             except Exception:
                 self._active_obs = None
 
