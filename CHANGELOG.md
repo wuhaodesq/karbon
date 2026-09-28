@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+### systematic 巩固: 结局预测辅助损失入主干 (2026-09-28, 定向 B) 🎯
+
+- **诚实基线**（20 回合, n≈800）: probe 预测留存准确率 **0.521 / 0.479 ≈
+  随机**（此前 0.7-0.84 为小样本噪声）；rule_quality 0.17-0.18 缓升。
+  结论：旁路 probe_net（detached 特征）学不出可泛化的结局预测。
+- **巩固设计**: "预测进表征" —— 事件起点 obs 存入有界缓冲
+  (`_pred_samples`, 256)；PPO 更新时重算 hidden、
+  BCE(probe_net(hidden), 结局) 以系数 0.05 回传主干（首个 minibatch
+  注入，防二次反传）。机制与 sub-goal aux 同构。配置
+  `advanced.hypothesis_pred_aux_coef: 0.05`。
+- **验收口径**: sysprobe_v2 留存预测 ≥0.65 且 rule_quality 上升 → 视为
+  systematic 诚实达标；训练重自 12.45M（op 0.788 相位）→ 12.7M。
+- 单测 +2（obs 配对/缺失不记；有界+最近优先），全套通过。
+
 ### 振荡根因修复: value 归一化滞后 + 评论家跑飞 (2026-09-27) 🔬🐛
 
 - **取证**（11.65→12.05M 谷期逐桶对照）：value loss 爆炸序列
