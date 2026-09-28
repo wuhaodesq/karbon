@@ -197,6 +197,13 @@ def main() -> None:
     acc = (sum(1 for p, y in preds if (p > 0.5) == bool(y)) / n) if n else 0.0
     brier = (sum((p - y) ** 2 for p, y in preds) / n) if n else 0.0
     base_rate = (sum(y for _, y in preds) / n) if n else 0.0
+    # 2026-09-28: majority-class baseline — a rare-event eval set makes "always
+    # say no" score high (12.65M read 0.812 with positive_rate 0.058 without
+    # this). Report skill = accuracy - baseline and a Brier skill score
+    # (1 - brier/0.25) so the numbers cannot flatter a degenerate predictor.
+    majority = max(base_rate, 1.0 - base_rate) if n else 0.0
+    skill = acc - majority
+    brier_skill = (1.0 - brier / 0.25) if n else 0.0
     cnt = Counter(actions)
     tot = max(1, len(actions))
     ent = -sum((c / tot) * math.log(max(c / tot, 1e-9)) for c in cnt.values())
@@ -219,7 +226,10 @@ def main() -> None:
         "probe_prediction": {
             "n": n,
             "accuracy": round(acc, 3),
+            "majority_baseline": round(majority, 3),
+            "skill_vs_majority": round(skill, 3),
             "brier": round(brier, 3),
+            "brier_skill_vs_0.25": round(brier_skill, 3),
             "positive_rate": round(base_rate, 3),
             "note": "held-out learned gate predicting strict arrivals",
         },
