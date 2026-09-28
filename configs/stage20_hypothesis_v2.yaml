@@ -353,7 +353,7 @@ train:
   value_coef: 0.5
   gamma: 0.99
   gae_lambda: 0.95
-  total_steps: 11150000             # v2: 恢复链 (chain10) 当前目标; 每段由链条 +250k 自动推进
+  total_steps: 12700000             # v2: 恢复链 (chain10) 当前目标; 每段由链条 +250k 自动推进
   # NOTE: the auto-resume chain bumps this value server-side each segment.
   # When deploying a config to the server, MERGE with the server copy —
   # overwriting once clobbered the chain target and the next segment
