@@ -374,3 +374,42 @@ def test_probe_wedge_guard_on_learning_failure():
     assert ht._active_lk is None
     assert len(ht._probe_samples) <= 10  # one append per outcome, not per step
     assert "RuntimeError" in ht._probe_last_error
+
+
+def test_prediction_batch_pairs_event_obs_with_outcome():
+    """2026-09-28: event-start obs + outcome pairs feed the trunk-backprop
+    outcome-prediction aux loss; absent obs contributes nothing."""
+    import numpy as np
+
+    ht = HypothesisTester(d_model=D_MODEL, num_actions=NUM_ACTIONS)
+    ht.propose_hypothesis(torch.randn(D_MODEL), predicted_action=1)
+    ht.get_probe_action()
+    obs = np.zeros((3, 8, 8), dtype=np.uint8)
+    ht.begin_probe_tracking(torch.randn(D_MODEL), (0.0, 0.0), step=100, obs=obs)
+    ht.check_probe_outcome((0.5, 0.5), revealed=False, step=105)  # arrival
+    batch = ht.prediction_batch(max_items=8)
+    assert len(batch) == 1
+    o, y = batch[0]
+    assert o.shape == (3, 8, 8) and y == 1.0
+
+    # no obs -> no prediction sample
+    ht.propose_hypothesis(torch.randn(D_MODEL), predicted_action=1)
+    ht.get_probe_action()
+    ht.begin_probe_tracking(torch.randn(D_MODEL), (0.0, 0.0), step=200)
+    ht.check_probe_outcome((0.5, 0.5), revealed=False, step=205)
+    assert len(ht.prediction_batch(max_items=8)) == 1
+
+
+def test_prediction_batch_bounded_and_most_recent():
+    import numpy as np
+
+    ht = HypothesisTester(d_model=D_MODEL, num_actions=NUM_ACTIONS)
+    for i in range(30):
+        ht.propose_hypothesis(torch.randn(D_MODEL), predicted_action=1)
+        ht.get_probe_action()
+        obs = np.full((1,), i, dtype=np.uint8)
+        ht.begin_probe_tracking(torch.randn(D_MODEL), (0.0, 0.0), step=i, obs=obs)
+        ht.check_probe_outcome((0.5, 0.5), revealed=False, step=i + 1)
+    assert len(ht._pred_samples) <= 256  # Axiom 1
+    batch = ht.prediction_batch(max_items=4)
+    assert [int(o[0]) for o, _ in batch] == [26, 27, 28, 29]  # most recent

@@ -2800,7 +2800,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                         else torch.zeros(
                                             int(model_cfg.get("hidden_size", 384)),
                                             device=device),
-                                        (_act[1], _act[2]), state.step)
+                                        (_act[1], _act[2]), state.step,
+                                        obs=obs)
                                     action = torch.full_like(action, int(_pa))
                                     _hyp_stats["probed"] += 1
                                     _ep_probe_steps += 1
@@ -3952,6 +3953,35 @@ and state.step % 50000 < rollout_capacity):
                 logger.debug("sg aux precomp skipped: %s", exc)
         _sg_first_mb = True
 
+        # Stage 20 systematic consolidation (2026-09-28): outcome-prediction
+        # auxiliary loss that backprops into the trunk. The learned probe gate
+        # predicts strict arrivals from event-start hidden states, but with
+        # detached features it plateaus at chance (held-out 0.48-0.52, n~800).
+        # Recomputing the hidden from the stored event-start obs and adding
+        # the BCE to the PPO loss forces the representation to carry
+        # outcome-predictive structure — "predict, then verify" enters the
+        # policy itself rather than living in a side network.
+        _pred_loss_extra: torch.Tensor | None = None
+        _pred_coef = 0.0
+        if hypothesis_tester is not None and n_envs == 1:
+            try:
+                _pb = hypothesis_tester.prediction_batch(max_items=16)
+                if len(_pb) >= 4:
+                    _obs_b = torch.stack([_obs_to_tensor(o, device) for o, _ in _pb])
+                    _lab = torch.tensor([float(y) for _, y in _pb], device=device)
+                    _, _, _h_b = model(_obs_b, return_hidden=True, update_gru=False)
+                    _pr = hypothesis_tester.probe_net(_h_b).squeeze(-1).clamp(
+                        1e-4, 1.0 - 1e-4)
+                    _pred_loss_extra = F.binary_cross_entropy(_pr, _lab)
+                    _pred_coef = float((advanced_cfg or {}).get(
+                        "hypothesis_pred_aux_coef", 0.05))
+            except Exception:
+                logger.warning("[hypothesis] outcome-pred aux precomp failed",
+                               exc_info=True)
+                _pred_loss_extra = None
+                _pred_coef = 0.0
+        _pred_first_mb = True
+
         # P2: mini-batch PPO — split rollout into shuffled minibatches
         # Stage 20w#2: ensure model is in train mode before PPO — curriculum
         # switch / model growth may have set it to eval() which crashes the
@@ -4096,6 +4126,10 @@ and state.step % 50000 < rollout_capacity):
                 if _sg_first_mb and _sg_loss_extra is not None and torch.isfinite(_sg_loss_extra):
                     loss = loss + _sg_loss_extra * 0.1
                     _sg_first_mb = False
+                if _pred_first_mb and _pred_loss_extra is not None \
+                        and torch.isfinite(_pred_loss_extra):
+                    loss = loss + _pred_coef * _pred_loss_extra
+                    _pred_first_mb = False
                 optimizer.zero_grad(set_to_none=True)
                 if not torch.isfinite(loss):
                     # Stage 20h#4: never backward a NaN loss — it silently

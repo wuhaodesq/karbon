@@ -117,6 +117,9 @@ advanced:
   hypothesis_tester_enabled: true      # Stage 20: 遮挡->假设->验证 闭环
   hypothesis_max: 64                   # 遮挡事件多, 更多假设容量
   hypothesis_probe_epsilon: 0.15       # 探针频率 (低: 只在假设活跃时探)
+  # 2026-09-28 systematic 巩固: 事件结局预测辅助损失 (BCE 回传主干)
+  # 让"预测→验证"进入策略表征本身, 而非旁路 probe_net (此前留存≈随机)
+  hypothesis_pred_aux_coef: 0.05
 
 # --- Cognitive Modules ---
 cognitive:

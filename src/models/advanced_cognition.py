@@ -135,6 +135,11 @@ class HypothesisTester(nn.Module):
         self._active_lk: tuple[float, float] | None = None
         self._active_step: int | None = None
         self._active_hidden: torch.Tensor | None = None
+        # 2026-09-28: event-start observations paired with outcomes, for the
+        # trunk-backprop outcome-prediction auxiliary loss (systematic
+        # consolidation). Bounded; transient (not persisted).
+        self._active_obs: Any = None
+        self._pred_samples: deque = deque(maxlen=256)  # BOUNDS-OK: bounded
 
     @property
     def capacity(self) -> int:
@@ -222,11 +227,23 @@ class HypothesisTester(nn.Module):
         hidden_state: torch.Tensor,
         last_known: tuple[float, float],
         step: int,
+        obs: Any = None,
     ) -> None:
-        """Remember what the active probe predicts (durable across steps)."""
+        """Remember what the active probe predicts (durable across steps).
+
+        ``obs`` (optional) is the raw observation at probe start; it is kept
+        for the outcome-prediction auxiliary loss (see ``prediction_batch``).
+        """
         self._active_hidden = hidden_state.detach().cpu()
         self._active_lk = (float(last_known[0]), float(last_known[1]))
         self._active_step = int(step)
+        self._active_obs = None
+        if obs is not None:
+            try:
+                import numpy as _np
+                self._active_obs = _np.array(obs, copy=True)
+            except Exception:
+                self._active_obs = None
 
     def check_probe_outcome(
         self,
@@ -276,6 +293,11 @@ class HypothesisTester(nn.Module):
             # take the pending hidden exactly once (repeated appends on a
             # failure path saturated the buffer to 256 in the first run)
             self._active_hidden = None
+        # 2026-09-28: pair the outcome with the event-start obs for the
+        # trunk-backprop outcome-prediction aux loss.
+        if self._active_obs is not None:
+            self._pred_samples.append((self._active_obs, float(success)))
+        self._active_obs = None
         if len(self._probe_samples) < 8:
             return 0.0
         try:
@@ -302,6 +324,17 @@ class HypothesisTester(nn.Module):
         self._probe_updates += 1
         self._probe_loss_last = float(loss.item())
         return self._probe_loss_last
+
+    def prediction_batch(self, max_items: int = 16) -> list:
+        """Most-recent (event_start_obs, outcome) pairs.
+
+        Used by the training loop for the trunk-backprop outcome-prediction
+        auxiliary loss (2026-09-28): recompute the hidden from the stored
+        obs and add BCE(probe_net(hidden), outcome) to the PPO loss so the
+        representation learns outcome-predictive structure.
+        """
+        items = list(self._pred_samples)[-max(0, int(max_items)):]
+        return [(o, y) for o, y in items]
 
     # ------------------------------------------------------------------ state
 
