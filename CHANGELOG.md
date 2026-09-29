@@ -3,6 +3,22 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+### 冻结规则转向: 双通道偏置切断 (2026-09-29) 🧊
+
+- **复发确认**: 对照实验（aux 关闭 200k 步）op 继续恶化 0.245→0.13 → 排除
+  aux 嫌疑；日志显示最近 80 次规则匹配中 **72 次为 #336805/#332466**
+  （与 9/26 坍缩同型），且 rule_quality 在崩期持续升（0.194→0.235）——
+  规则转向再次劫持策略。
+- **两条偏置通道**（此前只修了置信度 runaway，通道本身未断）：
+  ① `symbolic_bias_weight` 0.5（规则 logit 软偏置）→ **0.0**；
+  ② env `_logic_bonus_weight` 硬编码 0.3（匹配即奖励其动作）→ 经
+  `cognitive.logic_bonus_weight` 配置化并设 **0.0**（train.py 注入）。
+  规则继续记录/度量（rule_quality 仍可观测），但不再影响行动或奖励。
+- **实验设计**: 从 12.45M（op 0.788，最佳相位备份）续训 → 12.7M：
+  规则冻结 + aux 0.05 + 反刷分 + value 修复 全开。两问分离：
+  ① op 是否稳在高带（除规则外无其他 destabilizer）；② aux 是否移动
+  probe skill（诚实口径 skill_vs_majority）。
+
 ### systematic 巩固: 结局预测辅助损失入主干 (2026-09-28, 定向 B) 🎯
 
 - **诚实基线**（20 回合, n≈800）: probe 预测留存准确率 **0.521 / 0.479 ≈

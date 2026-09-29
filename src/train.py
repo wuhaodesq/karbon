@@ -4642,6 +4642,13 @@ and state.step % 50000 < rollout_capacity):
                     # Stage 9 logic reward: set env bonus for matching rule's action
                     if hasattr(env, '_logic_bonus_action'):
                         env._logic_bonus_action = int(sym_info.get("rule_action", -1))
+                        # 2026-09-29: honor the configured rule-bonus weight
+                        # (0.0 freezes rule steering; the env default 0.3 kept
+                        # paying a single captured rule's action during both
+                        # collapses). Rules stay recorded for measurement.
+                        env._logic_bonus_weight = float(
+                            (config.get("cognitive") or {}).get(
+                                "logic_bonus_weight", 0.3))
             except Exception as _se:
                 logger.warning("[symbolic] override check failed: %s", str(_se)[:120])
 

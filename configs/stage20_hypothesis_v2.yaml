@@ -38,7 +38,7 @@ model:
 narrative:
   enabled: true
   narrative_every_episodes: 10     # 每 10 episodes 生成一次身份叙事
-  symbol_bias_weight: 0.1          # kanren 动作 logit 偏置权重 (0.1 起步)
+  symbol_bias_weight: 0.1          # kanren 动作 logit 偏置权重 (0.1 起步; 叙事回路)
   trait_learning_enabled: true     # 启用学习式 trait 提取 (trait_projector)
   trait_lr: 1.0e-4
 
@@ -125,7 +125,10 @@ advanced:
 cognitive:
   symbolic_enabled: true
   symbolic_max_rules: 64
-  symbolic_bias_weight: 0.5
+  # 2026-09-29: 冻结规则转向 — 两次模式坍缩 (9/26, 9/29) 的共同特征都是
+  # 单规则 (#336805/#332466) 捕获行动偏置。规则继续记录/度量, 不再偏置策略。
+  symbolic_bias_weight: 0.0
+  logic_bonus_weight: 0.0      # 规则动作的环境奖励加成 (env 默认 0.3)
   # Stage 19-FiLM: normalize the narration→decision path — ThoughtActionLoop
   # (with a dependency-free TinyTextEncoder) modulates the hidden state
   # every forward; the FiLM projection learns from the PPO objective.
@@ -353,7 +356,7 @@ train:
   value_coef: 0.5
   gamma: 0.99
   gae_lambda: 0.95
-  total_steps: 12700000             # v2: 恢复链 (chain10) 当前目标; 每段由链条 +250k 自动推进
+  total_steps: 12750000             # v2: 恢复链 (chain10) 当前目标; 每段由链条 +250k 自动推进
   # NOTE: the auto-resume chain bumps this value server-side each segment.
   # When deploying a config to the server, MERGE with the server copy —
   # overwriting once clobbered the chain target and the next segment
