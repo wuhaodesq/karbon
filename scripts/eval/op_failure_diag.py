@@ -92,24 +92,11 @@ def _make_env(cfg: dict, num_objects: int, action_force: float, max_steps: int) 
     return env
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", type=str, required=True)
-    ap.add_argument("--config", type=str, default="stage20_hypothesis_v2.yaml")
-    ap.add_argument("--preset", type=str, default="cloud_24g")
-    ap.add_argument("--episodes", type=int, default=12)
-    ap.add_argument("--max-steps", type=int, default=300)
-    ap.add_argument("--epsilon", type=float, default=0.1)
-    ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--out", type=str, default="/root/op_fail_diag.json")
-    args = ap.parse_args()
-
-    device = get_device()
-    cfg = load_config(args.config, args.preset)
+def _run_one_ckpt(ckpt_path: str, cfg: dict, args, device) -> dict:
+    """Evaluate a single checkpoint, return its results dict."""
     tasks_cfg = (cfg.get("curriculum") or {}).get("tasks", [])
-    n_layers = int(_s18e._ckpt_layer_count(args.ckpt) or int(cfg["model"].get("hybrid_n_layers", 7)))
-
-    ck = torch.load(args.ckpt, map_location="cpu")
+    n_layers = int(_s18e._ckpt_layer_count(ckpt_path) or int(cfg["model"].get("hybrid_n_layers", 7)))
+    ck = torch.load(ckpt_path, map_location="cpu")
     sd = ck.get("model_state") if isinstance(ck, dict) else ck
     step = int(ck.get("step", 0)) if isinstance(ck, dict) else 0
 
@@ -169,7 +156,7 @@ def main() -> None:
                         for b in ("pass", "no_move", "weak", "close")},
             "events": evs_all,
         }
-        print(f"[diag] task {tid} ({tag}): events={n} zero_eps={zero_eps} "
+        print(f"[diag] {step} task {tid} ({tag}): events={n} zero_eps={zero_eps} "
               f"pass={pass_rate:.3f} buckets={results[str(tid)]['buckets']}", flush=True)
         env.close()
 
@@ -182,10 +169,41 @@ def main() -> None:
                     for b in ("pass", "no_move", "weak", "close")},
         "zero_event_episodes": sum(r["zero_event_episodes"] for r in results.values()),
     }
-    print("[diag] OVERALL:", json.dumps(summary))
+    print(f"[diag] {step} OVERALL:", json.dumps(summary), flush=True)
+    return {"ckpt": ckpt_path, "step": step, "summary": summary, "per_task": results}
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ckpt", type=str, required=False, default="")
+    ap.add_argument("--ckpts", type=str, default="",
+                    help="comma-separated list of checkpoints (curve mode)")
+    ap.add_argument("--config", type=str, default="stage20_hypothesis_v2.yaml")
+    ap.add_argument("--preset", type=str, default="cloud_24g")
+    ap.add_argument("--episodes", type=int, default=12)
+    ap.add_argument("--max-steps", type=int, default=300)
+    ap.add_argument("--epsilon", type=float, default=0.1)
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--out", type=str, default="/root/op_fail_diag.json")
+    args = ap.parse_args()
+
+    device = get_device()
+    cfg = load_config(args.config, args.preset)
+
+    ckpt_list = [c.strip() for c in args.ckpts.split(",") if c.strip()] if args.ckpts else [args.ckpt]
+    curve = []
+    full_runs = []
+    for ckpt_path in ckpt_list:
+        r = _run_one_ckpt(ckpt_path, cfg, args, device)
+        full_runs.append(r)
+        curve.append({"step": r["step"], "pass_rate": r["summary"]["pass_rate"],
+                      "no_move": r["summary"]["buckets"].get("no_move", 0),
+                      "n_events": r["summary"]["n_events"]})
+
+    print("[diag] CURVE:", json.dumps(curve), flush=True)
+    out = {"args_ckpts": ckpt_list, "curve": curve, "runs": full_runs}
     with open(args.out, "w", encoding="utf-8") as f:
-        json.dump({"ckpt": args.ckpt, "step": step, "summary": summary,
-                   "per_task": results}, f, indent=1)
+        json.dump(out, f, indent=1)
     print("[diag] saved", args.out)
 
 
