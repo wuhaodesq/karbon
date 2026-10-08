@@ -125,6 +125,10 @@ advanced:
   meta_monitor_enabled: true
   meta_window: 8
   meta_skill_window: 2000
+  # Stage 21 M3: 矛盾检测+自纠错 (近同条件异结论 → 按成功率降权弱者);
+  # 离线判据: 注入检出率>0.8 / 误报<0.1 (tests/test_contradiction.py)
+  contradiction_enabled: true
+  contradiction_sim_threshold: 0.9
 
 # --- Cognitive Modules ---
 cognitive:

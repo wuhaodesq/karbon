@@ -1448,6 +1448,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     language_cfg = config.get("language")
     hypothesis_tester: Any = None
     meta_monitor: Any = None  # Stage 21 M2: online recursive metacognition
+    contradiction_detector: Any = None  # Stage 21 M3: self-correction
     counterfactual: Any = None
     behavior_cloning: Any = None
     meta_learner: Any = None
@@ -1492,6 +1493,18 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             )
             logger.info("MetaMonitor enabled (M2 online, skill window=%d)",
                         meta_monitor._skill_window)
+
+        # Stage 21 M3: contradiction detection + self-correction over the
+        # rule base (near-identical conditions, conflicting actions ->
+        # weaken the weaker rule). Bounded pairwise scan (<= max_rules^2/2).
+        if advanced_cfg and bool(advanced_cfg.get("contradiction_enabled", False)):
+            from src.models.contradiction import ContradictionDetector
+            contradiction_detector = ContradictionDetector(
+                sim_threshold=float(advanced_cfg.get(
+                    "contradiction_sim_threshold", 0.9)),
+            )
+            logger.info("ContradictionDetector enabled (sim>=%.2f)",
+                        contradiction_detector.sim_threshold)
 
         # Counterfactual imagination
         if advanced_cfg and bool(advanced_cfg.get("counterfactual_enabled", False)):
@@ -4583,6 +4596,18 @@ and state.step % 50000 < rollout_capacity):
                     # 2026-09-25: was a bare `pass` — the broken get_edges()
                     # path stayed invisible for the whole project history.
                     logger.warning("[symbol] ingestion failed @ step=%d",
+                                   state.step, exc_info=True)
+
+            # --- Stage 21 M3: contradiction detection + self-correction ---
+            if contradiction_detector is not None and symbolic_layer is not None:
+                try:
+                    _cd = contradiction_detector.step(
+                        symbolic_layer.rule_memory._rules)
+                    if _cd["pairs"] > 0:
+                        logger.info("[contradiction] pairs=%d resolved=%d",
+                                    _cd["pairs"], _cd["resolved"])
+                except Exception:
+                    logger.warning("[contradiction] cycle failed @ step=%d",
                                    state.step, exc_info=True)
 
             # --- Program Synthesis: active experimentation ---

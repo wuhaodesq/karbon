@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+### Stage 21 M3: 矛盾检测 + 自纠错 (2026-10-08) 🔧
+
+- `src/models/contradiction.py`: 矛盾对 = 近同条件嵌入 (cos≥0.9) 且行动
+  冲突; 解决 = 按成功率对比降权弱者 (resolve_factor 0.7)。有界
+  (≤max_rules²/2 对)。接入 train.py 周期块 (配置门控), 检出时
+  `[contradiction]` 日志。
+- 判据 (tests/test_contradiction.py, 5/5 过): 注入检出率 >0.8, 误报
+  <0.1 (5 seed×10 注入), 同条件同行不误报, 解决降弱保强, 无嵌入诚实
+  空操作。
+- M2 收尾数据 (同日): 在线 [meta] skill 全程 +0.04→+0.26 (滚动 2000,
+  基线 0.71→0.55), op 尾点 0.267 (浅振荡 G2 记录)。
+
 ### Stage 21 M1 通过: 元监控离线验证 (2026-10-08) 🎯
 
 - `scripts/eval/meta_monitor_m1.py`: 事件流→过程特征→元预测头 (时间切分,
