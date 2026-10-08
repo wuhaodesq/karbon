@@ -120,6 +120,11 @@ advanced:
   # 2026-09-28 systematic 巩固: 事件结局预测辅助损失 (BCE 回传主干)
   # 让"预测→验证"进入策略表征本身, 而非旁路 probe_net (此前留存≈随机)
   hypothesis_pred_aux_coef: 0.05
+  # Stage 21 M2: 在线元监控 (递归元认知) — 过程特征→探针结局预测,
+  # 在线 BCE + 滚动诚实 skill; M1 离线验证 +0.154 (跨策略 +0.15/+0.29)
+  meta_monitor_enabled: true
+  meta_window: 8
+  meta_skill_window: 2000
 
 # --- Cognitive Modules ---
 cognitive:

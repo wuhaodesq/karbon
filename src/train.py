@@ -1447,6 +1447,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     advanced_cfg = config.get("advanced")
     language_cfg = config.get("language")
     hypothesis_tester: Any = None
+    meta_monitor: Any = None  # Stage 21 M2: online recursive metacognition
     counterfactual: Any = None
     behavior_cloning: Any = None
     meta_learner: Any = None
@@ -1479,6 +1480,18 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             ).to(device)
             health.register("hypotheses", hypothesis_tester)
             logger.info("HypothesisTester enabled (max=%d)", hypothesis_tester.capacity)
+
+        # Stage 21 M2: online meta-monitor — second-order tracking of the
+        # agent's own reasoning outcomes (validated offline in M1: +0.154
+        # within-log, +0.15/+0.29 cross-policy; head is tiny, stays on CPU).
+        if advanced_cfg and bool(advanced_cfg.get("meta_monitor_enabled", False)):
+            from src.models.meta_monitor import MetaMonitor
+            meta_monitor = MetaMonitor(
+                window=int(advanced_cfg.get("meta_window", 8)),
+                skill_window=int(advanced_cfg.get("meta_skill_window", 2000)),
+            )
+            logger.info("MetaMonitor enabled (M2 online, skill window=%d)",
+                        meta_monitor._skill_window)
 
         # Counterfactual imagination
         if advanced_cfg and bool(advanced_cfg.get("counterfactual_enabled", False)):
@@ -2241,6 +2254,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             # 2026-09-22: probe_net is now trained (probe-outcome learning);
             # persist its weights + update counter across restarts.
             ("hypothesis_tester_state",  hypothesis_tester,            None),
+            ("meta_monitor_state",       meta_monitor,                 None),
         ]
         for key, module, _opt in _restore_map:
             if module is not None and key in _extra:
@@ -2841,6 +2855,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                                 "lk": [round(float(_act[1]), 3),
                                                        round(float(_act[2]), 3)],
                                                 "act": int(_pa)})
+                                    if meta_monitor is not None:
+                                        meta_monitor.on_probe(state.step)
                         # Verify (durable, every step): arrival = success
                         # (before or at reveal); reveal while far, or the
                         # 30-step deadline, = failure. Replaces the old
@@ -2870,6 +2886,9 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                 _hyp_stats["failed"] += 1
                             _event_log({"t": "verify", "step": int(state.step),
                                         "ok": float(_probe_outcome)})
+                            if meta_monitor is not None:
+                                meta_monitor.on_outcome(
+                                    state.step, float(_probe_outcome))
                         if _probe_outcome == 1.0 and logic_engine is not None:
                                 try:
                                     from src.models.logic_engine import (
@@ -4943,6 +4962,9 @@ and state.step % 50000 < rollout_capacity):
                 except Exception:
                     pass
             logger.info("[hypothesis] stats: %s", _hyp_log)
+            # Stage 21 M2: online meta-monitor rolling skill (honest).
+            if meta_monitor is not None:
+                logger.info("[meta] %s", meta_monitor.skill)
 
         # --- Stage 20-ToM diagnostics (trainable ToM module) ---
         if state.step % 5000 < rollout_capacity and _tom_stats["n"] > 0:
