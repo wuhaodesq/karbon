@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+### Stage 21 M1 启动: 认知事件日志 (2026-10-08) 🧠
+
+- src/train.py 新增有界认知事件日志 (opt-in DEVAGI_EVENT_LOG=<path>,
+  容量 20 万行): 记录假设回路自身的事件流 — propose (hyp/obj/lk/act) /
+  probe / verify (结局) — 供二级元监控器 (元预测/矛盾检测/审慎门) 做
+  **离线开发与 held-out 验证** (设计见 docs/stage21_design.md)。
+- 首采: 从 12.05M 验证版续 60k 步采集 (~17:40 完成), 事件 ~1 万+ 条。
+
 ### Stage 20 封存 (2026-10-08) 🏁
 
 - **机制**: 假设-演绎闭环完成 — 事实摄入 0→512 (`get_edges` 断链修复)、

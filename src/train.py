@@ -24,6 +24,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import math
 import time
@@ -825,6 +826,29 @@ def _apply_rule_outcome_feedback(rules: dict, prev_usage: dict, ep_ret: float) -
     # Snapshot AFTER the updates: update() bumps usage by 1, so returning the
     # pre-update map would make the same rule fire again next episode.
     return {rid: int(r.usage_count) for rid, r in rules.items()}
+
+
+# Stage 21 M1 (2026-10-08): bounded cognitive-event log for the recursive
+# meta-monitor. Opt-in via DEVAGI_EVENT_LOG=<path>; records the hypothesis
+# loop's own events (propose / probe / verify + outcome) so the second-order
+# model can be developed and validated OFFLINE on real event streams before
+# any online integration (see docs/stage21_design.md §3-5).
+_EVENT_LOG: dict[str, Any] = {"path": os.environ.get("DEVAGI_EVENT_LOG", ""),
+                              "fh": None, "n": 0, "cap": 200000}
+
+
+def _event_log(rec: dict) -> None:
+    if not _EVENT_LOG["path"] or _EVENT_LOG["n"] >= _EVENT_LOG["cap"]:
+        return
+    try:
+        if _EVENT_LOG["fh"] is None:
+            _EVENT_LOG["fh"] = open(_EVENT_LOG["path"], "a", encoding="utf-8")
+        _EVENT_LOG["fh"].write(json.dumps(rec, separators=(",", ":")) + "\n")
+        _EVENT_LOG["n"] += 1
+        if _EVENT_LOG["n"] % 64 == 0:
+            _EVENT_LOG["fh"].flush()
+    except Exception:
+        logger.warning("[eventlog] write failed", exc_info=True)
 
 
 def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
@@ -2770,7 +2794,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         _hsig = env.get_occlusion_signal()
                         if _hsig["just_occluded"] and hidden is not None:
                             for _obj_id, _lkx, _lky in _hsig["just_occluded"][:2]:
-                                hypothesis_tester.propose_hypothesis(
+                                _hyp_new = hypothesis_tester.propose_hypothesis(
                                     condition_embedding=hidden.squeeze(0).detach(),
                                     predicted_action=_action_toward(
                                         env, _lkx, _lky, device),
@@ -2781,6 +2805,12 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                 _hyp_last_known = (_lkx, _lky)
                                 _hyp_step = state.step
                                 _hyp_stats["proposed"] += 1
+                                _event_log({"t": "propose", "step": int(state.step),
+                                            "hyp": int(_hyp_new.id),
+                                            "obj": int(_obj_id),
+                                            "lk": [round(float(_lkx), 3),
+                                                   round(float(_lky), 3)],
+                                            "act": int(_hyp_new.predicted_action)})
                         # Probe: while something is occluded and no hypothesis
                         # is active, take a probe action. 2026-09-22: the gate
                         # is now probe_net (learned from genuine tracking
@@ -2805,6 +2835,12 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                     action = torch.full_like(action, int(_pa))
                                     _hyp_stats["probed"] += 1
                                     _ep_probe_steps += 1
+                                    _event_log({"t": "probe", "step": int(state.step),
+                                                "hyp": int(hypothesis_tester._active_hypothesis_id
+                                                           if hypothesis_tester._active_hypothesis_id is not None else -1),
+                                                "lk": [round(float(_act[1]), 3),
+                                                       round(float(_act[2]), 3)],
+                                                "act": int(_pa)})
                         # Verify (durable, every step): arrival = success
                         # (before or at reveal); reveal while far, or the
                         # 30-step deadline, = failure. Replaces the old
@@ -2832,6 +2868,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                 _hyp_stats["verified"] += 1
                             else:
                                 _hyp_stats["failed"] += 1
+                            _event_log({"t": "verify", "step": int(state.step),
+                                        "ok": float(_probe_outcome)})
                         if _probe_outcome == 1.0 and logic_engine is not None:
                                 try:
                                     from src.models.logic_engine import (
