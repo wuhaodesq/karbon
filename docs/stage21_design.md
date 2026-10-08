@@ -68,11 +68,22 @@
 
 | M | Deliverable | Verification (honest) | Est. |
 |---|---|---|---|
-| **M1** | `meta_monitor.py`: 事件流缓冲 + 元预测头 + 离线评测 (用 Stage 20 的已有事件日志先做离线训练/测试) | held-out meta-prediction **skill_vs_majority > 0.05** (n≥1000) — 判定能力真实存在 | 1-2 天 |
+| **M1** ✅ | `meta_monitor_m1.py` 离线验证 (18.4k 事件日志, 6.2k 样本) | **skill_vs_majority = +0.154** (acc 0.727 vs 基线 0.573, n_test 1865, 时间切分; 起点特征无循环) — **PASS** (2026-10-08) | 完成 |
 | **M2** | 在线接入: 事件流实时进入 monitor, 元预测 BCE 参与训练 (小系数) | 12-24h 训练后 skill 保持 >0; op/ToM 不回退 | 2-3 天 |
 | **M3** | 矛盾检测头 + 自纠错回路 (检出→降权/标注矛盾规则) | 注入矛盾对的检出率 > 0.8, 误报 < 0.1 | 2 天 |
 | **M4** | 审慎门控 + G2/G3 收尾 (振荡诊断/接受、num 复验) | 等预算 A/B 收益 > 0; 记录结论 | 2-3 天 |
 | **Exit** | 报告 + tag `v0.21.0-stage21` | M1-M4 全绿 | — |
+
+### M1 result note (2026-10-08)
+
+- 数据集: `/root/stage21_events.jsonl` (18,391 事件; 12.05M ckpt 60k 步采集)。
+- 诚实任务 (onset): 探针起点特征 [freshness, n_probes, recent_succ,
+  probe_rate, consec_fail, lk_x, lk_y, obj] → 预测该探针的最终结局;
+  时间切分 train 70% / test 30%; 基线 = 多数类 0.573。
+- **结果: acc 0.727, skill +0.154, Brier skill 0.225 (PASS)**。
+- 对照 (finalize, age 含结局原因信息): +0.165 — 差距小, 说明主要技能来自
+  真实的**过程状态自适应** (近期成败窗口/探针密度), 而非时刻泄露。
+- 待办 (M1.5): 特征消融 / 跨 ckpt 泛化 (第二个事件日志) / 校准曲线。
 
 ## 5. G1 note — why this measures systematic_reasoning
 

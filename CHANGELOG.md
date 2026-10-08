@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+### Stage 21 M1 通过: 元监控离线验证 (2026-10-08) 🎯
+
+- `scripts/eval/meta_monitor_m1.py`: 事件流→过程特征→元预测头 (时间切分,
+  多数类基线)。**诚实任务 (起点特征): acc 0.727 / skill_vs_majority
+  +0.154 / Brier skill 0.225 (n_test 1865) — PASS** (判据 >0.05)。
+- 意义: systematic 攻坚的首个诚实预测信号 — 预测环境结局 (probe_net)
+  一直≈随机, 而**预测自身推理过程结局** (+15.4%) 成功; Stage 21 的
+  过程级元监控论点获初步验证。对照 (finalize, 含时刻信息) +0.165,
+  差距小 → 技能来自真实的过程状态自适应, 非泄露。
+- 数据: 18,391 事件 (12.05M ckpt 采集; 有界事件日志 devagi train.py 内)。
+
 ### Stage 21 M1 启动: 认知事件日志 (2026-10-08) 🧠
 
 - src/train.py 新增有界认知事件日志 (opt-in DEVAGI_EVENT_LOG=<path>,
