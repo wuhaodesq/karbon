@@ -3,6 +3,22 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+### Stage 20 封存 (2026-10-08) 🏁
+
+- **机制**: 假设-演绎闭环完成 — 事实摄入 0→512 (`get_edges` 断链修复)、
+  多跳前向链 (形式探针 10/10 零缺口)、规则结果反馈接线、双通道规则
+  转向冻结。审计期共修复 9 处静默断链。
+- **能力门 (物理世界, 多 seed)**: op 0.692/0.727 (12.05M) 与 0.673/0.707
+  (12.15M); ToM 0.566/0.552 — **过门**。means_ends/physics ✅,
+  num_sense 一个 seed 差 0.0125。
+- **四次坍缩根因修复**: 反刷分 → 接触奖励门控 + 起点≥1.2m; value 爆炸 →
+  α=0.1 + Huber; 规则 runaway → 相对判别; 单规则捕获 → 双通道冻结
+  (冻结后无深坍缩, 残浅振荡 0.36-0.62)。
+- **携带缺口 → Stage 21**: systematic_reasoning 诚实度量的 skill ≈ 0
+  (两轮巩固失败: detached probe_net / trunk-backprop BCE); 旧里程碑代理
+  指标判定无效 (方向集中度 ≠ 预测能力)。详见 `docs/stage20_report.md`。
+- Tag: `v0.20.0-stage20`。
+
 ### 冻结规则转向: 双通道偏置切断 (2026-09-29) 🧊
 
 - **复发确认**: 对照实验（aux 关闭 200k 步）op 继续恶化 0.245→0.13 → 排除
