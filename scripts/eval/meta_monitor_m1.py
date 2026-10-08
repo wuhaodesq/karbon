@@ -103,33 +103,14 @@ def build_samples(events_path: str, task: str = "onset") -> tuple[list[list[floa
     return xs, ys, steps
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--events", type=str, default="/root/stage21_events.jsonl")
-    ap.add_argument("--out", type=str, default="/root/meta_monitor_m1.json")
-    ap.add_argument("--epochs", type=int, default=300)
-    ap.add_argument("--task", type=str, default="onset",
-                    choices=["onset", "finalize"])
-    args = ap.parse_args()
-
-    xs, ys, steps = build_samples(args.events, args.task)
-    n = len(xs)
-    if n < 200:
-        print(f"[m1] too few samples: {n}")
-        sys.exit(1)
-
-    x = torch.tensor(xs, dtype=torch.float32)
-    y = torch.tensor(ys, dtype=torch.float32)
-    # standardize using TRAIN statistics only (no test leakage)
-    n_train = int(n * 0.7)
-    mu, sd = x[:n_train].mean(0), x[:n_train].std(0).clamp_min(1e-6)
-    x = (x - mu) / sd
-
+def _fit_eval(x: torch.Tensor, y: torch.Tensor, n_train: int,
+              epochs: int = 300) -> dict:
+    """Train the tiny MLP on the first n_train rows; report honest metrics."""
     torch.manual_seed(0)
-    model = nn.Sequential(nn.Linear(len(FEATURES), 32), nn.GELU(),
+    model = nn.Sequential(nn.Linear(x.shape[1], 32), nn.GELU(),
                           nn.Linear(32, 32), nn.GELU(), nn.Linear(32, 1))
     opt = torch.optim.Adam(model.parameters(), lr=3e-3)
-    for ep in range(args.epochs):
+    for _ in range(epochs):
         model.train()
         opt.zero_grad()
         p = model(x[:n_train]).squeeze(-1)
@@ -145,19 +126,113 @@ def main() -> None:
     majority = max(base, 1.0 - base)
     acc = float(((p_test > 0.5) == (y_test > 0.5)).mean())
     brier = float(((p_test - y_test) ** 2).mean())
-    skill = acc - majority
-    brier_skill = 1.0 - brier / 0.25
+    return {"n_test": m, "positive_rate": round(base, 3),
+            "majority": round(majority, 3), "accuracy": round(acc, 3),
+            "skill": round(acc - majority, 3),
+            "brier": round(brier, 3),
+            "brier_skill": round(1.0 - brier / 0.25, 3)}
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--events", type=str, default="/root/stage21_events.jsonl")
+    ap.add_argument("--out", type=str, default="/root/meta_monitor_m1.json")
+    ap.add_argument("--epochs", type=int, default=300)
+    ap.add_argument("--task", type=str, default="onset",
+                    choices=["onset", "finalize"])
+    ap.add_argument("--ablation", action="store_true",
+                    help="leave-one-out + group ablations on the onset task")
+    ap.add_argument("--events_test", type=str, default="",
+                    help="cross-log generalization: train on --events, test on this file")
+    args = ap.parse_args()
+
+    xs, ys, steps = build_samples(args.events, args.task)
+    n = len(xs)
+    if n < 200:
+        print(f"[m1] too few samples: {n}")
+        sys.exit(1)
+    x = torch.tensor(xs, dtype=torch.float32)
+    y = torch.tensor(ys, dtype=torch.float32)
+    n_train = int(n * 0.7)
+    mu, sd = x[:n_train].mean(0), x[:n_train].std(0).clamp_min(1e-6)
+    x = (x - mu) / sd
+
+    if args.ablation:
+        rows = []
+        full = _fit_eval(x, y, n_train, args.epochs)
+        rows.append(("all", full))
+        for i, f in enumerate(FEATURES):
+            keep = [j for j in range(len(FEATURES)) if j != i]
+            rows.append((f"w/o {f}", _fit_eval(x[:, keep], y, n_train, args.epochs)))
+        for label, idx in [("recent-only", [2, 3, 4]),
+                           ("belief-only", [5, 6, 7]),
+                           ("freshness-only", [0])]:
+            rows.append((label, _fit_eval(x[:, idx], y, n_train, args.epochs)))
+        print(f"{'variant':>18} {'acc':>6} {'majority':>9} {'skill':>7} {'brier_sk':>9}", flush=True)
+        for label, r in rows:
+            print(f"{label:>18} {r['accuracy']:>6.3f} {r['majority']:>9.3f} "
+                  f"{r['skill']:>7.3f} {r['brier_skill']:>9.3f}", flush=True)
+        with open(args.out, "w", encoding="utf-8") as f:
+            json.dump({"ablation": {k: v for k, v in rows}}, f, indent=1)
+        print("[m1] saved", args.out, flush=True)
+        return
+
+    # cross-log generalization (M1.5): train on --events, test on another log
+    if args.events_test:
+        xs_b, ys_b, _ = build_samples(args.events_test, args.task)
+        xb = (torch.tensor(xs_b, dtype=torch.float32) - mu) / sd  # train stats
+        yb = torch.tensor(ys_b, dtype=torch.float32)
+        # fit on ALL of log A, evaluate on log B
+        torch.manual_seed(0)
+        model = nn.Sequential(nn.Linear(len(FEATURES), 32), nn.GELU(),
+                              nn.Linear(32, 32), nn.GELU(), nn.Linear(32, 1))
+        opt = torch.optim.Adam(model.parameters(), lr=3e-3)
+        for _ in range(args.epochs):
+            model.train()
+            opt.zero_grad()
+            p = model(x).squeeze(-1)
+            loss = F.binary_cross_entropy_with_logits(p, y)
+            loss.backward()
+            opt.step()
+        model.eval()
+        with torch.no_grad():
+            p_b = torch.sigmoid(model(xb).squeeze(-1)).numpy()
+        y_b = yb.numpy()
+        m = len(y_b)
+        base = float(y_b.mean())
+        majority = max(base, 1.0 - base)
+        acc = float(((p_b > 0.5) == (y_b > 0.5)).mean())
+        brier = float(((p_b - y_b) ** 2).mean())
+        report = {
+            "task": args.task, "train_log": args.events,
+            "test_log": args.events_test,
+            "n_train_all": n, "n_test": m,
+            "test_positive_rate": round(base, 3),
+            "majority_baseline": round(majority, 3),
+            "accuracy": round(acc, 3),
+            "skill_vs_majority": round(acc - majority, 3),
+            "brier": round(brier, 3),
+            "brier_skill_vs_0.25": round(1.0 - brier / 0.25, 3),
+            "features": FEATURES,
+        }
+        print("[m1] CROSS " + json.dumps(report, indent=1), flush=True)
+        with open(args.out, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=1)
+        print("[m1] saved", args.out, flush=True)
+        return
+
+    res = _fit_eval(x, y, n_train, args.epochs)
     report = {
         "task": args.task,
         "events_file": args.events,
-        "n_total": n, "n_train": n_train, "n_test": m,
-        "test_positive_rate": round(base, 3),
-        "majority_baseline": round(majority, 3),
-        "accuracy": round(acc, 3),
-        "skill_vs_majority": round(skill, 3),
-        "brier": round(brier, 3),
-        "brier_skill_vs_0.25": round(brier_skill, 3),
-        "M1_pass_skill>0.05": bool(skill > 0.05),
+        "n_total": n, "n_train": n_train,
+        "test_positive_rate": res["positive_rate"],
+        "majority_baseline": res["majority"],
+        "accuracy": res["accuracy"],
+        "skill_vs_majority": res["skill"],
+        "brier": res["brier"],
+        "brier_skill_vs_0.25": res["brier_skill"],
+        "M1_pass_skill>0.05": bool(res["skill"] > 0.05),
         "features": FEATURES,
     }
     print("[m1] " + json.dumps(report, indent=1), flush=True)
