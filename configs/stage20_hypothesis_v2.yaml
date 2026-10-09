@@ -129,6 +129,10 @@ advanced:
   # 离线判据: 注入检出率>0.8 / 误报<0.1 (tests/test_contradiction.py)
   contradiction_enabled: true
   contradiction_sim_threshold: 0.9
+  # Stage 21 M4: 审慎门控 — 二级压力状态重分配探针时机 (卡住多探/顺利省探),
+  # 滚动均值居中 => 等预算; A/B 验证在训练窗口 (docs/stage21_design.md M4)
+  deliberation_enabled: true
+  deliberation_gain: 0.5
 
 # --- Cognitive Modules ---
 cognitive:
@@ -365,7 +369,7 @@ train:
   value_coef: 0.5
   gamma: 0.99
   gae_lambda: 0.95
-  total_steps: 12750000             # v2: 恢复链 (chain10) 当前目标; 每段由链条 +250k 自动推进
+  total_steps: 13200000             # v2: Stage 21 浸泡跑目标 (13.0M -> 13.2M)
   # NOTE: the auto-resume chain bumps this value server-side each segment.
   # When deploying a config to the server, MERGE with the server copy —
   # overwriting once clobbered the chain target and the next segment

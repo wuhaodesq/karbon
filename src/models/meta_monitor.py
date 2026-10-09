@@ -113,6 +113,17 @@ class MetaMonitor(nn.Module):
     # ------------------------------------------------------------ reporting
 
     @property
+    def recent_pressure(self) -> float:
+        """0..1: recent failure pressure (1 = stuck, 0 = rolling).
+
+        Derived from the bounded outcome window; 0.5 when no history yet
+        (neutral pressure, budget-neutral for the deliberation gate).
+        """
+        if not self._outcomes:
+            return 0.5
+        return max(0.0, min(1.0, 1.0 - sum(self._outcomes) / len(self._outcomes)))
+
+    @property
     def skill(self) -> dict:
         """Rolling honest skill estimate (accuracy vs majority baseline).
 

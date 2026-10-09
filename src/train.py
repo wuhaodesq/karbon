@@ -842,7 +842,16 @@ def _event_log(rec: dict) -> None:
         return
     try:
         if _EVENT_LOG["fh"] is None:
-            _EVENT_LOG["fh"] = open(_EVENT_LOG["path"], "a", encoding="utf-8")
+            _p = _EVENT_LOG["path"]
+            # 2026-10-09 bug-audit: the per-process line cap does not bound the
+            # FILE across restarts; rotate (truncate) above 32 MB so repeated
+            # launches cannot grow the log unboundedly on disk.
+            try:
+                if os.path.exists(_p) and os.path.getsize(_p) > 32 * 1024 * 1024:
+                    os.remove(_p)
+            except OSError:
+                pass
+            _EVENT_LOG["fh"] = open(_p, "a", encoding="utf-8")
         _EVENT_LOG["fh"].write(json.dumps(rec, separators=(",", ":")) + "\n")
         _EVENT_LOG["n"] += 1
         if _EVENT_LOG["n"] % 64 == 0:
@@ -1449,6 +1458,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     hypothesis_tester: Any = None
     meta_monitor: Any = None  # Stage 21 M2: online recursive metacognition
     contradiction_detector: Any = None  # Stage 21 M3: self-correction
+    deliberation_gate: Any = None  # Stage 21 M4: budget-neutral control
     counterfactual: Any = None
     behavior_cloning: Any = None
     meta_learner: Any = None
@@ -1505,6 +1515,19 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             )
             logger.info("ContradictionDetector enabled (sim>=%.2f)",
                         contradiction_detector.sim_threshold)
+
+        # Stage 21 M4: budget-neutral deliberation gate — the second-order
+        # pressure state redistributes WHEN probes happen (more when stuck,
+        # fewer when rolling); the rolling-mean centering keeps the total
+        # probe budget unchanged (equal-budget by construction).
+        if advanced_cfg and bool(advanced_cfg.get("deliberation_enabled", False)):
+            from src.models.deliberation import DeliberationGate
+            deliberation_gate = DeliberationGate(
+                window=int(advanced_cfg.get("deliberation_window", 2000)),
+                gain=float(advanced_cfg.get("deliberation_gain", 0.5)),
+            )
+            logger.info("DeliberationGate enabled (gain=%.2f)",
+                        deliberation_gate.gain)
 
         # Counterfactual imagination
         if advanced_cfg and bool(advanced_cfg.get("counterfactual_enabled", False)):
@@ -2848,7 +2871,11 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                             _gate_ok = (hidden is not None
                                         and hypothesis_tester.should_probe(
                                             hidden.squeeze(0)))
-                            if _gate_ok or float(np.random.rand()) < hypothesis_tester.probe_epsilon():
+                            _eps_eff = hypothesis_tester.probe_epsilon()
+                            if deliberation_gate is not None and meta_monitor is not None:
+                                _eps_eff = deliberation_gate.modulate(
+                                    _eps_eff, meta_monitor.recent_pressure)
+                            if _gate_ok or float(np.random.rand()) < _eps_eff:
                                 _pa = hypothesis_tester.get_probe_action()
                                 if _pa is not None:
                                     _act = _hsig["active"][0]
@@ -4990,6 +5017,9 @@ and state.step % 50000 < rollout_capacity):
             # Stage 21 M2: online meta-monitor rolling skill (honest).
             if meta_monitor is not None:
                 logger.info("[meta] %s", meta_monitor.skill)
+            # Stage 21 M4: deliberation budget-neutrality telemetry.
+            if deliberation_gate is not None:
+                logger.info("[deliberation] %s", deliberation_gate.summary)
 
         # --- Stage 20-ToM diagnostics (trainable ToM module) ---
         if state.step % 5000 < rollout_capacity and _tom_stats["n"] > 0:
