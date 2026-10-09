@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+### Stage 21 M4 + Bug 台账 + 同类扫描 (2026-10-09) 🧭
+
+- **M4 审慎门控** `src/models/deliberation.py`: 二级压力状态重分配探针
+  时机 (卡住多探/顺利省探); 滚动均值居中 → **等预算** (构造性保证)。
+  接入探针门 (ε 调制) + `[deliberation]` 遥测; 测试 4 例 (界/卡住优先/
+  预算中性/钳制)。
+- **Bug 台账** `docs/bug_ledger.md`: 25 项缺陷全登记 (A 静默断链 10 /
+  B 设计缺陷 8 / C 运维 7), 每项含症状/根因/修复; 附同类扫描记录。
+- **同类扫描** (M1-M4 新代码): 设备混用 (contradiction 已修; 监控器 CPU
+  一致性确认); 非幂等周期 (矛盾解决加单向记忆); 无界增长 (事件日志
+  32MB 轮转)。跨进程写入残留风险由守护式 launcher 根控。
+
 ### Stage 21 M3: 矛盾检测 + 自纠错 (2026-10-08) 🔧
 
 - `src/models/contradiction.py`: 矛盾对 = 近同条件嵌入 (cos≥0.9) 且行动
