@@ -54,7 +54,10 @@ class ContradictionDetector:
             e = getattr(r, "condition_embedding", None)
             if e is None or not torch.is_tensor(e):
                 return []  # cannot judge without embeddings (honest no-op)
-            emb.append(F.normalize(e.detach().float().reshape(-1), dim=0))
+            # 2026-10-09: rule embeddings can live on mixed devices (rules
+            # created at different times / merged); normalize and move to CPU
+            # before stacking — the pairwise scan is tiny and CPU is safe.
+            emb.append(F.normalize(e.detach().float().reshape(-1), dim=0).cpu())
             acts.append(int(getattr(r, "action", -1)))
         mat = torch.stack(emb)  # (R, D)
         sim = mat @ mat.t()  # (R, R)

@@ -112,3 +112,16 @@ def test_step_summary_bounded():
     out = det.step(rules)
     assert set(out.keys()) == {"pairs", "resolved"}
     assert out["resolved"] <= out["pairs"]
+
+
+def test_detect_handles_mixed_dtype_embeddings():
+    """2026-10-09 production bug: rule embeddings can be mixed dtype/device;
+    the detector normalizes to float-CPU before stacking."""
+    det = ContradictionDetector(sim_threshold=0.9)
+    e = torch.randn(D)
+    rules = {
+        0: Rule(id=0, condition_embedding=e.clone().double(), action=1),
+        1: Rule(id=1, condition_embedding=e.clone().float(), action=2),
+    }
+    pairs = det.detect(rules)
+    assert len(pairs) == 1  # same direction, different action
