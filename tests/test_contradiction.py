@@ -114,6 +114,25 @@ def test_step_summary_bounded():
     assert out["resolved"] <= out["pairs"]
 
 
+def test_resolve_is_once_per_pair():
+    """The periodic loop must not re-punish the same conflict every cycle."""
+    det = ContradictionDetector(sim_threshold=0.9, resolve_factor=0.5)
+    torch.manual_seed(4)
+    e = torch.randn(D)
+    ra = Rule(id=0, condition_embedding=e.clone(), action=1, confidence=0.8)
+    rb = Rule(id=1, condition_embedding=e.clone(), action=2, confidence=0.8)
+    rules = {0: ra, 1: rb}
+    pairs = det.detect(rules)
+    assert len(pairs) == 1
+    assert det.resolve(rules, pairs) == 1
+    conf_after_first = min(ra.confidence, rb.confidence)
+    # second cycle: same pair detected again but must NOT be re-resolved
+    pairs2 = det.detect(rules)
+    assert len(pairs2) == 1
+    assert det.resolve(rules, pairs2) == 0
+    assert min(ra.confidence, rb.confidence) == conf_after_first
+
+
 def test_detect_handles_mixed_dtype_embeddings():
     """2026-10-09 production bug: rule embeddings can be mixed dtype/device;
     the detector normalizes to float-CPU before stacking."""
