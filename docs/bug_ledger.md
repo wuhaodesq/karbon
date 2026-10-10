@@ -20,6 +20,7 @@
 | A8 | **2026-09-25** | ckpt `facts_total=0` (全项目历史) | `train.py` 调 `causal_disc.get_edges()` — **该方法从不存在**, `hasattr` 恒 False → `add_causal_edges` 从未执行; 裸 except 掩盖 | 改读 `_graph.edges` + 带堆栈告警 + `[symbol] facts ingested` 变更日志 |
 | A9 | **2026-09-25** | 规则 success_count 恒 0 | `RuleMemory.update()` **全仓库无调用者** | `_apply_rule_outcome_feedback` 接线 (usage 增量回传) |
 | A10 | **2026-09-28** | aux 巩固 122/122 次全部失败 | 存 obs 带 batch 维 → 5 维张量 → 编码器 permute 崩; `torch.stack` 再叠一维 | 存储时 squeeze + `torch.cat` 重建批 |
+| A11 | **2026-10-10** | soak3 整段 13046 proposals / **0 probes**; [meta] n=0 | M4 部署**只传了 train.py + deliberation.py, 漏传 meta_monitor.py** (缺新属性 `recent_pressure`) → 探针块 modulate 行每步 AttributeError; 外层 handler 吞掉 (全场仅 3 条 WARNING) → 探针路径整段死亡 | 补全部署 + modulate 防御性 fallback (基础 ε) + 限频响亮日志; **部署清单: 每个模块逐一验 marker** |
 
 ## B. 设计缺陷类（Design flaws — 逻辑本身不健全）
 
@@ -58,6 +59,9 @@
 - **混合精度**: contradiction 测试覆盖 double/float ✓。
 - **跨进程写入**: 事件日志 append 交错 (重复实例时) — 由 C6 的守护式 launcher
   根控; 残留风险记录在案。
+- **分布完整性 (B9/A11 追加)**: 部分文件部署 → 新属性缺失 → 关键路径死亡。
+  新增规则: **部署 = 全部相关文件 + 逐模块 marker 校验**; 遥测性功能
+  (modulate 等) 必须有防御性 fallback, 不得拖死关键路径。
 
 ---
 

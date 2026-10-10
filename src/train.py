@@ -2873,8 +2873,22 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                             hidden.squeeze(0)))
                             _eps_eff = hypothesis_tester.probe_epsilon()
                             if deliberation_gate is not None and meta_monitor is not None:
-                                _eps_eff = deliberation_gate.modulate(
-                                    _eps_eff, meta_monitor.recent_pressure)
+                                # 2026-10-10 (bug ledger B9): a missing attribute
+                                # here once killed the whole probe path for an
+                                # entire run (13k proposals / 0 probes) because
+                                # the outer handler swallowed it. The modulation
+                                # is telemetry-adjacent: a failure must NOT take
+                                # the probe path down — fall back to the base
+                                # epsilon and log loudly (rate-limited).
+                                try:
+                                    _eps_eff = deliberation_gate.modulate(
+                                        _eps_eff, meta_monitor.recent_pressure)
+                                except Exception:
+                                    if state.step % 50000 < rollout_capacity:
+                                        logger.warning(
+                                            "[deliberation] modulate failed — "
+                                            "fallback to base eps", exc_info=True)
+                                    _eps_eff = hypothesis_tester.probe_epsilon()
                             if _gate_ok or float(np.random.rand()) < _eps_eff:
                                 _pa = hypothesis_tester.get_probe_action()
                                 if _pa is not None:
