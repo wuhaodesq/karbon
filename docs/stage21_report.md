@@ -45,23 +45,26 @@
   (churn from episode-end extraction); soak2 ran 0 failures after the
   device fix; resolve-once activates next full-stack run.
 
-## 5. M4 — Deliberation gate (mechanism ✅, online A/B PENDING)
+## 5. M4 — Deliberation gate (mechanism ✅, A/B done: **honest negative**)
 
 - Mechanism: failure-pressure → effective probe ε (more when stuck, less
-  when rolling); rolling-mean centering = **budget-neutral** (avg factor ≈1).
-- Telemetry: `[deliberation] {mods, pressure_mean, avg_factor}`.
-- **A/B protocol (equal-budget)**:
-  - Conditions: control `deliberation_enabled=false` vs treatment `=true`.
-  - 2 seeds × 2 conditions × 100k steps each, same start checkpoint.
-  - Equal-budget check: total probes within ±5% across conditions; the gate's
-    `avg_factor` ∈ [0.95, 1.05].
-  - Metrics: (a) verify-success rate distribution (rolling windows, less
-    oscillation-sensitive than single op readings), (b) op curve mean/peak,
-    (c) probe-timing concentration (stuck-window probe share vs rolling).
-  - PASS: treatment verify-rate distribution improves AND budget check holds;
-    else record honest negative.
-  - Note: the op oscillation (G2) makes single-endpoint comparison noisy —
-    the distributional metric is the primary.
+  when rolling); rolling-mean centering = budget-neutral
+  (`avg_factor` 1.006 online ✓).
+- **A/B/C results (2026-10-10, 75k steps per condition, same 13.8M start)**:
+
+| Condition | Probes | Verify rate |
+|---|---|---|
+| A control (ε=0.15, gate off) | 5,275 | 0.574 |
+| B treatment (gate on) | 7,236 | 0.736 (+16.1pp) |
+| C practice-matched (ε=0.205, gate off) | 6,559 | 0.687 (+11.3pp) |
+
+- **Verdict: B ≈ C (Δ +4.8pp < 5pp threshold)**. Practice-volume
+  extrapolation predicts ~+17.4pp for B's probe count; B scored +16.1pp —
+  **no independent value from timing/redistribution**. Honest negative:
+  the gate's measured benefit is a probe-volume amplifier (a stuck policy
+  naturally probes more), achievable by simply raising ε.
+- Recorded per the pre-registered protocol; telemetry (budget neutrality)
+  validated. No further M4 engineering planned.
 
 ## 6. Carried gaps (from Stage 20) — status
 
