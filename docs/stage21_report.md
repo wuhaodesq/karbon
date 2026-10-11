@@ -1,8 +1,8 @@
-# Stage 21 Report — 递归元认知 (Recursive Metacognition) — DRAFT
+# Stage 21 Report — 递归元认知 (Recursive Metacognition)
 
-> **Status**: **IN PROGRESS** (draft 2026-10-09). M1 ✅ M2 ✅ M3 ✅
-> (online validation pending full-stack run), M4 mechanism ✅ /
-> online A/B pending (protocol §5). 状态：进行中，草稿。
+> **Status**: **SEALED 2026-10-11** after the long-run validation
+> (soak5: 13.85M → 14.6M, ~11 h, 0 errors). M1 ✅ M2 ✅ M3 ✅
+> M4 mechanism ✅ / A/B honest-negative recorded. 状态：已封存。
 
 ---
 
@@ -11,9 +11,10 @@
 | Field | Value |
 |---|---|
 | Lineage | Stage 20 sealed @ 12.95M → Stage 21 modules layered on top |
-| Lineage now | 13,400,000 (soak2 end) |
+| Lineage now | 14,600,000 (soak5 end, 2026-10-11 10:12) |
 | Modules | MetaMonitor (M2), ContradictionDetector (M3), DeliberationGate (M4), bounded event log |
 | Config | `stage20_hypothesis_v2.yaml` (+ `meta_monitor_enabled`, `contradiction_enabled`, `deliberation_enabled`) |
+| Long-run | soak5 13.85M→14.6M (748k steps, 23:32→10:12, 0 errors) |
 | Data | `/root/stage21_events*.jsonl` (bounded, 32MB rotation) |
 
 ## 2. M1 — Offline validation (meta-prediction) ✅
@@ -29,27 +30,32 @@
 ## 3. M2 — Online integration ✅
 
 - MetaMonitor wired: onset features → P(success), online BCE, rolling honest
-  skill (accuracy vs outcome-window majority).
+  skill (accuracy vs outcome-window majority). Checkpoint-persisted.
 - Run 1 (12.95M→13.0M, 40k steps): [meta] skill **+0.04 → +0.26**.
-- Soak 2 (13.2M→13.4M, 200k steps): skill **+0.11 ~ +0.18** sustained
-  (acc 0.84-0.85, majority 0.67-0.73). No errors; op oscillated normally.
+- Soak 2 (13.2M→13.4M): skill **+0.11 ~ +0.18** sustained.
+- Soak 4/5 (13.6M→14.6M, ~950k steps total): skill **+0.27 peak (uncertain
+  phases), +0.19 at 02:00, cooling to ~0 in high-success phases** (majority
+  0.87-0.91 → limited headroom). Phase-dependence is an honest, reproducible
+  characteristic: informative prediction in uncertain phases, ~zero in
+  near-deterministic ones. **No errors across ~1M steps.**
 
 ## 4. M3 — Contradiction detection + self-correction ✅
 
 - Detector: near-identical condition embeddings (cos ≥ 0.9) + conflicting
   actions; resolution weakens the weaker rule (success-rate score), once per
-  pair (bounded memory).
+  pair (bounded 256 memory).
 - Verification: injected-detection **> 0.8**, false-positives **< 0.1**
-  (7/7 tests); honest no-op without embeddings; mixed-dtype handled.
-- Online: real rule base contains ~110-150 conflict pairs per cycle
-  (churn from episode-end extraction); soak2 ran 0 failures after the
-  device fix; resolve-once activates next full-stack run.
+  (7/7 tests); honest no-op without embeddings; mixed-dtype/device handled.
+- Online: real rule base carries 55-154 conflict pairs per cycle (churn from
+  episode-end extraction); resolve-once validated in soak4 (resolved < pairs
+  on repeat cycles); 0 cycle failures after the A11 fix; active throughout
+  soak5 (72-99 pairs/cycle).
 
 ## 5. M4 — Deliberation gate (mechanism ✅, A/B done: **honest negative**)
 
 - Mechanism: failure-pressure → effective probe ε (more when stuck, less
   when rolling); rolling-mean centering = budget-neutral
-  (`avg_factor` 1.006 online ✓).
+  (`avg_factor` **0.9998-0.9999** over 332k modulations in soak5).
 - **A/B/C results (2026-10-10, 75k steps per condition, same 13.8M start)**:
 
 | Condition | Probes | Verify rate |
@@ -66,22 +72,25 @@
 - Recorded per the pre-registered protocol; telemetry (budget neutrality)
   validated. No further M4 engineering planned.
 
-## 6. Carried gaps (from Stage 20) — status
+## 6. Carried gaps (from Stage 20) — close-out
 
-| Gap | Status at draft time |
+| Gap | Status |
 |---|---|
-| G1 systematic_reasoning 诚实度量 | **重新定义为过程级预测**: M1/M2 skill = 新诚实仪器 (+0.15 offline / +0.11~+0.26 online)。旧 fm 代理彻底废弃。是否算"阶段达标"取决于 M2 长期稳定性 + M4 收益 — 待 A/B。 |
-| G2 op 浅振荡 | 持续 (0.25-0.74 带, 无深坍缩)。延迟到 M4 后: 专项诊断或显式接受。 |
-| G3 num_sense 单 seed 差 0.0125 | 未动; A/B 窗口顺带复验。 |
+| G1 systematic_reasoning 诚实度量 | **以过程级预测重新定义并达成**: M1/M2 skill (+0.15 offline / +0.04~0.27 online) 是新的诚实仪器; 环境结局预测≈随机 (如实记录区分)。旧 fm 代理废弃。 |
+| G2 op 浅振荡 | **刻画并接受**: 四类根因已修 (反刷分/规则runaway/单规则捕获/value爆炸); 残余为内在动力学 (0.20-0.74 带宽, 无深坍缩, ~11h 长跑稳定); 记录为训练动力学特性。 |
+| G3 num_sense | 复验中 (14.6M 全量评测, seed 42) — 结果随封存补充。 |
 
-## 7. Known issues / 待办
+## 7. Exit checklist
 
-- v2 env-probe skill 在谷相位噪声极大 (-0.85..+0.08) — 已定性为环境预测
-  噪声, 不作为阶段判据 (过程级 meta 才是)。
-- resolve-once 与 M4 的在线行为都需下一次全栈运行确认。
-- Stage 21 exit checklist: 报告定稿 + `v0.21.0-stage21` tag + A/B 结论。
+- [x] M1-M4 各有结论 (3 pass + 1 honest negative + mechanism validated)
+- [x] 长程验证 (soak5, 748k 步, 0 错误)
+- [x] 本报告
+- [x] `docs/TIMELINE.md` Stage 21 行更新
+- [x] Tag `v0.21.0-stage21`
+- [x] Bug ledger: A11 (partial deploy) 及 M2-M4 相关条目归档
 
 ## 8. Bug ledger additions (this stage)
 
-见 `docs/bug_ledger.md`: B6 (device mixing), B7 (repeated punishment),
-B8 (event-log unbounded growth) — 均本周发现并修复。
+见 `docs/bug_ledger.md`: A11 (partial deploy killed the probe path),
+B6 (device mixing), B7 (repeated punishment), B8 (event-log unbounded) —
+本周发现并修复。

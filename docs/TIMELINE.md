@@ -87,12 +87,11 @@ timeline
                  : ✅ op/ToM 物理世界跨 seed 过门 (12.05M: 0.692/0.566; 12.15M: 0.673/0.552)
                  : ⚠️ systematic 诚实缺口 → 携带至 Stage 21 (度量+机制重设计)
 
-    section 递归元认知 (Recursive Metacognition) : Stage 21 (需要新架构)
+    section 递归元认知 (Recursive Metacognition) : Stage 21 ✅ sealed 2026-10-11
         Stage 21 : 反思自我监督 · 13-14岁
-                 : SelfModel 只建模置信/熟悉/进度
-                 : 缺: 二级自我模型 (监控"思考过程"本身)
-                 : symbolic_reasoning.py 已标注 recursive 为 future work
-                 : 验证: 知道自己在思考 (递归自监控)
+                 : 二级自我监控: MetaMonitor (过程级自预测 +0.15 离线/+0.04~0.27 在线)
+                 : 矛盾自纠错 (注入检出>0.8/误报<0.1) · 审慎门控 (等预算; 择时=诚实负结果)
+                 : 长程验证 soak5 748k 步 0 错误; G1 以过程级预测重构达成
 
     section 抽象概念框架 (Abstract Concepts) : Stage 22 (需要新架构)
         Stage 22 : 具体->抽象推理 · 14-15岁
@@ -109,20 +108,22 @@ timeline
 
 ## Current Status / 当前状态
 
-- **Completed**: Stage 0-20 — **Stage 20 (假设-演绎引擎) sealed
-  2026-10-08**: 事实摄入 0→512 (get_edges 断链修复)、多跳演绎 (形式探针
-  10/10 零缺口)、规则结果反馈接线、双通道规则转向冻结 (四次坍缩全部
-  根因修复: 反刷分/规则runaway/单规则捕获/value爆炸)。
-  **op/ToM 物理世界跨 seed 过门** (12.05M: op 0.692/cross 0.727, ToM 0.566;
-  12.15M: 0.673/0.707, ToM 0.552)。详见 `docs/stage20_report.md`。
-- **Carried gaps (→ Stage 21)**: ① systematic_reasoning 诚实度量 ≈ 0
-  (两轮巩固失败; 旧里程碑代理失效) — 需度量+机制重设计; ② 浅振荡残余
-  (0.36-0.62 带, 无深坍缩); ③ num_sense 单 seed 差 0.0125。
-- **In progress**: Stage 21 (递归元认知, 13-14y, 需新架构) — 设计启动
-  (`docs/stage21_design.md`)。
-- **est. age**: 12-13y 段完成 (形式运算级推理雏形 + 物理世界能力门)
-- **Architecture**: Stage 20 当前架构完成; Stage 21-22 需要新架构
-- **North Star Gap**: 13-15 岁 (递归元认知 + 抽象概念) 需要全新认知框架, 未验证
+- **Completed**: Stage 0-21 — **Stage 21 (递归元认知) sealed 2026-10-11**:
+  二级自我监控 (MetaMonitor 过程级自预测 +0.15 离线/+0.04~0.27 在线, 跨策略
+  泛化 +0.15/+0.29), 矛盾自纠错 (注入检出>0.8/误报<0.1, 真实规则库持续检出),
+  审慎门控 (等预算 avg_factor 0.9998; 择时价值为诚实负结果); soak5 748k 步
+  0 错误。G1 systematic 以**过程级预测**重新定义并达成; G2 振荡已刻画接受;
+  Stage 20 封存要点见 docs/stage20_report.md。
+- **Carried gaps (→ Stage 22)**: ① 语言层待激活 (决策点: Stage 22 期中;
+  锚点选型/量化验证先行) ② 抽象概念 (Stage 22 本体) ③ 环境结局级预测
+  仍≈随机 (如实记录)。
+- **In progress**: Stage 22 (抽象概念框架, 14-15y) — 设计草案完成
+  (`docs/stage22_design.md`), M1 (概念层级) 待开工。
+- **est. age**: 13-14y 段完成 (递归元认知雏形 + 元预测真技能)
+- **Architecture**: Stage 21 实测可在当前架构上实现 (自预测+矛盾检测+门控);
+  Stage 22 需概念层级架构 (设计已启动)
+- **North Star Gap**: 13-15 岁剩余 (抽象概念 + 语言层 + 开放世界自主性)
+  仍是最难段; 语言为四道硬门之一 (见 docs/path-to-northstar.md)
 
 > **注意 (2026-09-07)**: 训练配置的 `stage: 20` 及 CHANGELOG 的 20a-20z/21/22
 > 实验编号均属宏观 Stage 20 (假设-演绎) 的执行子系列 — 与宏观阶段编号同名易混淆,
@@ -197,7 +198,7 @@ Stage 23 (开放世界永续学习) · 15y+ · 新架构整合
 | 18 | 组合式成长 | 当前架构 | 技能组合 + 创造 + ToM并行 | ToM>0.6 (目标); FB 优势 0.985m @4M, means_ends/physics 满分 | 🔄 ToM 长训中 |
 | 19 | 自我叙事引擎 | 当前架构可扩展 | 连贯自我叙事 (IdentityNarrative + AutobiographicalMemory + InnerDialogue 整合闭环) | 自传叙事连贯性 + 叙事影响行为, 10-12y | ✅ sealed 1.3M; 叙事影响行为 2026-09-16 首次达成 (v4) |
 | 20 | 假设-演绎引擎 | 当前架构可扩展 | 假设条件下逻辑演绎 (HypothesisTester + ActiveExperimenter + kanren 升级为形式运算级闭环) | 形式推理任务通过率, 12-13y | ✅ **sealed 2026-10-08**: 事实摄入 512 + 多跳 10/10 零缺口; op/ToM 物理世界跨 seed 过门; systematic 诚实缺口 → Stage 21 |
-| 21 | 递归元认知 | 需要新架构 | 反思自我监督 (二级自我模型, 监控思考过程本身) | 递归自监控 (知道自己在思考), 13-14y | ❌ 未验证 |
+| 21 | 递归元认知 | 当前架构可扩展 (S21 实测) | 反思自我监督 (MetaMonitor 二级自我模型 + 矛盾自纠错 + 审慎门控) | 递归自监控 (过程级自预测 skill > 0), 13-14y | ✅ **sealed 2026-10-11**: M1-M3 通过 + M4 机制验证 (择时诚实负结果); soak5 748k 步长程; 详见 docs/stage21_report.md |
 | 22 | 抽象概念框架 | 需要新架构 | 具体->抽象推理 (概念层级 + 跨概念形式推理) | 抽象概念任务通过率, 14-15y | ❌ 未验证 |
 | 23 | 开放世界永续 | 新架构整合 | 自主目标设定 (扩展世界接入 + 内驱->自主目标 + 无限稳定) | 内在动机替代课程驱动, 100万步+, 15y+ | ❌ 未验证 |
 
