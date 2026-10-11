@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+### Stage 22 M2: 概念级规则演绎 (2026-10-11) 🧠
+
+- `src/models/concept_rules.py`: 有界统一器后向链 (变量绑定 ?vars;
+  事实/规则/答案/深度/op 预算全封顶); 内置概念规则 R1 继承 / R2 超类抽象 /
+  R3 蕴含组合。途中修复三处: var→var 别名需完整解引用; 规则局部变量必须
+  按规则重命名 (跨规则同名静默破坏 2 跳链); 答案解析为查询变量位绑定值。
+- `scripts/eval/concept_rules_eval.py` 电池: 3 世界 540 期望属性 —
+  **full (R1+R2+R3) recall 1.000 / precision 1.000 (零伪推导, 健全)**;
+  实例级基线 (R1+R3) recall 0.400 (超类/蕴含链结构上不可达) — **+60pp 达成**。
+- 测试 7/7; 云端记录 `/root/m2_concept_rules.json`。
+
 ### Stage 22 M1: 概念层级 (2026-10-11) 🧩
 
 - `src/models/concept_hierarchy.py`: 有界两级概念层级 (实例→类别→超类,
