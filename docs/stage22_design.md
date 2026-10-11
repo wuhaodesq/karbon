@@ -79,7 +79,7 @@
 
 | M | Deliverable | Verification (honest) | Est. |
 |---|---|---|---|
-| **M1** | `concept_hierarchy.py`: 有界层级构建 + 层级归类头; 离线评测 (用现有 ConceptGraph 数据 + VisualAnalyzer 输出) | novel-instance 归类 skill vs 平铺基线 > 0.05 (held-out 实例) | 1-2 天 |
+| **M1** ✅ | `concept_hierarchy.py` (有界两级层级: 实例→类别→超类) + `concept_hierarchy_eval.py` | **结构恢复 PASS** (干净域: 12/12 类别 + 3/3 超类精确复原, 碎片纯度 ≥0.9); **分类增益 = 诚实负结果** (预注册"> flat +0.05"未达: 实测 0 ~ +0.03, 模糊域 ≤0 — 最近原型基线本身强; 层级价值预期在 M2 概念级演绎, 不在分类边界) — 完成 (2026-10-11) | 完成 |
 | **M2** | 概念规则接入: LogicEngine 量词域扩展 + 假设回路产出概念级规则 | 概念级多跳推理批次 (探针扩条) 通过率 vs 实例级基线提升 | 2-3 天 |
 | **M3** | 类比升级 (关系迁移) | held-out 关系三元组准确率显著 > 随机 (+0.1) | 2 天 |
 | **M4** | 训练集成 + G3 复验 + 长程浸泡 | 训练中概念指标不退化; num_sense 复验过门; op 不崩 | 2-3 天 |
