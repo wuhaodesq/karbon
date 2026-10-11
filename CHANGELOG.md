@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+### Stage 22 M3: 关系迁移类比 (2026-10-11) 🔗
+
+- `src/models/analogy.py`: 有界类比引擎 — A:B :: C:? = 检索距
+  `emb(c)+(emb(b)-emb(a))` 最近实体; 关系无需标签; 有界存储 + ckpt 持久化。
+- `scripts/eval/analogy_eval.py` 电池: 3 种关系 × 90 例 held-out —
+  **top-1 = 1.000** (随机 0.0056), 判据 (+0.1) 大幅达成。
+  (保守解读: 合成关系为干净线性偏移; 机制为标准向量算术。)
+- 测试 5/5; 云端记录 `/root/m3_analogy.json`。
+
 ### Stage 22 M2: 概念级规则演绎 (2026-10-11) 🧠
 
 - `src/models/concept_rules.py`: 有界统一器后向链 (变量绑定 ?vars;
