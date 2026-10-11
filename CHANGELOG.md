@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+### Stage 22 M1: 概念层级 (2026-10-11) 🧩
+
+- `src/models/concept_hierarchy.py`: 有界两级概念层级 (实例→类别→超类,
+  深度≤3, 节点≤256, 层级预算 3:1 防上层饿死); 贪心在线原型聚类 (欧氏,
+  余弦在高维高斯上浓度退化已实证弃用); 层级路由 vs 扁平路由对照; ckpt 持久化。
+- `scripts/eval/concept_hierarchy_eval.py`: M1 记录生成器。
+- **诚实结果**: 结构恢复 PASS (12/12 类别、3/3 超类精确复原, 纯度≥0.9);
+  **分类增益为诚实负结果** (预注册 ">flat+0.05" 未达: 实测 0~+0.03,
+  模糊域 ≤0; 最近原型基线强)。层级价值预期在 M2 概念级演绎使用端。
+- 测试 5/5; 教训: train/test 必须共享生成结构 (首版各自 seed → 结构不同,
+  精度≈随机 — 数据 bug 已修)。
+
 ### Stage 21 M4 + Bug 台账 + 同类扫描 (2026-10-09) 🧭
 
 - **M4 审慎门控** `src/models/deliberation.py`: 二级压力状态重分配探针
