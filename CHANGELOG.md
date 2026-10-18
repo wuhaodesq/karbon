@@ -3,6 +3,134 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+### Stage 22 封存 (2026-10-18) 🏷️
+
+- **tag `v0.22.0-stage22`** — `docs/stage22_report.md` 完成:
+  M1 结构恢复 PASS (分类增益诚实负结果) / M2 规则电池 recall+precision
+  1.0 vs 基线 0.4 / M3 类比 top-1 1.0 / M4 概念桥在线 3 天+零退化,
+  num 复验 1/3 (与金档时代同带), **op 战役 0.13→0.80** (跨种子
+  0.796/0.811, 事件 2100-2300, no_move 9.5%, 严格门控 PASS —
+  全指标超越金档 12.05M 的 0.694)。
+- 本阶段缺陷台账: B9, B10, A12, A13, C9 (全修复并验证)。
+- 下一阶段: Stage 23 退出 op 隧道 (丰富环境 + curriculum 解锁);
+  OP 降级为回归监控指标。
+
+### LR 脉冲实验 (2026-10-17) 🔧
+
+- 依据: 审计结论——平坦盆地 + 每更新步长极小 (kl ~0.004) + 游玩分布输入坍缩;
+  三波干预 (B/C2/C3) 失败后唯一剩余低成本杠杆。
+- 干预: `learning_rate` 3e-4 (预设) → 1e-3, **有界 2 段窗口**:
+  seg6 (23.1→23.35M) + 接力新周期 seg1 (23.35→23.6M); 自动回落哨兵
+  (锚=23.6M 备份出现; 超时也回落 — 基线是安全默认); 备份 `*.bak_lr`。
+- 判据: kl 是否显著上升; 行为分布是否散开 (解剖); op 是否离开 0.131;
+  注意 NaN 保护 (历史高 LR 曾触发, 训练器有非有限跳过)。
+- 若失败: 下一步 = 爆发相 ckpt (20.6M) 重启实验 (重置优化器);
+  仍失败 → 退出 op 隧道 (Stage 23 丰富环境), 架构手术最后考虑。
+- **结果 (2026-10-18 早): 全面成功** ★ — 脉冲段读数 0.156→0.278→0.503→
+  0.734→0.752→0.807; **回落 3e-4 后保持并凝结**: 23.6-23.95M 全段
+  0.69-0.83 (链诊断门控首次 **PASS**: mean5 0.784 / min3 0.796);
+  跨种子确认: 23.85M seed42 0.811 / seed7 0.796; 解剖: 方向混合
+  (最大份额 26%, 单方向锁死消失), no_move 9.5%, 事件 2100-2300
+  (金档 1699)。**全指标超越金档 12.05M**。病例结案。
+
+### A13 修复 + 学习动力学审计 (2026-10-17) 🔧
+
+- **A13 (静默泄漏)**: tgate 退火到 0 后门控块停止运行, `env.occluder_teacher_force`
+  停在最后赋值 (0.05) → **teacher 全时代恒以 ~5% 覆盖动作**, teach loss 2.16
+  常数 (≈chance: 策略对教师动作的概率 ~均匀)。修复: else 分支显式置 0; 部署 seg6。
+- **审计排除项** (全部有数据): LR 常数 3e-4 无调度 ✓; 按头权重差全头活跃
+  (backbone/proprio/encoder/gru 均 0.4-3%) ✓; advantage std 31-61 健康 ✓;
+  每更新 kl ~0.004 (极小但不为 0) ✓; slot 范数/共线全时代恒定 (含金档,
+  非病理) ✓。
+- **输入归因**: 固定真实游戏图、变 lk 槽 → 金档响应 [1,7], 锁死档恒 [5];
+  变图像 → 金档 [1], 锁死档 [5] → 锁死 = 游玩分布上的输入坍缩
+  (网络对噪声敏感, 对真实输入恒定)。
+- 余下杠杆: LR 脉冲 (3e-4→1e-3, 有界 2 段) — 提升每更新步长以跨越平坦盆地。
+
+### C3 窗口: 教师引导练习 (2026-10-17) 🔧
+
+- **关键发现 (为何转向技能学不成)**: 当前 teacher 配置
+  `rounds_needed=1 + always_step=true + step=-0.05` ⇒ teacher 力每段
+  启动 **60k 步内自动淡出到 0** — 整个物理时代 teacher 实际缺席
+  (转向信号的历史来源没了)。C2 (orient ×4) 无效已按止损回落 0.1。
+- **诊断补充**: 网络并非输入不敏感 (随机输入 8 种动作, logit spread 112);
+  锁死 = 游戏内状态分布上的政策坍缩, 双稳态循环 (爆发相 0.35-0.63 ⇄
+  锁死相 0.09-0.17), B/C2 只微调平衡未改循环。
+- **C3 干预**: teacher 力 0.2→0.5 + rounds_needed 1→999 (窗口内禁用
+  自动淡出), seg3+seg4 (22.35→22.85M); 自动回落哨兵 (锚=22.85M 备份
+  出现即回 0.2/1); 评测/诊断无教师 → 测得能力仍全部为 agent 自身。
+- 判据: 窗口内 [tgate] teacher=0.500 保持; 解剖方向分布散开;
+  淡出后一段 (seg5) 转向保持 = 真习得; 否则转 B2 深度表征分析。
+
+### B 窗口干预: 抗模式锁死 (2026-10-16) 🔧
+
+- 背景: B10 修复后行为复活 (移动 97%) 但再现新退化——**单方向锁死**:
+  20.75M 起 move_SE 占 95% (顶墙打转), pass 0.09, no_move 67%;
+  与露营冻结同款剧本 (一段内翻进零努力稳态)。训练反复找到廉价吸引子。
+- 干预 (B): 2 段有界窗口 (seg4+seg5, ~16:50-22:40): `entropy_coef`
+  0.04→0.09 (抗确定性锁死) + `hypothesis_probe_epsilon` 0.15→0.30
+  (遮挡时试探转向 lk = 直练缺失技能)。不改奖励; 自动回落哨兵
+  (锚=21.6M 备份出现即回基线); 配置备份 `configs/*.bak_bwin`。
+- 判定: 窗口内解剖 SE 份额回落 + 段末 op 抬升 → 有效, 否则升级 C2
+  (orient 塑形权重上调)。
+- **B 第 1 段结论 (21.35M 解剖)**: SE 95%→1.1% 但**换向再锁** (SW 84%) —
+  B 松了确定性, 未教出转向。根pathologyv2: 策略"无视观测" (argmax 恒定,
+  与状态无关); 转向教学信号 (orient 0.1/步) 存在但太弱; orient fade 门
+  未开 (config gate=0, 从未衰减, 全程 0.1)。
+- **C2 已上 (seg6 起)**: `occluder_orient_weight` 0.1→0.4 (转向教学
+  ×4, 非对称 max(0,dot) 不可露营刷); 与 B 回落 (entropy/probe 回基线)
+  在 seg6 同时生效; 备份 `*.bak_c2`。判据: 方向锁份额 (SE+SW) <50% +
+  段末 op 抬升 → 有效。
+- 备注: B 回落哨兵 5h 超时不够 (段实际 ~3.4h/段, 估计 2.9h), 22:22 提前
+  自杀 → B 未被自动回落; 已于 00:05 手动回落 (协议不变: seg6 起 C2-only)。
+
+### B10 修复: camp-freeze 退化 (2026-10-15) 🔧
+
+- **定位 (行为解剖)**: 抓握率年度扫描 14.6M→18.1M 定出退化窗口
+  **16.85M→17.35M** (grasp 10.8%→100%, op 0.47→0.28); 机制 =
+  `occluder_reach_hold: 5.0` 圈内**无界**每步支付 (最高 ~4/步) + 抓握
+  动作=原地冻结 → "到达+永久驻留"最优; 实测静止 0.1417 > 移动 0.1308/步。
+- **修复**: `occluder_reach_hold_max_steps: 15` 有界窗口 (到达一次性 100 +
+  揭示奖金保留); 早退守卫补全七项 (原只查 target/shaping/orient, 静默
+  禁用 hold/reach/reveal); `scripts/eval/behavior_anatomy.py` 新增 (解剖工具)。
+- 测试 `test_occluder_hold_cap.py` 3/3 (服务器真跑); 台账 B10; 生效于下一
+  训练段; 验证 = 抓握率回落 + op 趋势。
+
+### Ops 补丁: 续跑链 v2 (B9) + 昨夜时间线核验 (2026-10-12) 🔧
+
+- **soak6b 目标达成**: 15,350,000 步 (01:48, rc=0), ckpt + autodl-tmp
+  备份完整; watcher 完成全程 diag (15.35M pass_rate 0.143, 仍低相位)。
+- **B9 (设计缺陷)**: chain11 v1 首段 resume 恰在 `total_steps` (15,350,000)
+  → 训练 0.0s 即退 ("no progress, stop"), 续跑链当场死亡。v2 修复:
+  **每段启动前**先扩 target (step+250k); 归档 `scripts/cloud/watch_chain11.sh`。
+- 之后 ~02:42 平台侧异常重启 (C9 再次): 上叠 GPU 归属变动, 现为**无卡
+  开机** — 训练/评测均不可运行, 待 GPU 恢复。M4 代码在服务器加载验证
+  通过 ("ConceptBridge enabled"), 首次在线训练步数待硬件恢复。
+- bug_ledger: B9 归档 (B 类 8→9)。
+
+### Stage 22 M4: 概念桥接训练集成 + A12 契约修复 (2026-10-11) 🌉
+
+- `src/models/concept_bridge.py`: 训练回路被动概念桥 — 真实世界物体→实例
+  (kind 主导属性帧: 同类跨色合并/异类分离); 实际搬运 (carry>0.05) → movable
+  经历事实; 类别级泛化 (≥2 成员) → prover 演绎 (M2 规则) 供新实例继承;
+  全有界 (实例 256 / 事实上限 / 每类桶盖) + ckpt 持久化 (含 prover 事实)。
+- `src/train.py`: M4 接线 — 构造 (config `concept_bridge_enabled`) /
+  episode 末喂入 (`feed_episode` 单调用, 抽取语义在模块内可单测) /
+  `[concept]` 5000 步遥测 / 存档+恢复。
+- 本地验证 (CPU): concept_bridge 9/9 (含 feed_episode 端到端/episode 幂等/
+  空容错) + deliberation 5/5 (含 A12 往返); **全仓测试套件零失败**
+  (仅环境门控 skip: mujoco/crafter/triton; 1 个 collect error =
+  本地缺 safetensors — 已装, 环境记录见 docs/open-gaps.md)。
+- 服务器侧: 精炼版 md5 一致 + `feed_episode` 冒烟通过。
+- 注: 本地 Windows 无法加载 mujoco DLL (WinError 1114, 系统级, 与
+  代码无关 — 本地 smoke 留待云/家用 GPU)。
+- **Bug A12 (静默断链, 同类扫描)**: `_restore_map` 声明 3 键但 save 侧
+  从未写入 (`meta_monitor_state` / `hypothesis_tester_state` (probe_net 权重!) /
+  `deliberation_state`) → 每次重启模块清零。已补 save 侧 + DeliberationGate
+  增 state_dict/load_state_dict; 双向核对脚本核验 37 恢复键全部有写入点 ✓。
+  反向残留 4 个 save-only 键记录在案 (低危)。
+- 测试: concept_bridge 6/6, deliberation 既有 4 例全过; check-bounds 清洁。
+
 ### Stage 22 M3: 关系迁移类比 (2026-10-11) 🔗
 
 - `src/models/analogy.py`: 有界类比引擎 — A:B :: C:? = 检索距

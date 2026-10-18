@@ -55,6 +55,11 @@ try:
     _mj_available = True
 except ImportError:
     pass
+except OSError:
+    # 2026-10-15: a present-but-unloadable mujoco (Windows DLL init failure,
+    # WinError 1114) must count as "not available" — otherwise every import
+    # of this module crashes on such boxes (tests then skip instead).
+    pass
 
 if _mj_available:
     import mujoco.viewer  # noqa: F401 — used internally for offscreen rendering
@@ -458,6 +463,7 @@ class ThreeDWorld:
         occluder_reach_radius: float = 0.8,  # Stage 20k: 触达半径 (与 eval op 硬门槛同构, 判据恒用)
         occluder_reward_radius: float = 0.0,  # Stage 20p: 奖励圈半径 (课程化 2.0→0.8, 0=跟随判据)
         occluder_reach_hold: float = 0.0,  # Stage 20n: 圈内持续分 (max(0, radius-dist)*w, 0=off)
+        occluder_reach_hold_max_steps: int = 0,  # 2026-10-15: 圈内持续分每事件至多支付 N 步 (0=无界; 修复 camp-freeze 退化, 见 bug_ledger B10)
         occluder_search_min_start: float = 1.2,  # 2026-09-25 anti-farm: only events starting >= this distance pay op rewards
         op_reward_clamp: float = 100.0,  # 2026-09-25: per-step op-reward cap honored end-to-end (reach=100 must survive)
         occluder_orient_weight: float = 0.0,  # Stage 20m: L1 朝向 - 每步非对称方向塑形 (0=off)
@@ -495,6 +501,14 @@ class ThreeDWorld:
         self._occluder_reward_radius = float(occluder_reward_radius) \
             if occluder_reward_radius > 0.0 else float(occluder_reach_radius)
         self._occluder_reach_hold = float(occluder_reach_hold)
+        # 2026-10-15 (B10): unbounded per-step in-circle credit made "camp at
+        # last_known forever" the dominant strategy; once the policy found the
+        # stand-still primitive (grasp action zeroes locomotion) it froze there
+        # (measured: 16.85M->17.35M grasp 10.8%->100%, op 0.47->0.28, stationary
+        # per-step reward 0.14 > moving 0.13). Cap the payout window per event;
+        # arrival (one-shot reach) + reveal bonus keep "be there at reveal"
+        # rewarding, the camp jackpot is gone.
+        self._occluder_reach_hold_max_steps = int(occluder_reach_hold_max_steps)
         # 2026-09-25 anti-farm: op rewards pay only for search-worthy events
         # (agent >= search_min_start away when the occlusion began). Near-start
         # events (push an object behind a wall, crossing at the agent's feet)
@@ -2023,7 +2037,12 @@ class ThreeDWorld:
         stillness is neutral — the optimal policy is forced to move.
         """
         if self._occluder_target_reward <= 0.0 and self._occluder_shaping_weight <= 0.0 \
-                and self._occluder_orient_weight <= 0.0 and self._occluder_orient_bonus <= 0.0:
+                and self._occluder_orient_weight <= 0.0 and self._occluder_orient_bonus <= 0.0 \
+                and self._occluder_reach_reward <= 0.0 and self._occluder_reach_hold <= 0.0 \
+                and self._occluder_reveal_bonus <= 0.0:
+            # 2026-10-15 (B10): the guard must consider EVERY op term — it
+            # used to early-return when target/shaping/orient were all zero,
+            # silently disabling reach/hold/reveal even when configured.
             return 0.0
         try:
             bonus = self._reveal_bonus_pending  # Stage 20d: reveal attribution
@@ -2146,8 +2165,13 @@ class ThreeDWorld:
                 # 0.8*w/step + 20 one-shot.
                 if (self._occluder_reach_hold > 0.0
                         and dist < self._occluder_reward_radius):
-                    r += max(0.0, self._occluder_reward_radius - dist) \
-                        * self._occluder_reach_hold
+                    # 2026-10-15 (B10): bounded per-event payout window.
+                    _hp = int(occ.get("hold_paid", 0))
+                    if (self._occluder_reach_hold_max_steps <= 0
+                            or _hp < self._occluder_reach_hold_max_steps):
+                        r += max(0.0, self._occluder_reward_radius - dist) \
+                            * self._occluder_reach_hold
+                        occ["hold_paid"] = _hp + 1
                 prev = occ.get("prev_agent_dist", dist)
                 occ["prev_agent_dist"] = dist
                 if dist < prev:

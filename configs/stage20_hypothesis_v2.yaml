@@ -70,6 +70,7 @@ env:
   occluder_reach_reward: 100.0
   occluder_reach_radius: 0.8
   occluder_reach_hold: 5.0
+  occluder_reach_hold_max_steps: 15   # B10 (2026-10-15): 有界驻留窗口, 修 camp-freeze 退化
   occluder_orient_weight: 0.1
   occluder_orient_bonus: 2.0
   occluder_reveal_bonus: 2.0
@@ -133,6 +134,11 @@ advanced:
   # 滚动均值居中 => 等预算; A/B 验证在训练窗口 (docs/stage21_design.md M4)
   deliberation_enabled: true
   deliberation_gain: 0.5
+  # Stage 22 M4: 概念桥接 — M1-M3 概念栈 (层级/规则/类比) 接入训练回路:
+  # 真实物体→实例→类别形成; 实际搬运过的物体→movable 属性; 类别属性
+  # 由 prover 规则演绎 (M2)。被动模块, 不影响策略; 有界存储。
+  concept_bridge_enabled: true
+  concept_bridge_max_instances: 256
 
 # --- Cognitive Modules ---
 cognitive:
@@ -369,7 +375,7 @@ train:
   value_coef: 0.5
   gamma: 0.99
   gae_lambda: 0.95
-  total_steps: 13200000             # v2: Stage 21 浸泡跑目标 (13.0M -> 13.2M)
+  total_steps: 14625000             # v2: Stage 21 过夜长跑 (13.875M -> 14.625M, ~10h)
   # NOTE: the auto-resume chain bumps this value server-side each segment.
   # When deploying a config to the server, MERGE with the server copy —
   # overwriting once clobbered the chain target and the next segment

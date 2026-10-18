@@ -85,6 +85,29 @@
 | **M4** | 训练集成 + G3 复验 + 长程浸泡 | 训练中概念指标不退化; num_sense 复验过门; op 不崩 | 2-3 天 |
 | **Exit** | 报告 + tag `v0.22.0-stage22` | M1-M4 全绿 | — |
 
+### M4 实现状态与验货清单 (2026-10-12)
+
+实现完成 (2026-10-11/12): `concept_bridge.py` (被动, 有界, ckpt 持久化含
+prover 事实) + train.py 接线 (`feed_episode` 单调用 + `[concept]` 遥测) +
+A12 修复 (meta_monitor/hypothesis_tester/deliberation 存档侧补写; 双向核对
+37/37 ✓)。本地: 测试 9/9 + deliberation 5/5 + 全仓套件零失败 + check-bounds ✓;
+服务器: md5 一致 + feed_episode 冒烟 ✓; **在线步数 0 (待 GPU)**。
+
+**GPU 恢复后的验货清单**:
+
+1. 启动 (fixed `watch_chain11.sh` 或手动段): 日志须出现
+   `ConceptBridge enabled (max_instances=256)` + 无 `[concept] bridge feed failed`。
+2. `[concept]` 遥测 (每 5000 步): instances 随 episode 增长; categories ≥
+   世界物体种类数; movable_facts 只在真实 carry>0.05 后增长 (0 也诚实, 但
+   须与 eval 的 grasp_carry_events 对账)。
+3. ckpt 存档: 新键 `concept_bridge_state`/`meta_monitor_state`/
+   `hypothesis_tester_state`/`deliberation_state` 出现在 ckpt extra;
+   重启后 [meta] 不回溯 (skill 窗口连续)。
+4. 概念指标不退化: categories/纯度自评 (脚本 `concept_hierarchy_eval.py`
+   对 bridge 导出快照) 或至少 n_categories 单调不减。
+5. num_sense 复验 (G3): 用**好相位** ckpt (先查该档 op diag 相位, C8 教训)。
+6. op 不崩: 对比段前/段后 op diag (门控 min3≥0.25/mean5≥0.55 自动兜底)。
+
 ## 5. Risks / honesty guards
 
 - **"抽象"的空心化风险**: 概念节点若只是嵌入簇的重命名, 无推理价值 — 因此

@@ -41,3 +41,20 @@ def test_clamps_respected_for_extreme_inputs():
         assert hi <= 0.3
     lo = g.modulate(0.25, 1.0)
     assert lo >= 0.05
+
+
+def test_state_dict_roundtrip():
+    """Bug-ledger A12: resume map expects deliberation_state — the gate
+    must save and restore its rolling window + counters faithfully."""
+    g = DeliberationGate(window=16, gain=0.5, floor=0.0, cap=1.0)
+    for i in range(10):
+        g.modulate(0.1, 0.2 if i % 3 else 0.9)
+    sd = g.state_dict()
+    g2 = DeliberationGate(window=16, gain=0.5, floor=0.0, cap=1.0)
+    g2.load_state_dict(sd)
+    assert g2.summary["mods"] == g.summary["mods"]
+    assert abs(g2.summary["pressure_mean"] - g.summary["pressure_mean"]) < 1e-9
+    # next modulation behaves identically on both (same window contents)
+    a = g.modulate(0.1, 0.7)
+    b = g2.modulate(0.1, 0.7)
+    assert abs(a - b) < 1e-12

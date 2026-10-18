@@ -53,3 +53,19 @@ class DeliberationGate:
             "pressure_mean": round(sum(self._pressures) / n, 4),
             "avg_factor": round(self._sum_factor / max(1, self._mods), 4),
         }
+
+    # ------------------------------------------------------- persistence
+
+    def state_dict(self) -> dict:
+        """Snapshot for checkpoint resume (bug-ledger A12: restore map
+        expects ``deliberation_state`` — it must actually be writable)."""
+        return {
+            "pressures": list(self._pressures),
+            "mods": self._mods,
+            "sum_factor": self._sum_factor,
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        self._pressures = deque(state.get("pressures", []), maxlen=self.window)  # BOUNDS-OK
+        self._mods = int(state.get("mods", 0))
+        self._sum_factor = float(state.get("sum_factor", 0.0))

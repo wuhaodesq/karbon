@@ -1459,6 +1459,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     meta_monitor: Any = None  # Stage 21 M2: online recursive metacognition
     contradiction_detector: Any = None  # Stage 21 M3: self-correction
     deliberation_gate: Any = None  # Stage 21 M4: budget-neutral control
+    concept_bridge: Any = None  # Stage 22 M4: concept stack over live experience
     counterfactual: Any = None
     behavior_cloning: Any = None
     meta_learner: Any = None
@@ -1528,6 +1529,20 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             )
             logger.info("DeliberationGate enabled (gain=%.2f)",
                         deliberation_gate.gain)
+
+        # Stage 22 M4: concept bridge — the M1-M3 concept stack (hierarchy /
+        # rules / analogy) fed by LIVE experience: every world object becomes
+        # an instance (categories form from real attributes), every actually
+        # carried object earns a movable property, and category-level
+        # properties are deduced by the prover (M2 rules) at runtime.
+        # Passive: never touches the policy; bounded stores only.
+        if advanced_cfg and bool(advanced_cfg.get("concept_bridge_enabled", False)):
+            from src.models.concept_bridge import ConceptBridge
+            concept_bridge = ConceptBridge(
+                max_instances=int(advanced_cfg.get("concept_bridge_max_instances", 256)),
+            )
+            logger.info("ConceptBridge enabled (max_instances=%d)",
+                        concept_bridge.max_instances)
 
         # Counterfactual imagination
         if advanced_cfg and bool(advanced_cfg.get("counterfactual_enabled", False)):
@@ -2291,6 +2306,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             # persist its weights + update counter across restarts.
             ("hypothesis_tester_state",  hypothesis_tester,            None),
             ("meta_monitor_state",       meta_monitor,                 None),
+            ("deliberation_state",       deliberation_gate,            None),
+            ("concept_bridge_state",     concept_bridge,               None),
         ]
         for key, module, _opt in _restore_map:
             if module is not None and key in _extra:
@@ -2716,6 +2733,13 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                             _rw_gate["rounds"], _rw_gate["needed"], _rw_now)
             else:
                 env.occluder_teacher_force = _tgate["teacher"]
+        else:
+            # 2026-10-17 (bug ledger A13): when the anneal reaches 0 the gate
+            # block stops running entirely and the env keeps its LAST assigned
+            # force (observed: stuck at 0.05 -> teacher overrides continue
+            # forever, teach loss ~2.16 constant across eras). Guarantee OFF.
+            if hasattr(env, "occluder_teacher_force"):
+                env.occluder_teacher_force = 0.0
         # Stage 20j: reveal-ratio ladder — relax the attribution gate as
         # capability grows (eval metric stays 0.7 in the eval env).
         if _reveal_ladder and hasattr(env, "occluder_reveal_ratio"):
@@ -3497,6 +3521,17 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 except Exception:
                     logger.warning("[symbolic] rule outcome feedback failed",
                                    exc_info=True)
+
+            # --- Stage 22 M4: concept bridge feed (episode end, passive) ---
+            if (concept_bridge is not None and n_envs == 1
+                    and (step_out.terminated or step_out.truncated)):
+                try:
+                    concept_bridge.feed_episode(
+                        getattr(env, "objects", None) or [],
+                        getattr(step_out, "info", None) or {},
+                    )
+                except Exception as _cb_exc:
+                    logger.warning("[concept] bridge feed failed: %s", _cb_exc)
 
             # --- Stage 4 / M2: skill reuse + extraction on episode end ---
             if skills is not None and n_envs == 1 and (step_out.terminated or step_out.truncated):
@@ -5035,6 +5070,10 @@ and state.step % 50000 < rollout_capacity):
             if deliberation_gate is not None:
                 logger.info("[deliberation] %s", deliberation_gate.summary)
 
+        # Stage 22 M4: concept bridge telemetry (independent of hypothesis stats).
+        if state.step % 5000 < rollout_capacity and concept_bridge is not None:
+            logger.info("[concept] %s", concept_bridge.summary())
+
         # --- Stage 20-ToM diagnostics (trainable ToM module) ---
         if state.step % 5000 < rollout_capacity and _tom_stats["n"] > 0:
             _tn = max(1, _tom_stats["n"])
@@ -5160,6 +5199,30 @@ and state.step % 50000 < rollout_capacity):
                 extra["imagination_trainer_state"] = imagination_trainer.state_dict()
             if audio_encoder is not None:
                 extra["audio_encoder_state"] = audio_encoder.state_dict()
+
+            # Stage 22 M4 / bug-ledger A12: the restore map expects these
+            # keys on resume — they MUST be written here (a restore key that
+            # is never saved silently resets the module on every restart).
+            if hypothesis_tester is not None:
+                try:
+                    extra["hypothesis_tester_state"] = hypothesis_tester.state_dict()
+                except Exception as _ht_exc:  # noqa: BLE001 — non-critical state
+                    logger.warning("[hypothesis] state save failed: %s", _ht_exc)
+            if meta_monitor is not None:
+                try:
+                    extra["meta_monitor_state"] = meta_monitor.state_dict()
+                except Exception as _mm_exc:  # noqa: BLE001 — non-critical state
+                    logger.warning("[meta] state save failed: %s", _mm_exc)
+            if deliberation_gate is not None:
+                try:
+                    extra["deliberation_state"] = deliberation_gate.state_dict()
+                except Exception as _dg_exc:  # noqa: BLE001 — non-critical state
+                    logger.warning("[deliberation] state save failed: %s", _dg_exc)
+            if concept_bridge is not None:
+                try:
+                    extra["concept_bridge_state"] = concept_bridge.state_dict()
+                except Exception as _cb_exc:  # noqa: BLE001 — non-critical state
+                    logger.warning("[concept] state save failed: %s", _cb_exc)
 
             # --- J-Space fossil: timeline of top-dims + feature vectors ---
             try:

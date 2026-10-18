@@ -21,6 +21,8 @@
 | A9 | **2026-09-25** | 规则 success_count 恒 0 | `RuleMemory.update()` **全仓库无调用者** | `_apply_rule_outcome_feedback` 接线 (usage 增量回传) |
 | A10 | **2026-09-28** | aux 巩固 122/122 次全部失败 | 存 obs 带 batch 维 → 5 维张量 → 编码器 permute 崩; `torch.stack` 再叠一维 | 存储时 squeeze + `torch.cat` 重建批 |
 | A11 | **2026-10-10** | soak3 整段 13046 proposals / **0 probes**; [meta] n=0 | M4 部署**只传了 train.py + deliberation.py, 漏传 meta_monitor.py** (缺新属性 `recent_pressure`) → 探针块 modulate 行每步 AttributeError; 外层 handler 吞掉 (全场仅 3 条 WARNING) → 探针路径整段死亡 | 补全部署 + modulate 防御性 fallback (基础 ε) + 限频响亮日志; **部署清单: 每个模块逐一验 marker** |
+| A12 | **2026-10-11** | MetaMonitor / DeliberationGate **每次重启即清零** (skill 窗 2000 步重学); 同类扫描另发现 `hypothesis_tester_state` (probe_net 权重) 同样无存档侧 | `_restore_map` 声明了 `meta_monitor_state` 契约, 但 **save 侧从未写入该键** (`if key in _extra` 守卫使恢复端"看起来一切正常") — 声明-实现单向缺失 (3 键同病: meta_monitor / hypothesis_tester / deliberation) | save 侧补写 `meta_monitor_state` / `hypothesis_tester_state` / `deliberation_state` / `concept_bridge_state`; DeliberationGate 增 state_dict/load_state_dict; **新规则: 恢复映射与保存端双向核对** (脚本差分: restore keys 37, save keys 49, 交集核验 — `C:\...\Temp\opencode\crosscheck_restore.py` 可复用) |
+| A13 | **2026-10-17** | teacher 恒以 ~5% 覆盖训练动作 (teach loss 2.16 常数贯穿整个物理时代); 学习动力学审计中发现 | **退火泄漏**: tgate 退火到 0 后外层 `if _tgate["teacher"] > 0.0` 整块停止运行, `env.occluder_teacher_force` 停留在最后一次赋的值 (0.05) → 教师永不真正关闭 (探针窗反正确保 0, 非探针窗残留 0.05) | 补 else 分支显式置 0.0 (train.py ~L2736); 部署 seg6 生效; 台账规则: **"开关"变量的关闭必须是显式赋值, 不能依赖门控块停止运行** |
 
 ## B. 设计缺陷类（Design flaws — 逻辑本身不健全）
 
@@ -34,6 +36,8 @@
 | B6 | **2026-10-09** | `[contradiction]` 40 次 cycle failed (M3 首测) | 规则嵌入混合设备 (cpu/cuda) → `torch.stack` 崩 | 归一化时统一移 CPU |
 | B7 | **2026-10-09** | 125 对矛盾每周期重复降权 (0.7^k 衰减) | 解决动作无幂等性 (无已解决记忆) | `resolved_memory` (有界 256, 每对只解决一次) |
 | B8 | **2026-10-09** | 事件日志文件跨重启无界增长 | 行数上限是进程内的, 不约束磁盘文件 | >32MB 时轮转 (打开时截断) |
+| B9 | **2026-10-12** | chain11 首段 7 秒即退 ("no progress, stop"), 续跑链当场死亡 | **边界自退出**: 续跑脚本只在段末 +250k 扩 target, 而首段 resume 档步数 == total_steps (15,350,000) → 训练循环见 `step >= total_steps` 立即退出 (rc=0, "Training finished ... elapsed=0.0s") | v2: 每段**启动前**先扩 target (step+250k) — 覆盖"恰在边界续跑"场景; 段末扩 target 逻辑删除 (避免双重扩) |
+| B10 | **2026-10-15** | **camp-freeze 退化**: 16.85M→17.35M 抓握率 10.8%→100%, op 0.47→0.28, 平台卡 ~0.30 逾 1.2M 步 | **衰减奖金无界**: `occluder_reach_hold: 5.0` 圈内每步支付 (最高 ~4/步, 无时长上限) + 抓握动作语义=原地冻结 (actions≥8 清零 dx,dy) → "到达+永久驻留"成为最优策略; 实测静止步均收 0.1417 > 移动 0.1308 (结构性实锤)。附带发现及早退守卫只查 target/shaping/orient, 漏掉 hold/reach/reveal | `occluder_reach_hold_max_steps: 15` 有界窗口 (到达一次性 100 + 揭示奖金 2.0 保留, 金矿砍除); 守卫补全七项; 测试 `test_occluder_hold_cap.py` 3/3 (含无界回归相); 验证: 下一训练段解剖抓握率回落 + op 趋势 |
 
 ## C. 运维类（Ops — 流程缺陷, 非代码）
 
@@ -61,17 +65,25 @@
 - **混合精度**: contradiction 测试覆盖 double/float ✓。
 - **跨进程写入**: 事件日志 append 交错 (重复实例时) — 由 C6 的守护式 launcher
   根控; 残留风险记录在案。
-- **分布完整性 (B9/A11 追加)**: 部分文件部署 → 新属性缺失 → 关键路径死亡。
+- **分布完整性 (A11 追加)**: 部分文件部署 → 新属性缺失 → 关键路径死亡。
   新增规则: **部署 = 全部相关文件 + 逐模块 marker 校验**; 遥测性功能
   (modulate 等) 必须有防御性 fallback, 不得拖死关键路径。
+- **契约双向核对 (A12 追加, 2026-10-11)**: 恢复映射 37 键全部核验 ✓ (save
+  侧 50 键)。反向残留: 4 个 **save-only** 键 (`llm_fusion_state` /
+  `cross_domain_state` / `value_system_state` / `cf_regret_state`) — 模块
+  有存档无读档, 重启即重置 (低危: 均为诊断/计数型瞬态; 待其成为承载状态时
+  再补恢复端)。
 
 ---
 
 ## 统计
 
-- A 类 (静默断链): **10** — 特征: `hasattr` 守卫/空 except/无调用者
-  → **规则: 关键路径禁止静默吞异常 (§14); 新接线必须带"变更日志"证明生命**
-- B 类 (设计): **8** — 特征: 半修复覆盖、口径错配、无幂等
-  → **规则: 修一处必查同类; 周期性动作必须幂等**
+- A 类 (静默断链): **12** — 特征: `hasattr` 守卫/空 except/无调用者/单向契约/退火泄漏
+  → **规则: 关键路径禁止静默吞异常 (§14); 新接线必须带"变更日志"证明生命;
+  恢复映射与保存端必须双向核对 (A12); 开关变量的关闭必须显式赋值 (A13)**
+- B 类 (设计): **10** — 特征: 半修复覆盖、口径错配、无幂等、**边界条件未覆盖**、
+  **无界奖金形塑出退化吸引子 (B10)**
+  → **规则: 修一处必查同类; 周期性动作必须幂等; 续跑链必须"边界安全"
+  (resume 步数 ≥ target 时先扩 target); 任何"每步持续收益"必须设有界窗口**
 - C 类 (运维): **7** — 特征: 覆盖式部署、路径假设、重试放大
   → **规则: 部署必 merge; 启动用守护式 launcher; 停止用方括号模式**
