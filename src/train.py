@@ -3281,14 +3281,29 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             # --- Stage 24 M1: goal proposer SHADOW telemetry (no injection) ---
             if goal_proposer is not None and state.step % _goal_every == 0:
                 try:
+                    # Neutral placeholder drives while HomeostaticDrives is
+                    # disabled (enabling drives changes training rewards; that
+                    # is a separate audited step, M2+). Disclosed in [goal].
                     _dl = (homeostatic_drives.drive_levels()
-                           if homeostatic_drives is not None else {})
+                           if homeostatic_drives is not None
+                           else {"curiosity": 0.6, "competence": 0.6,
+                                 "social": 0.6, "safety": 0.6, "rest": 0.6})
                     _slopes: dict[str, float] = {}
                     if knowledge_ledger is not None:
                         for _tid, _v in knowledge_ledger.state_dict().get("tasks", {}).items():
                             _slopes[str(_tid)] = float(_v.get("ema_ret_fast", 0.0)) \
                                 - float(_v.get("ema_ret_slow", 0.0))
-                    _goals = goal_proposer.propose(_dl, _slopes)
+                    _pending = 0
+                    if hypothesis_tester is not None:
+                        try:
+                            _pending = 1 if (
+                                getattr(hypothesis_tester,
+                                        "_active_hypothesis_id", None)
+                                is not None
+                                or len(hypothesis_tester) > 0) else 0
+                        except Exception:  # noqa: BLE001 - telemetry only
+                            _pending = 0
+                    _goals = goal_proposer.propose(_dl, _slopes, _pending)
                     _chosen = goal_proposer.arbitrate(_goals)
                     if state.step % 5000 == 0:
                         logger.info(
