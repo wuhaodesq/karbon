@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+### Stage 23 SEALED (2026-10-29) 🏁
+
+- tag `v0.23.0-stage23`; `docs/stage23_report.md` (M1-M4 全有结论)。
+- M1 环境丰富化 PASS (op 0.80-0.86); M2 内驱→课程 + M2-p2 世界扩展
+  PASS (LP 选课 B15; ExtendedThreeDWorld 24.85M 起常驻); M3 广度
+  (好相位 27.1M: est 9.0y 档案) + 架构决策 (推迟 model-grower, 证据
+  记录) + 语言双门 PASS (M3a 1.0/0.0; M3b 0.94/1.0-memory); M4 以
+  连续血统满足 (24.5M→41.9M, 17.4M 步, 0 NaN/0 崩坏)。
+- 平衡相位决议与相位声明口径归档 (op 0.50-0.60 监控带; 能力声明仅
+  引用好相位档案并标注)。
+- 诚实缺口 §4 全列 (脚本化执行器/LLM 流畅度轴/M4 非独立浸泡/服务器
+  repo 漂移/num 时代带)。
+
 ### 语言 M3b L-in 判定 (Stage 23, 2026-10-29) 👂
 
 - **电池**: `instruction_battery.py` — 5 场景 × 20 指令模板 = 100 trials
