@@ -88,3 +88,24 @@
 
 **M3b 下一步**: 指令模板 20 条 × 5 场景, 匹配 ≥0.7 且 op 不降;
 语言输出 telemetry 常开。
+
+## 8. M3b 结果 (2026-10-29)
+
+**电池** (scripts/eval/instruction_battery.py): 5 场景 × 20 模板 = 100
+trials (50 live / 50 memory)。text -> 指代 -> 脚本化 8 向贪心行走
+(披露: 执行器非策略学习), 成功 = 指代正确 且 到点 (live 0.5m / memory
+0.4m, ≤120 步)。基线 = 随机指代 (1/8 = 0.125)。
+
+**v1 诊断 -> 修复 (B17)**: match 0.87, referent 0.93; 失败行显示
+parsed=[] —— 根因: 词表用子串匹配, "disappea**red**" 命中颜色
+"red" (单测数据恰好是红色物体而侥幸通过)。修复: 词边界匹配
+(\bword\b); 反例测试 	est_disappeared_is_not_the_color_red。
+
+**v2 判定 (2026-10-29 16:11)**:
+- referent_accuracy **1.000**;  match **0.940** (live 0.880 / memory
+  **1.000**);  baseline 0.125 → **M3b PASS (>=0.7)**。
+- 6 个失败全部为 live 贪心行走卡墙 (无避障, 120 步上限) — 执行器
+  局限, 已披露, 未调参掩盖。
+- op 不变量: 电池不改训练; 训练恢复照常 (41.65M -> 41.90M)。
+- 存档: /root/m3b_instruction.json (final), /root/m3b_diag_v1.json
+  (bug 版诊断)。

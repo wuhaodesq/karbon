@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+### 语言 M3b L-in 判定 (Stage 23, 2026-10-29) 👂
+
+- **电池**: `instruction_battery.py` — 5 场景 × 20 指令模板 = 100 trials
+  (50 live / 50 memory), text→指代→脚本化 8 向行走 (披露); 基线随机
+  指代 0.125。
+- **v1 诊断抓到词表 bug (B17)**: "disappea**red**" 子串命中颜色 "red"
+  → 记忆指代全灭; **单测因数据巧合通过, 反例测试才是照妖镜**。
+  修复词边界匹配 + 反例测试 (8/8)。
+- **v2 判定**: referent **1.000**, match **0.940** (live 0.880 /
+  memory **1.000**) → **M3b PASS (≥0.7)**; 6 失败均 live 贪心卡墙
+  (执行器局限披露); op 不变量成立 (无训练改动)。
+- 存档: /root/m3b_instruction.json; /root/m3b_diag_v1.json。
+- 台账: B17 (词表子串匹配 + 单测无反例 = 假绿)。
+
 ### 语言 M3a L-out 判定 (Stage 23, 2026-10-29) 🗣️
 
 - **仪器重建 (诚实性)**: 旧真值表退化 (全 8 对象/同 3 种类) + 评分过松
