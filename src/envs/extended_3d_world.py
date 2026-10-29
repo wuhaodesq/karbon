@@ -21,7 +21,13 @@ from typing import Any
 
 import numpy as np
 
-from .three_d_world import ThreeDWorld, EnvStep3D, ObjectDef, _generate_object_library
+from .three_d_world import (
+    ThreeDWorld,
+    EnvStep3D,
+    ObjectDef,
+    _expose_exc,
+    _generate_object_library,
+)
 
 
 class ExtendedThreeDWorld(ThreeDWorld):
@@ -47,6 +53,7 @@ class ExtendedThreeDWorld(ThreeDWorld):
         render_size: int = 256,
         season_cycle_steps: int = 500_000,     # steps per season
         developmental_age: float = 0.0,
+        **kwargs: Any,
     ) -> None:
         # Override parent's num_objects before init
         self._extended_num_objects = num_objects
@@ -76,84 +83,56 @@ class ExtendedThreeDWorld(ThreeDWorld):
             max_episode_steps=max_episode_steps,
             render_size=render_size,
             developmental_age=developmental_age,
+            # Stage 23 M2-p2: forward the full ThreeDWorld kwarg set
+            # (occluder system / reward ladder / slots / focus mode) so the
+            # extended world shares the SAME obs/proprio contract as the
+            # checkpoint's model (27-dim proprio with 3 slots, etc.).
+            **kwargs,
         )
 
     def _build_scene(self) -> None:
-        """Override: add siblings + seasonal features to scene."""
-        # Update season
+        """Stage 23 M2-p2: seasonal bookkeeping; siblings are injected into
+        the parent's scene builder via the ``_extend_scene`` hook.
+
+        The old override referenced ``self._scene_builder`` before it existed
+        (the parent creates the builder inside its own ``_build_scene``) —
+        the extended world was dead code since that refactor; the M2-p2 smoke
+        (2026-10-22) caught the AttributeError.
+        """
         self._current_season = (self._step_count // self._season_cycle) % 4
-
-        # Assign objects to rooms
-        season_mod = self._current_season / 4.0  # seasonal color shift
-        for i, obj in enumerate(self._extended_lib[:self._extended_num_objects]):
-            room = self._room_names[i % len(self._room_names)]
-            bounds = self._room_bounds[room]
-            # Seasonal color variation
-            r, g, b, a = obj.color
-            if self._current_season == 0:  # spring: more green
-                obj.color = (r * 0.8, g * 1.2, b * 0.8, a)
-            elif self._current_season == 1:  # summer: bright
-                obj.color = (r * 1.1, g * 1.1, b * 0.9, a)
-            elif self._current_season == 2:  # autumn: warm
-                obj.color = (r * 1.2, g * 0.8, b * 0.6, a)
-            elif self._current_season == 3:  # winter: cool
-                obj.color = (r * 0.7, g * 0.8, b * 1.2, a)
-            obj.color = tuple(max(0.0, min(1.0, c)) for c in obj.color[:3]) + (a,)
-
-        # Add siblings
+        self._sibling_names.clear()
+        self._sibling_positions.clear()
+        self._sibling_activities.clear()
         for i in range(self._num_siblings):
             name = f"sibling_{i}"
-            self._sibling_names.append(name)
             room = self._room_names[(i + 1) % len(self._room_names)]
             bounds = self._room_bounds[room]
+            self._sibling_names.append(name)
             self._sibling_positions[name] = (
-                self._rng.uniform(bounds[0], bounds[1]),
-                self._rng.uniform(bounds[2], bounds[3]),
+                float(np.clip(self._rng.uniform(bounds[0], bounds[1]), -1.8, 1.8)),
+                float(np.clip(self._rng.uniform(bounds[2], bounds[3]), -1.8, 1.8)),
                 0.15,
             )
             self._sibling_activities[name] = "exploring"
-
-        # Add siblings to scene builder
-        for name, pos in self._sibling_positions.items():
-            self._scene_builder.add_agent(
-                name=name,
-                position=pos,
-                size=0.13,  # siblings are slightly smaller than learner
-                color=(
-                    (0.2, 0.6, 1.0, 1.0) if "0" in name
-                    else (1.0, 0.4, 0.6, 1.0)
-                ),
-                can_move=True,
-            )
-            self._agent_names.append(name)
-
-        # Add room walls/doors
-        self._add_room_partitions()
-
-        # Call parent build
         super()._build_scene()
 
-    def _add_room_partitions(self) -> None:
-        """Add partial walls and doorways between rooms."""
-        # Doorways are gaps in the partition walls (implemented as visual markers)
-        # Living room / kitchen door
-        self._scene_builder.add_object(
-            ObjectDef("door_lr_kitchen", "box", (0.02, 0.8, 1.5),
-                      (0.5, 0.4, 0.2, 1.0), label="door"),
-            (2.0, 0.0, 0.75),
-        )
-        # Living room / bedroom door
-        self._scene_builder.add_object(
-            ObjectDef("door_lr_bedroom", "box", (0.02, 0.8, 1.5),
-                      (0.4, 0.3, 0.1, 1.0), label="door"),
-            (-2.0, 0.0, 0.75),
-        )
-        # Living room / garden door
-        self._scene_builder.add_object(
-            ObjectDef("door_lr_garden", "box", (0.8, 0.02, 1.5),
-                      (0.3, 0.6, 0.1, 1.0), label="door"),
-            (0.0, 2.0, 0.75),
-        )
+    def _extend_scene(self, builder) -> None:
+        """Inject siblings into the parent's scene BEFORE model compile."""
+        for name, pos in self._sibling_positions.items():
+            try:
+                builder.add_agent(
+                    name=name,
+                    position=pos,
+                    size=0.13,  # siblings are slightly smaller than learner
+                    color=(
+                        (0.2, 0.6, 1.0, 1.0) if "0" in name
+                        else (1.0, 0.4, 0.6, 1.0)
+                    ),
+                    can_move=True,
+                )
+                self._agent_names.append(name)
+            except Exception as _e:
+                _expose_exc("extended.add_sibling")
 
     @property
     def current_season(self) -> str:

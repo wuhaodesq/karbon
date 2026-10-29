@@ -631,6 +631,15 @@ class ThreeDWorld:
 
         # --- Grasping state (developmental: unlocks at age > 0.15) ---
         self._held_obj_id: int | None = None  # index into _object_lib, None = empty hand
+        # Stage 23 M3.5 (momentum semantics): last locomotion command. The
+        # manipulation actions (8-11) PRESERVE it instead of zeroing the
+        # body — the zero-force "in-place button" was the mechanical base of
+        # the constant-action freeze family (grasp-freeze / direction lock /
+        # release-rotate fidget). Known trade-off (recorded): absolute
+        # stillness is no longer reachable; a true idle action can be added
+        # later if needed.
+        self._last_dx: float = 0.0
+        self._last_dy: float = 0.0
         self._weld_eq_id: int = -1  # MuJoCo equality constraint id for weld
 
         # --- Chain task state (developmental: unlocks at age > 0.3) ---
@@ -910,7 +919,11 @@ class ThreeDWorld:
                 self._use_held_as_tool()
             elif action == 11:
                 pass  # rotate: visual exploration
-            dx, dy = 0.0, 0.0
+            # Stage 23 M3.5: manipulation no longer freezes the body —
+            # keep the LAST locomotion command (real agents can walk while
+            # carrying/releasing/tool-using; the zero-force "stand" coupling
+            # was the mechanical base of all constant-action freeze modes).
+            dx, dy = self._last_dx, self._last_dy
         else:
             # Apply force via position actuators (actions 0-7 = 8 directions;
             # 8-11 mapped via %8 to a cardinal dir before dev_age unlocks).
@@ -922,6 +935,7 @@ class ThreeDWorld:
             force = self._action_force
             dx = force * ux
             dy = force * uy
+            self._last_dx, self._last_dy = dx, dy
 
         # Move agent target position via velocity control
         try:
@@ -1217,6 +1231,12 @@ class ThreeDWorld:
                     break
 
         builder.set_sun_angle(self._sun_angle)
+        # Stage 23 M2-p2: subclass scene hook — after all base entities are
+        # registered and BEFORE the model compiles (agents added after
+        # compile would be silently ignored). Default: none.
+        _ext = getattr(self, "_extend_scene", None)
+        if _ext is not None:
+            _ext(builder)
         xml = builder.build_xml()
 
         # Load MuJoCo model
@@ -2297,28 +2317,20 @@ class ThreeDWorld:
             except Exception as _e:
                 _expose_exc("approach_reward")
 
-        # Occluder-target reward (situational, single-target): while an
-        # object is occluded (in _active_occlusions_3d), reward the agent
-        # for moving toward that object's last-known position. Unlike the
-        # blanket approach reward (all objects, all steps), this fires only
-        # for the occluded object during the occlusion window — a
-        # context-limited behavior-guidance signal aligned 1:1 with the
-        # object_permanence eval metric. Default off (weight=0.0).
-        if self._occluder_target_reward > 0.0:
-            try:
-                ax = float(self._data.body("learner").xpos[0])
-                ay = float(self._data.body("learner").xpos[1])
-                for key, occ in list(self._active_occlusions_3d.items()):
-                    lk = occ["last_known"]
-                    dist = math.hypot(ax - lk[0], ay - lk[1])
-                    prev = occ.get("prev_agent_dist", dist)
-                    occ["prev_agent_dist"] = dist
-                    if dist < prev:
-                        reward += (prev - dist) * self._occluder_target_reward
-            except Exception as _e:
-                _expose_exc("occluder_target_reward")
+        # Occluder ladder (target/shaping/reach/hold/reveal/orient) — Stage 23
+        # M1 (2026-10-19, bug B11): the old inline block here paid ONLY
+        # target/shaping, while the FULL ladder lives in _occluder_only_reward
+        # (focus path). Turning focus_op_only off therefore silently dropped
+        # reach=100/hold/reveal/orient — op decayed 0.80->0.20 within 1.5
+        # segments (mean_ret 1400->58). The rich-environment mode must carry
+        # the SAME ladder as one objective among many.
+        reward += self._occluder_only_reward()
 
-        reward = max(0.0, min(5.0, reward))
+        # B11: honor the configurable op clamp in the rich path too (the old
+        # hard min(5.0) here truncated reach=100 exactly like the historical
+        # Stage-20w bug).
+        _clamp_rich = float(getattr(self, "_op_reward_clamp", 5.0))
+        reward = max(0.0, min(_clamp_rich + 5.0, reward))
 
         # --- Chain task bonus (developmental: unlocks at age > 0.3) ---
         if self._dev_age > 0.3:
@@ -2328,7 +2340,8 @@ class ThreeDWorld:
         if self._logic_bonus_action is not None and action >= 0 and action % 8 == self._logic_bonus_action:
             reward += self._logic_bonus_weight
 
-        return float(max(0.0, min(10.0, reward)))
+        return float(max(0.0, min(float(getattr(self, "_op_reward_clamp", 5.0)) + 5.0,
+                                  reward)))
 
     def _proprio(self) -> np.ndarray:
         """Return proprioceptive vector (12 or 16 dim depending on dev age)."""

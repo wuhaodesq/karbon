@@ -281,6 +281,10 @@ def main():
                          "'cross' (training crossing curriculum); comma list")
     ap.add_argument("--tasks", type=str, default="all",
                     help="comma list of curriculum task ids to evaluate, or 'all'")
+    ap.add_argument("--env-type", type=str, default="threed",
+                    choices=["threed", "extended"],
+                    help="evaluation world: threed (historical) or extended "
+                         "(Stage 23 M2-p2: 4 rooms + siblings + seasons)")
     args = ap.parse_args()
 
     device = get_device(None)
@@ -329,6 +333,16 @@ def main():
                 object_crossing_fixed_object=int(cfg["env"].get("object_crossing_fixed_object", -1)),
                 object_crossing_fixed_wall=int(cfg["env"].get("object_crossing_fixed_wall", -1)),
             )
+        if getattr(args, "env_type", "threed") == "extended":
+            # Stage 23 M2-p2: measure capabilities in the EXPANDED world
+            # (4 rooms + siblings + seasons). Explicit flag: the historical
+            # far/cross numbers must stay comparable on the original world.
+            from src.envs.extended_3d_world import ExtendedThreeDWorld
+            kw.update(
+                num_siblings=int(cfg["env"].get("num_siblings", 2)),
+                season_cycle_steps=int(cfg["env"].get("season_cycle_steps", 500_000)),
+            )
+            return ExtendedThreeDWorld(**kw)
         return ThreeDWorld(**kw)
 
     env = make_env(cfg["env"].get("num_objects", 8),

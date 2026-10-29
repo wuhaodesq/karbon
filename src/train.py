@@ -755,44 +755,13 @@ def _build_env_from_spec(spec: dict[str, Any], env_cfg: dict[str, Any]):
         )
     if env_id == "ThreeDWorld":
         from src.envs.three_d_world import ThreeDWorld
-        return ThreeDWorld(
-            num_objects=int(spec.get("num_objects", env_cfg.get("num_objects", 8))),
-            seed=42,
-            max_episode_steps=env_cfg.get("max_episode_steps", 300),
-            render_size=int(env_cfg.get("render_size", 128)),
-            action_force=float(spec.get("action_force", env_cfg.get("action_force", 50.0))),
-            # 20i: forwarded so curriculum envs match the pre-curriculum env
-            # (804). Previously missed -> train env ran at dev_age=0.0 while
-            # eval used 0.5: actions 8-11 fell through to locomotion and the
-            # 20h#5/#6 stillness teaching (action 11) never actually taught
-            # stillness. MUST stay in sync with the startup env block.
-            developmental_age=float(env_cfg.get("developmental_age", 0.0)),
-            camera_pos=tuple(env_cfg.get("camera_pos", [0.0, -1.0, 0.8])),
-            camera_fovy=float(env_cfg.get("camera_fovy", 60.0)),
-            # Stage 20w: allow spec-level override for curriculum reward/occ
-            num_occluders=int(spec.get("num_occluders", env_cfg.get("num_occluders", 0))),
-            occluder_trace=bool(env_cfg.get("occluder_trace", False)),
-            occluder_target_reward=float(spec.get("occluder_target_reward", env_cfg.get("occluder_target_reward", 0.0))),
-            object_crossing_every=int(spec.get("object_crossing_every", env_cfg.get("object_crossing_every", 0))),
-            object_crossing_hold_steps=int(spec.get("object_crossing_hold_steps", env_cfg.get("object_crossing_hold_steps", 0))),
-            object_crossing_fixed_object=int(spec.get("object_crossing_fixed_object", env_cfg.get("object_crossing_fixed_object", -1))),
-            object_crossing_fixed_wall=int(spec.get("object_crossing_fixed_wall", env_cfg.get("object_crossing_fixed_wall", -1))),
-            occluder_arrival_reveal=bool(spec.get("occluder_arrival_reveal",
-                                                  env_cfg.get("occluder_arrival_reveal", False))),
-            occluder_obs_slots=int(env_cfg.get("occluder_obs_slots", 0)),
-            focus_op_only=bool(spec.get("focus_op_only", env_cfg.get("focus_op_only", False))),
-            occluder_shaping_weight=float(spec.get("occluder_shaping_weight", env_cfg.get("occluder_shaping_weight", 0.0))),
-            occluder_reveal_bonus=float(spec.get("occluder_reveal_bonus", env_cfg.get("occluder_reveal_bonus", 0.0))),
-            occluder_reveal_ratio=float(env_cfg.get("occluder_reveal_ratio", 0.7)),
-            occluder_reach_reward=float(spec.get("occluder_reach_reward", env_cfg.get("occluder_reach_reward", 0.0))),
-            occluder_reach_radius=float(env_cfg.get("occluder_reach_radius", 0.8)),
-            occluder_reward_radius=float(env_cfg.get("occluder_reward_radius", 0.0)),
-            occluder_reach_hold=float(spec.get("occluder_reach_hold", env_cfg.get("occluder_reach_hold", 0.0))),
-            occluder_orient_weight=float(spec.get("occluder_orient_weight", env_cfg.get("occluder_orient_weight", 0.0))),
-            occluder_orient_bonus=float(spec.get("occluder_orient_bonus", env_cfg.get("occluder_orient_bonus", 0.0))),
-            occluder_teacher_force=float(spec.get("occluder_teacher_force", env_cfg.get("occluder_teacher_force", 0.0))),
-            occluder_search_min_start=float(env_cfg.get("occluder_search_min_start", 1.2)),
-            op_reward_clamp=float(env_cfg.get("op_reward_clamp", 100.0)),
+        return ThreeDWorld(**_threed_env_kwargs(spec, env_cfg))
+    if env_id == "ExtendedThreeDWorld":
+        from src.envs.extended_3d_world import ExtendedThreeDWorld
+        return ExtendedThreeDWorld(
+            num_siblings=int(env_cfg.get("num_siblings", 2)),
+            season_cycle_steps=int(env_cfg.get("season_cycle_steps", 500_000)),
+            **_threed_env_kwargs(spec, env_cfg),
         )
     return MiniGridWrapper(
         env_id=env_id,
@@ -800,6 +769,66 @@ def _build_env_from_spec(spec: dict[str, Any], env_cfg: dict[str, Any]):
         max_episode_steps=env_cfg.get("max_episode_steps"),
         auto_reset=True,
         render_size=int(env_cfg.get("render_size", 64)),
+    )
+
+
+def _threed_env_kwargs(spec: dict, env_cfg: dict) -> dict:
+    """Shared kwarg set for ThreeDWorld / ExtendedThreeDWorld builders.
+
+    Stage 23 M2-p2 (bug-ledger A15/B12): the curriculum rebuild and the
+    startup envs must receive the SAME parameter set, including the B10
+    bounded hold-window knob — it was silently missing before.
+    """
+    return dict(
+        num_objects=int(spec.get("num_objects", env_cfg.get("num_objects", 8))),
+        seed=42,
+        max_episode_steps=env_cfg.get("max_episode_steps", 300),
+        render_size=int(env_cfg.get("render_size", 128)),
+        action_force=float(spec.get("action_force", env_cfg.get("action_force", 50.0))),
+        developmental_age=float(env_cfg.get("developmental_age", 0.0)),
+        camera_pos=tuple(env_cfg.get("camera_pos", [0.0, -1.0, 0.8])),
+        camera_fovy=float(env_cfg.get("camera_fovy", 60.0)),
+        num_occluders=int(spec.get("num_occluders", env_cfg.get("num_occluders", 0))),
+        occluder_trace=bool(env_cfg.get("occluder_trace", False)),
+        occluder_target_reward=float(spec.get(
+            "occluder_target_reward", env_cfg.get("occluder_target_reward", 0.0))),
+        object_crossing_every=int(spec.get(
+            "object_crossing_every", env_cfg.get("object_crossing_every", 0))),
+        object_crossing_hold_steps=int(spec.get(
+            "object_crossing_hold_steps",
+            env_cfg.get("object_crossing_hold_steps", 0))),
+        object_crossing_fixed_object=int(spec.get(
+            "object_crossing_fixed_object",
+            env_cfg.get("object_crossing_fixed_object", -1))),
+        object_crossing_fixed_wall=int(spec.get(
+            "object_crossing_fixed_wall",
+            env_cfg.get("object_crossing_fixed_wall", -1))),
+        occluder_arrival_reveal=bool(spec.get(
+            "occluder_arrival_reveal", env_cfg.get("occluder_arrival_reveal", False))),
+        occluder_obs_slots=int(env_cfg.get("occluder_obs_slots", 0)),
+        focus_op_only=bool(spec.get("focus_op_only", env_cfg.get("focus_op_only", False))),
+        occluder_shaping_weight=float(spec.get(
+            "occluder_shaping_weight", env_cfg.get("occluder_shaping_weight", 0.0))),
+        occluder_reveal_bonus=float(spec.get(
+            "occluder_reveal_bonus", env_cfg.get("occluder_reveal_bonus", 0.0))),
+        occluder_reveal_ratio=float(env_cfg.get("occluder_reveal_ratio", 0.7)),
+        occluder_reach_reward=float(spec.get(
+            "occluder_reach_reward", env_cfg.get("occluder_reach_reward", 0.0))),
+        occluder_reach_radius=float(env_cfg.get("occluder_reach_radius", 0.8)),
+        occluder_reward_radius=float(env_cfg.get("occluder_reward_radius", 0.0)),
+        occluder_reach_hold=float(spec.get(
+            "occluder_reach_hold", env_cfg.get("occluder_reach_hold", 0.0))),
+        occluder_reach_hold_max_steps=int(env_cfg.get(
+            "occluder_reach_hold_max_steps", 0)),
+        occluder_orient_weight=float(spec.get(
+            "occluder_orient_weight", env_cfg.get("occluder_orient_weight", 0.0))),
+        occluder_orient_bonus=float(spec.get(
+            "occluder_orient_bonus", env_cfg.get("occluder_orient_bonus", 0.0))),
+        occluder_teacher_force=float(spec.get(
+            "occluder_teacher_force", env_cfg.get("occluder_teacher_force", 0.0))),
+        occluder_search_min_start=float(env_cfg.get(
+            "occluder_search_min_start", 1.2)),
+        op_reward_clamp=float(env_cfg.get("op_reward_clamp", 100.0)),
     )
 
 
@@ -933,6 +962,11 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             occluder_reach_radius=float(env_cfg.get("occluder_reach_radius", 0.8)),
             occluder_reward_radius=float(env_cfg.get("occluder_reward_radius", 0.0)),
             occluder_reach_hold=float(env_cfg.get("occluder_reach_hold", 0.0)),
+            # Bug-ledger A15 (2026-10-23): the B10 bounded-window knob was
+            # never wired into the STARTUP env (nor the curriculum rebuild) —
+            # the hold cap has been inert in training since 2026-10-15.
+            occluder_reach_hold_max_steps=int(env_cfg.get(
+                "occluder_reach_hold_max_steps", 0)),
             occluder_orient_weight=float(env_cfg.get("occluder_orient_weight", 0.0)),
             occluder_orient_bonus=float(env_cfg.get("occluder_orient_bonus", 0.0)),
             occluder_teacher_force=float(env_cfg.get("occluder_teacher_force", 0.0)),
@@ -948,15 +982,47 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             logger.info("Env: ThreeDWorld (3D home, %d objects)", _kw["num_objects"])
     elif env_id == "ExtendedThreeDWorld":
         from src.envs.extended_3d_world import ExtendedThreeDWorld
+        # Stage 23 M2-p2: pass the SAME kwarg set as the ThreeDWorld branch
+        # (occluder system / reward ladder / slots / focus mode) so the
+        # extended world shares the model's obs/proprio contract
+        # (27-dim proprio with 3 slots). Must stay in sync with the
+        # ThreeDWorld branch above.
         env = ExtendedThreeDWorld(
-            num_objects=int(env_cfg.get("num_objects", 500)),
+            num_objects=int(env_cfg.get("num_objects", 20)),
             num_siblings=int(env_cfg.get("num_siblings", 2)),
+            season_cycle_steps=int(env_cfg.get("season_cycle_steps", 500_000)),
             seed=42,
             max_episode_steps=env_cfg.get("max_episode_steps", 500),
             render_size=int(env_cfg.get("render_size", 256)),
             developmental_age=float(env_cfg.get("developmental_age", 0.0)),
+            num_occluders=int(env_cfg.get("num_occluders", 0)),
+            occluder_trace=bool(env_cfg.get("occluder_trace", False)),
+            occluder_target_reward=float(env_cfg.get("occluder_target_reward", 0.0)),
+            object_crossing_every=int(env_cfg.get("object_crossing_every", 0)),
+            object_crossing_hold_steps=int(env_cfg.get("object_crossing_hold_steps", 0)),
+            object_crossing_fixed_object=int(env_cfg.get("object_crossing_fixed_object", -1)),
+            object_crossing_fixed_wall=int(env_cfg.get("object_crossing_fixed_wall", -1)),
+            occluder_obs_slots=int(env_cfg.get("occluder_obs_slots", 0)),
+            focus_op_only=bool(env_cfg.get("focus_op_only", False)),
+            occluder_shaping_weight=float(env_cfg.get("occluder_shaping_weight", 0.0)),
+            occluder_reveal_bonus=float(env_cfg.get("occluder_reveal_bonus", 0.0)),
+            occluder_reveal_ratio=float(env_cfg.get("occluder_reveal_ratio", 0.7)),
+            occluder_reach_reward=float(env_cfg.get("occluder_reach_reward", 0.0)),
+            occluder_reach_radius=float(env_cfg.get("occluder_reach_radius", 0.8)),
+            occluder_reward_radius=float(env_cfg.get("occluder_reward_radius", 0.0)),
+            occluder_reach_hold=float(env_cfg.get("occluder_reach_hold", 0.0)),
+            occluder_reach_hold_max_steps=int(env_cfg.get(
+                "occluder_reach_hold_max_steps", 0)),
+            occluder_orient_weight=float(env_cfg.get("occluder_orient_weight", 0.0)),
+            occluder_orient_bonus=float(env_cfg.get("occluder_orient_bonus", 0.0)),
+            occluder_teacher_force=float(env_cfg.get("occluder_teacher_force", 0.0)),
+            occluder_search_min_start=float(env_cfg.get(
+                "occluder_search_min_start", 1.2)),
+            op_reward_clamp=float(env_cfg.get("op_reward_clamp", 100.0)),
         )
-        logger.info("Env: ExtendedThreeDWorld (4 rooms + %d siblings)", env_cfg.get("num_siblings", 2))
+        logger.info("Env: ExtendedThreeDWorld (4 rooms + %d siblings, %d objects)",
+                    int(env_cfg.get("num_siblings", 2)),
+                    int(env_cfg.get("num_objects", 20)))
     else:
         env = MiniGridWrapper(
             env_id=env_id,
@@ -1460,6 +1526,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     contradiction_detector: Any = None  # Stage 21 M3: self-correction
     deliberation_gate: Any = None  # Stage 21 M4: budget-neutral control
     concept_bridge: Any = None  # Stage 22 M4: concept stack over live experience
+    motor_babble: Any = None  # Stage 23 M3: action-novelty (babbling) drive
     counterfactual: Any = None
     behavior_cloning: Any = None
     meta_learner: Any = None
@@ -1470,6 +1537,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # 2026-09-17: per-episode hypothesis-probe steps (behavioural exploration
     # signal for the narrative event typing; reset every episode end).
     _ep_probe_steps = 0
+    # Stage 23 M2: per-episode intrinsic accumulator (reset at episode end).
+    _ep_int_sum = 0.0
     # Stage 20-ToM: training stats for the (previously untrained) ToM module.
     _tom_stats = {"n": 0, "loss": 0.0, "act_ok": 0, "belief_err": 0.0, "stale": 0}
     transformational: Any = None
@@ -1529,6 +1598,26 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             )
             logger.info("DeliberationGate enabled (gain=%.2f)",
                         deliberation_gate.gain)
+
+        # Stage 23 M3: motor babbling — action-sequence novelty drive.
+        # Developmental rationale: infant motor babbling builds the
+        # sensorimotor repertoire; its novelty income makes constant-action
+        # policies self-penalizing (the third freeze mode: release/rotate
+        # fidget, 2026-10-25). Three-layer schedule: strong early -> floor
+        # -> reactivation on repertoire collapse. Bounded table.
+        if advanced_cfg and bool(advanced_cfg.get("motor_babble_enabled", False)):
+            from src.models.motor_babble import MotorBabble
+            motor_babble = MotorBabble(
+                n_actions=int(num_actions),
+                n=int(advanced_cfg.get("motor_babble_n", 3)),
+                max_entries=int(advanced_cfg.get("motor_babble_max_entries", 512)),
+                coef=float(advanced_cfg.get("motor_babble_coef", 0.3)),
+                floor=float(advanced_cfg.get("motor_babble_floor", 0.02)),
+                tau=float(advanced_cfg.get("motor_babble_tau", 1_500_000.0)),
+            )
+            logger.info("MotorBabble enabled (coef=%.2f floor=%.2f)",
+                        float(advanced_cfg.get("motor_babble_coef", 0.3)),
+                        float(advanced_cfg.get("motor_babble_floor", 0.02)))
 
         # Stage 22 M4: concept bridge — the M1-M3 concept stack (hierarchy /
         # rules / analogy) fed by LIVE experience: every world object becomes
@@ -2028,7 +2117,14 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # Symbolic knowledge state (rolling return + rule-match familiarity per
     # task) votes on WHAT to practice; multiplicative with the narrative
     # preference — same data-distribution law as v4. 规则→任务选择的发育化。
-    knowledge_ledger = KnowledgeLedger()
+    _curr_cfg = config.get("curriculum") or {}
+    knowledge_ledger = KnowledgeLedger(
+        novelty_weight=float(_curr_cfg.get("knowledge_novelty_weight", 0.0)),
+        # Stage 23 M3+ (B15): LP-based selection — practice what is IMPROVING
+        # (fast/slow return slope), not what merely pays less (the level
+        # criterion over-practiced low-payout sparse scenes; band drifted).
+        lp_selection=bool(_curr_cfg.get("knowledge_lp_selection", False)),
+    )
     logger.info("KnowledgeLedger enabled (capacity=%d)", knowledge_ledger.capacity)
 
     # --- Program Synthesis + Active Experimentation + Temporal Abstraction ---
@@ -2308,6 +2404,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             ("meta_monitor_state",       meta_monitor,                 None),
             ("deliberation_state",       deliberation_gate,            None),
             ("concept_bridge_state",     concept_bridge,               None),
+            ("motor_babble_state",       motor_babble,                 None),
         ]
         for key, module, _opt in _restore_map:
             if module is not None and key in _extra:
@@ -3363,6 +3460,17 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     _mgr_period_step = 0
                     _mgr_reward_acc.fill(0.0)
 
+            # --- Stage 23 M3: motor-babbling novelty drive (executed action) ---
+            if motor_babble is not None and n_envs == 1:
+                try:
+                    _mb_a = int(np.asarray(a_np).reshape(-1)[0])
+                    _mb_b = motor_babble.step(_mb_a, state.step)
+                    _tr = np.asarray(total_r, dtype=np.float32).copy()
+                    _tr.reshape(-1)[0] = _tr.reshape(-1)[0] + _mb_b
+                    total_r = _tr
+                except Exception as _mbe:  # noqa: BLE001 - telemetry-adjacent
+                    logger.warning("[babble] step failed: %s", _mbe)
+
             t_cog_end = time.perf_counter()
             t_buf = time.perf_counter()
             buffer.add(
@@ -3432,6 +3540,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 else:
                     total_r_s = float(np.asarray(total_r).reshape(-1)[0])
                     int_r_s = float(np.asarray(int_r).reshape(-1)[0])
+                    _ep_int_sum += int_r_s
                     replay.add(Transition(
                         obs=obs,
                         action=int(action.item()),
@@ -3720,6 +3829,16 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                             float(ep_ret))
                     except Exception as _kle:
                         logger.warning("[curriculum] ledger record failed: %s", _kle)
+                # Stage 23 M2: feed the per-episode intrinsic return into the
+                # ledger (novelty signal for task choice when enabled).
+                if knowledge_ledger is not None:
+                    try:
+                        knowledge_ledger.record_intrinsic(
+                            curr_active_task.id if curr_active_task is not None else -1,
+                            float(_ep_int_sum))
+                    except Exception as _kin:
+                        logger.warning("[curriculum] ledger intrinsic failed: %s", _kin)
+                _ep_int_sum = 0.0
                 # 2026-09-17: per-episode hypothesis-probe fraction (behavioural
                 # exploration signal). Outcome-based "far below norm" almost
                 # never fires with a stable policy (measured 1/78 episodes),
@@ -4977,6 +5096,17 @@ and state.step % 50000 < rollout_capacity):
                         _kpref_log = [float(x) for x in _kw]
                         logger.info("[curriculum] knowledge preference=%s",
                                     [round(x, 3) for x in _kpref_log])
+                        # Stage 23 M2.5 telemetry (pre-registered ZPD audit):
+                        # per-task rolling returns make the "does practice
+                        # raise the favored task's return?" check measurable.
+                        try:
+                            _lstate = knowledge_ledger.state_dict().get("tasks", {})
+                            logger.info(
+                                "[curriculum] ledger ret=%s",
+                                {int(k): round(float(v.get("ema_ret", 0.0)), 1)
+                                 for k, v in _lstate.items()})
+                        except Exception:  # noqa: BLE001 - telemetry only
+                            pass
                         _weights = _kw if _weights is None else _weights * _kw
                 except Exception as _ke:
                     logger.warning("[curriculum] knowledge preference failed: %s", _ke)
@@ -5073,6 +5203,10 @@ and state.step % 50000 < rollout_capacity):
         # Stage 22 M4: concept bridge telemetry (independent of hypothesis stats).
         if state.step % 5000 < rollout_capacity and concept_bridge is not None:
             logger.info("[concept] %s", concept_bridge.summary())
+
+        # Stage 23 M3: motor babble telemetry (novelty drive schedule).
+        if state.step % 5000 < rollout_capacity and motor_babble is not None:
+            logger.info("[babble] %s", motor_babble.summary)
 
         # --- Stage 20-ToM diagnostics (trainable ToM module) ---
         if state.step % 5000 < rollout_capacity and _tom_stats["n"] > 0:
@@ -5223,6 +5357,11 @@ and state.step % 50000 < rollout_capacity):
                     extra["concept_bridge_state"] = concept_bridge.state_dict()
                 except Exception as _cb_exc:  # noqa: BLE001 — non-critical state
                     logger.warning("[concept] state save failed: %s", _cb_exc)
+            if motor_babble is not None:
+                try:
+                    extra["motor_babble_state"] = motor_babble.state_dict()
+                except Exception as _mb_exc:  # noqa: BLE001 — non-critical state
+                    logger.warning("[babble] state save failed: %s", _mb_exc)
 
             # --- J-Space fossil: timeline of top-dims + feature vectors ---
             try:

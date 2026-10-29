@@ -55,7 +55,9 @@ developmental_memory:
 
 # --- 3D Environment (MuJoCo) ---
 env:
-  id: "ThreeDWorld"
+  id: "ExtendedThreeDWorld"   # M2-p2 (2026-10-23): world expansion
+  num_siblings: 2
+  season_cycle_steps: 500000
   num_objects: 8
   max_episode_steps: 600
   render_size: 128
@@ -83,7 +85,7 @@ env:
   # 11.8M: op 0.25-0.36, ToM 0.21-0.30). The lock freezes contact/social/
   # mobility rewards and keeps occluder tracking + a thin chain/logic tie.
   # 课程锁: 物理升级后接触奖励可被推物刷分, 重新锁定 op 专项。
-  focus_op_only: true
+  focus_op_only: false   # M1-v2 (2026-10-19): rich env + full op ladder
   # 2026-09-25 反刷分: 只有起点 >= 1.2m 的事件支付 op 奖励 (推物/贴身事件
   # 不付); 修复 L2173 外层 min(10) 截断 reach=100 -> 10 的半修复 bug。
   occluder_search_min_start: 1.2
@@ -134,9 +136,11 @@ advanced:
   # 滚动均值居中 => 等预算; A/B 验证在训练窗口 (docs/stage21_design.md M4)
   deliberation_enabled: true
   deliberation_gain: 0.5
-  # Stage 22 M4: 概念桥接 — M1-M3 概念栈 (层级/规则/类比) 接入训练回路:
-  # 真实物体→实例→类别形成; 实际搬运过的物体→movable 属性; 类别属性
-  # 由 prover 规则演绎 (M2)。被动模块, 不影响策略; 有界存储。
+  # Stage 23 M3: motor babbling (action-novelty drive)
+  motor_babble_enabled: true
+  motor_babble_coef: 0.3
+  motor_babble_floor: 0.02
+  motor_babble_tau: 1500000
   concept_bridge_enabled: true
   concept_bridge_max_instances: 256
 
@@ -198,7 +202,9 @@ curriculum:
   lp_min_samples: 8
   exploration_epsilon: 0.3
   mode: sequential
-  switch_every_steps: 20000            # Stage 18 是 50000; 20K 更快轮转
+  switch_every_steps: 20000            # stage18 was 50000; 20K rotates faster
+  knowledge_lp_selection: true   # B15 (2026-10-27): learning-progress selection
+  knowledge_novelty_weight: 0.5   # M2 (2026-10-20): intrinsic novelty in task choice
   report_every_steps: 500
   tasks:
     - {id: 0, num_objects: 3,  action_force: 70.0, difficulty: 0.1, tag: "3d-sparse"}

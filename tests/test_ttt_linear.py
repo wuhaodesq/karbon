@@ -175,6 +175,7 @@ def test_backend_selector_bad_name_raises(monkeypatch):
 def _triton_available() -> bool:
     try:
         import triton  # noqa: F401
+        from src.models import ttt_linear_triton  # noqa: F401
         return torch.cuda.is_available()
     except ImportError:
         return False

@@ -204,24 +204,67 @@ class LanguageGenerator(nn.Module):
     def describe(
         self,
         agent_state: dict[str, Any],
+        grounded: bool = True,
     ) -> str:
-        """"What do you see?" — describe the current situation.
+        """"What do you see?" - describe the current situation.
+
+        grounded=True (default) implements GROUNDED SPEECH: the factual
+        skeleton is built from the agent's structured state (perception),
+        the frozen LLM may only rephrase it, and every output is
+        fact-checked; on any numeric/kind violation we return the skeleton
+        verbatim. Rationale (Stage 23 M3a): the raw frozen LLM measured at
+        faithfulness 0.125 / hallucination 0.458 on the strict battery -
+        it invents counts. Grounding must come from the agent, not the LLM.
 
         Args:
             agent_state: dict with keys like:
-                - "confidence": float
-                - "familiarity": float
-                - "progress": float
-                - "active_rules": list[str] (human-readable rule descriptions)
+                - "confidence"/"familiarity"/"progress": float
+                - "active_rules": list[str]
                 - "current_task": str
                 - "episode_return": float
+                - "num_objects": int, "kinds_seen": str,
+                  "occluded_now": int (observation facts, optional)
+            grounded: use the fact-checked skeleton path when facts present.
         """
         system = (
-            "You are an AI agent navigating a gridworld environment. "
-            "Describe what you see and what you're doing in 1-2 sentences. "
-            "Be concise and natural."
+            "You are an embodied AI agent in a 3D world. "
+            "Describe the scene in 1-2 sentences using ONLY the facts listed "
+            "below. State the total number of objects, how many are hidden "
+            "behind walls, and the object kinds exactly as given. "
+            "Do not invent numbers or object kinds. Be concise and natural."
         )
+
+        n = agent_state.get("num_objects")
+        kinds_str = str(agent_state.get("kinds_seen", "")).strip()
+        occ = int(agent_state.get("occluded_now", 0) or 0)
+        if grounded and n is not None:
+            n = int(n)
+            skeleton = (
+                f"I see {n} objects in total: {kinds_str}. "
+                f"{occ} of them are hidden behind walls."
+            )
+            if not self.is_llm_active:
+                return skeleton
+            prompt = (
+                f"FACTS (keep exactly): total objects = {n}; "
+                f"kinds = {kinds_str}; hidden behind walls now = {occ}.\n"
+                f"Skeleton: {skeleton}\n"
+                "Rewrite as ONE natural sentence. Do not change any numbers, "
+                "object counts, or object kinds."
+            )
+            text = self.generate(prompt, system=system).strip()
+            if text and self._facts_consistent(text, n, occ, kinds_str):
+                return text
+            return skeleton
         rules_str = "; ".join(agent_state.get("active_rules", [])) or "no active rules"
+        obs = ""
+        if agent_state.get("num_objects") is not None:
+            obs = (
+                f"- Objects in view: {agent_state['num_objects']}"
+                f" ({agent_state.get('kinds_seen', 'unknown kinds')})\n"
+                f"- Objects currently hidden behind walls:"
+                f" {agent_state.get('occluded_now', 0)}\n"
+            )
         prompt = (
             f"Current state:\n"
             f"- Task: {agent_state.get('current_task', 'unknown')}\n"
@@ -229,10 +272,51 @@ class LanguageGenerator(nn.Module):
             f"- Familiarity: {agent_state.get('familiarity', 0.5):.0%}\n"
             f"- Progress: {agent_state.get('progress', 0.5):.0%}\n"
             f"- Active rules: {rules_str}\n"
-            f"- Episode return so far: {agent_state.get('episode_return', 0.0):.3f}\n\n"
+            f"- Episode return so far: {agent_state.get('episode_return', 0.0):.3f}\n"
+            + obs + "\n"
             f"What do you see and what are you doing?"
         )
         return self.generate(prompt, system=system)
+
+    _KIND_ALIASES = {
+        "sphere": ("sphere", "ball", "round object"),
+        "box": ("box", "block", "cube", "crate"),
+        "cylinder": ("cylinder", "can", "bottle", "tube"),
+        "capsule": ("capsule", "pill"),
+        "key": ("key",),
+        "door": ("door",),
+        "wall": ("wall", "wall_block"),
+        "occluder": ("occluder", "wall", "barrier"),
+    }
+
+    def _facts_consistent(self, text: str, n: int, occ: int,
+                          kinds_str: str) -> bool:
+        """Light fact-check: exact total, exact hidden count, no new kinds."""
+        import re
+
+        low = text.lower()
+        totals = [int(x) for x in re.findall(
+            r"(\d{1,3})\s+(?:objects?|things?|items?)\b", low)]
+        if totals != [n]:
+            return False
+        hiddens = [int(x) for x in re.findall(
+            r"(\d{1,3})\s+(?:of\s+(?:them|which)\s+)?"
+            r"(?:other\s+|more\s+)?(?:objects?\s+)?"
+            r"(?:are\s+|is\s+)?(?:hidden|occluded|behind)", low)]
+        if occ > 0:
+            if not hiddens or set(hiddens) != {occ}:
+                return False
+        elif any(h > 0 for h in hiddens):
+            return False
+        allowed = {k.strip().lower() for k in kinds_str.split(",") if k.strip()}
+        for kind, words in self._KIND_ALIASES.items():
+            present = any(w in low for w in words)
+            if present and kind not in allowed:
+                return False
+        for kind in allowed:
+            if not any(w in low for w in self._KIND_ALIASES.get(kind, (kind,))):
+                return False
+        return True
 
     def explain(
         self,

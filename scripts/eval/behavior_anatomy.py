@@ -49,7 +49,7 @@ SPIKE_R = 10.0       # per-step reward magnitude counted as a spike
 
 
 def run_ckpt(ckpt_path: str, cfg: dict, episodes: int, seed: int,
-             eps: float, max_steps: int) -> dict:
+             eps: float, max_steps: int, env_type: str = "threed") -> dict:
     device = get_device()
     tasks = (cfg.get("curriculum") or {}).get("tasks", [])
     n_layers = int(_s18e._ckpt_layer_count(ckpt_path)
@@ -69,7 +69,8 @@ def run_ckpt(ckpt_path: str, cfg: dict, episodes: int, seed: int,
 
     for spec in tasks:
         env = _opdiag._make_env(cfg, int(spec["num_objects"]),
-                                float(spec.get("action_force", 50.0)), max_steps)
+                                float(spec.get("action_force", 50.0)), max_steps,
+                                env_type=env_type)
         if model is None:
             model = _s18e.build_model(
                 env.observation_shape, env.action_space_n, cfg["model"], device,
@@ -158,12 +159,16 @@ def main() -> None:
     ap.add_argument("--epsilon", type=float, default=0.1)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--out", type=str, default="/root/behavior_anatomy.json")
+    ap.add_argument("--env-type", type=str, default="threed",
+                    choices=["threed", "extended"],
+                    help="eval world: threed (historical) or extended (M2-p2)")
     args = ap.parse_args()
 
     cfg = load_config(args.config, args.preset)
     results = []
     for ckpt in [c.strip() for c in args.ckpts.split(",") if c.strip()]:
-        r = run_ckpt(ckpt, cfg, args.episodes, args.seed, args.epsilon, args.max_steps)
+        r = run_ckpt(ckpt, cfg, args.episodes, args.seed, args.epsilon,
+                     args.max_steps, env_type=getattr(args, "env_type", "threed"))
         results.append(r)
         print(f"[anatomy] step={r['step']} stationary={r['stationary_frac']} "
               f"pass={r['pass_rate']} events={r['events']}", flush=True)

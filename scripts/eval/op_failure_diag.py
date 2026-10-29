@@ -77,7 +77,29 @@ def analyze_event(ev: dict) -> dict | None:
     }
 
 
-def _make_env(cfg: dict, num_objects: int, action_force: float, max_steps: int) -> ThreeDWorld:
+def _make_env(cfg: dict, num_objects: int, action_force: float, max_steps: int,
+              env_type: str = "threed") -> ThreeDWorld:
+    if env_type == "extended":
+        # Stage 23 M2-p2: measure in the expanded world (4 rooms + siblings).
+        from src.envs.extended_3d_world import ExtendedThreeDWorld
+        env = ExtendedThreeDWorld(
+            num_objects=int(num_objects),
+            num_siblings=int(cfg["env"].get("num_siblings", 2)),
+            season_cycle_steps=int(cfg["env"].get("season_cycle_steps", 500_000)),
+            max_episode_steps=int(max_steps),
+            render_size=int(cfg["env"].get("render_size", 128)),
+            action_force=float(action_force),
+            developmental_age=float(cfg["env"].get("developmental_age", 0.5)),
+            num_occluders=int(cfg["env"].get("num_occluders", 0)),
+            occluder_obs_slots=int(cfg["env"].get("occluder_obs_slots", 0)),
+            occluder_arrival_reveal=bool(cfg["env"].get("occluder_arrival_reveal", False)),
+            object_crossing_every=int(cfg["env"].get("object_crossing_every", 0)),
+            object_crossing_hold_steps=int(cfg["env"].get("object_crossing_hold_steps", 0)),
+            object_crossing_fixed_object=int(cfg["env"].get("object_crossing_fixed_object", -1)),
+            object_crossing_fixed_wall=int(cfg["env"].get("object_crossing_fixed_wall", -1)),
+        )
+        env._auto_reset = False
+        return env
     env = ThreeDWorld(
         num_objects=int(num_objects),
         max_episode_steps=int(max_steps),
@@ -106,7 +128,8 @@ def _run_one_ckpt(ckpt_path: str, cfg: dict, args, device) -> dict:
         tid = int(spec["id"])
         tag = str(spec.get("tag", tid))
         env = _make_env(cfg, int(spec["num_objects"]),
-                        float(spec.get("action_force", 50.0)), args.max_steps)
+                        float(spec.get("action_force", 50.0)), args.max_steps,
+                        env_type=getattr(args, "env_type", "threed"))
         if model is None:
             model = _s18e.build_model(
                 env.observation_shape, env.action_space_n, cfg["model"], device,
@@ -185,6 +208,9 @@ def main() -> None:
     ap.add_argument("--epsilon", type=float, default=0.1)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--out", type=str, default="/root/op_fail_diag.json")
+    ap.add_argument("--env-type", type=str, default="threed",
+                    choices=["threed", "extended"],
+                    help="eval world: threed (historical) or extended (M2-p2)")
     args = ap.parse_args()
 
     device = get_device()
