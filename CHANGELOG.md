@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+### Stage 24 M1 开工: 自主目标设定 (2026-10-29) 🧭
+
+- **GoalProposer** (`src/models/goal_proposer.py`, 导出 `src.models`):
+  驱动缺口 + LP 斜率 + 待检验假设 → ≤8 候选 → 反垄断仲裁 (mono_k=12
+  → ×0.2) → EMA 效用反馈表 (容量 64, 按次数修剪); 确定性 RNG +
+  state_dict/load_state_dict; 8/8 测试。
+- **train.py 阴影接线**: `goal_proposer_enabled` (默认 false) → 每 200 步
+  propose+arbitrate, 5k 步遥测 `[goal] shadow ...` (提议/种类/效用);
+  **不注入奖励** (M1 只观测); 检查点恢复含 goal_proposer_state。
+- **docs/stage24_design.md**: M1-M4 预注册判据 (自提达成率 ≥ 随机基线
+  +0.10; 单目标窗口 <60%; B10 一次性奖金; 阴影先行; 达成判定在环境侧)。
+- **TIMELINE.md**: Stage 23 sealed 行 + 当前状态更新 (Stage 24 in progress)。
+
 ### Stage 23 SEALED (2026-10-29) 🏁
 
 - tag `v0.23.0-stage23`; `docs/stage23_report.md` (M1-M4 全有结论)。

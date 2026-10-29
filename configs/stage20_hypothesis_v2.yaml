@@ -141,6 +141,10 @@ advanced:
   motor_babble_coef: 0.3
   motor_babble_floor: 0.02
   motor_babble_tau: 1500000
+  # Stage 24 M1: autonomous goal proposer (SHADOW: proposals only)
+  goal_proposer_enabled: false
+  goal_proposal_every: 200
+  goal_monopoly_k: 12
   concept_bridge_enabled: true
   concept_bridge_max_instances: 256
 

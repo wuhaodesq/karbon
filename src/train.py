@@ -94,6 +94,7 @@ from src.models.developmental_memory import MemoryManager
 from src.memory import EpisodicReplayMemory, SurpriseDetector
 from src.models.theory_of_mind import TheoryOfMind
 from src.models.homeostatic_drives import HomeostaticDrives
+from src.models.goal_proposer import GoalProposer
 from src.models.long_range_planner import LongRangePlanner
 from src.models.emotion_system import EmotionSystem
 from src.models.concept_graph import ConceptGraph
@@ -2126,6 +2127,20 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         lp_selection=bool(_curr_cfg.get("knowledge_lp_selection", False)),
     )
     logger.info("KnowledgeLedger enabled (capacity=%d)", knowledge_ledger.capacity)
+    # --- Stage 24 M1: autonomous goal proposer (SHADOW: proposals only) ---
+    _adv_goal_cfg = config.get("advanced", {}) or {}
+    goal_proposer: GoalProposer | None = None
+    _goal_every = max(50, int(_adv_goal_cfg.get("goal_proposal_every", 200)))
+    if bool(_adv_goal_cfg.get("goal_proposer_enabled", False)):
+        goal_proposer = GoalProposer(
+            seed=int(_adv_goal_cfg.get("goal_proposer_seed", 0)),
+            proposals=int(_adv_goal_cfg.get("goal_max_proposals", 8)),
+            capacity=int(_adv_goal_cfg.get("goal_utility_capacity", 64)),
+            monopoly_k=int(_adv_goal_cfg.get("goal_monopoly_k", 12)),
+        )
+        health.register("goal_proposer", goal_proposer)
+        logger.info("GoalProposer enabled (SHADOW: proposals only, every %d steps)",
+                    _goal_every)
 
     # --- Program Synthesis + Active Experimentation + Temporal Abstraction ---
     synth_cfg = config.get("program_synthesis")
@@ -2398,6 +2413,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             ("narrative_loop_state",     narrative_loop,               None),
             ("thought_action_state",     thought_action,               None),
             ("knowledge_ledger_state",   knowledge_ledger,             None),
+            ("goal_proposer_state",       goal_proposer,                None),
             # 2026-09-22: probe_net is now trained (probe-outcome learning);
             # persist its weights + update counter across restarts.
             ("hypothesis_tester_state",  hypothesis_tester,            None),
@@ -3261,6 +3277,29 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     total_r += drive_rewards.get("total", 0.0) * 0.5
                 except Exception:
                     pass
+
+            # --- Stage 24 M1: goal proposer SHADOW telemetry (no injection) ---
+            if goal_proposer is not None and state.step % _goal_every == 0:
+                try:
+                    _dl = (homeostatic_drives.drive_levels()
+                           if homeostatic_drives is not None else {})
+                    _slopes: dict[str, float] = {}
+                    if knowledge_ledger is not None:
+                        for _tid, _v in knowledge_ledger.state_dict().get("tasks", {}).items():
+                            _slopes[str(_tid)] = float(_v.get("ema_ret_fast", 0.0)) \
+                                - float(_v.get("ema_ret_slow", 0.0))
+                    _goals = goal_proposer.propose(_dl, _slopes)
+                    _chosen = goal_proposer.arbitrate(_goals)
+                    if state.step % 5000 == 0:
+                        logger.info(
+                            "[goal] shadow step=%d proposed=%d kinds=%s active=%s util=%s",
+                            state.step, len(_goals),
+                            [g.kind for g in _goals],
+                            _chosen.key if _chosen else None,
+                            {g.key: round(g.utility, 2) for g in _goals[:4]},
+                        )
+                except Exception as _ge:  # noqa: BLE001 - telemetry only
+                    logger.warning("[goal] shadow error: %s", _ge)
 
             # --- Emotion system: update from experience ---
             if emotion_system is not None and n_envs == 1:

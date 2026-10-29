@@ -13,12 +13,15 @@ from .ttt_mlp import TTTMLP, ttt_mlp_forward_pytorch
 from .world_model import RSSM, RSSMConfig, RSSMState
 from .visual_analyzer import VisualAnalyzer
 from .hierarchical_policy import HierarchicalActorCritic, SubGoalHead, GoalConditionedActionHead
+from .goal_proposer import Goal, GoalProposer
 
 __all__ = [
     "BackendName",
     "HierarchicalActorCritic",
     "SubGoalHead",
     "GoalConditionedActionHead",
+    "Goal",
+    "GoalProposer",
     "VisualAnalyzer",
     "FFN",
     "HybridBackbone",
