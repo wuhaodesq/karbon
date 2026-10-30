@@ -121,3 +121,24 @@ def test_drive_proxies_bounds_and_signs():
     assert d["competence"] < 0.6  # repeated success satisfies competence
     far = sess.drive_proxies(_facts(sibling_dist=9.9))
     assert far["social"] <= 0.2
+
+
+
+def test_regression_b18_award_resets_each_window():
+    """B18: a second window must be able to register an achievement."""
+    sess = GoalSession(GoalProposer(seed=0), seed=9, ttl=2, inject=True)
+    sess.tick(_facts(), due=True)
+    sess.tracker._chosen = _g("practice", "t", 0.5)
+    sess.tracker._hit = {"chosen": False, "random": False}
+    r1 = sess.tick(_facts(success=True), due=False)
+    assert r1["chosen_achieved"] and r1["bonus"] > 0.0
+    # expire the window, start a new one, force the same achievable goal
+    sess.tick(_facts(), due=False)
+    sess.tick(_facts(), due=False)
+    sess.tick(_facts(), due=True)
+    sess.tracker._chosen = _g("practice", "t", 0.5)
+    sess.tracker._hit = {"chosen": False, "random": False}
+    r2 = sess.tick(_facts(success=True), due=False)
+    assert r2["chosen_achieved"] and r2["bonus"] > 0.0
+    assert sess.telemetry()["achieved_chosen"] == 2
+

@@ -373,6 +373,7 @@ class GoalSession:
         self._expired = 0
         self._awarded = False
         self._awarded_rand = False
+        self._achieved_kinds: dict[str, int] = {}
 
     @property
     def inject(self) -> bool:
@@ -418,11 +419,21 @@ class GoalSession:
                 xy = (float(facts.get("x", 0.0)), float(facts.get("y", 0.0)))
                 self.tracker.start(chosen, rand_goal, xy)
                 self._n_proposals += 1
+                # B18: the per-window award latch MUST reset when a new
+                # window starts, otherwise every later achievement is
+                # swallowed (first telemetry: 1/473) — regression-tested.
+                self._awarded = False
+                self._awarded_rand = False
                 drove = True
         hits = self.tracker.step(facts)
         bonus = 0.0
         if hits["chosen"] and self.tracker.chosen is not None and not self._awarded:
             self._achieved["chosen"] += 1
+            _kind = self.tracker.chosen.kind
+            self._achieved_kinds[_kind] = self._achieved_kinds.get(_kind, 0) + 1
+            if len(self._achieved_kinds) > 8:
+                _drop = min(self._achieved_kinds, key=self._achieved_kinds.get)
+                del self._achieved_kinds[_drop]
             self.proposer.record_outcome(self.tracker.chosen.key, True)
             if self._inject:
                 bonus = self._bonus * float(self.tracker.chosen.utility)
@@ -445,6 +456,7 @@ class GoalSession:
             "n_proposals": self._n_proposals,
             "achieved_chosen": self._achieved["chosen"],
             "achieved_random": self._achieved["random"],
+            "achieved_kinds": dict(self._achieved_kinds),
             "expired": self._expired,
             "inject": self._inject,
             "ema": {k: round(v, 4) for k, v in self._ema.items()},
@@ -456,6 +468,7 @@ class GoalSession:
             "ema": dict(self._ema),
             "n_proposals": self._n_proposals,
             "achieved": dict(self._achieved),
+            "achieved_kinds": dict(self._achieved_kinds),
             "expired": self._expired,
             "awarded": self._awarded,
             "awarded_rand": self._awarded_rand,
@@ -470,6 +483,8 @@ class GoalSession:
         ach = state.get("achieved", {})
         self._achieved = {"chosen": int(ach.get("chosen", 0)),
                           "random": int(ach.get("random", 0))}
+        _ak = state.get("achieved_kinds", {})
+        self._achieved_kinds = {str(k): int(v) for k, v in _ak.items()}
         self._expired = int(state.get("expired", 0))
         self._awarded = bool(state.get("awarded", False))
         self._awarded_rand = bool(state.get("awarded_rand", False))
