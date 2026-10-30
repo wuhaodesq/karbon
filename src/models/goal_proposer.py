@@ -249,17 +249,23 @@ class GoalTracker:
         self._start_step = 0
         self._idle_run = 0
         self._prev_probe = False
+        self._start_facts: dict = {}
         self._hit = {"chosen": False, "random": False}
 
     # --------------------------------------------------------------- lifecycle
     def start(self, chosen: Goal | None, random_goal: Goal | None,
-              xy: tuple[float, float]) -> None:
+              xy: tuple[float, float], facts: dict | None = None) -> None:
         self._active = True
         self._chosen = chosen
         self._random = random_goal
         self._start_step = self._steps
         self._idle_run = 0
         self._hit = {"chosen": False, "random": False}
+        _f = facts or {}
+        self._start_facts = {
+            "sibling_dist": float(_f.get("sibling_dist", 9.9)),
+            "danger": float(_f.get("danger", 0.0)),
+        }
         self._zones.append((int(xy[0] // 1), int(xy[1] // 1)))
 
     def stop(self) -> None:
@@ -296,9 +302,14 @@ class GoalTracker:
             return (bool(facts.get("success", False))
                     and str(facts.get("task_id", "")) == str(target))
         if kind == "approach":
+            # ARRIVAL/ESCAPE delta events, not instantaneous thresholds:
+            # ambient proximity must NOT count (it made chosen==control).
+            start = getattr(self, "_start_facts", {})
             if target == "open_space":
-                return float(facts.get("danger", 0.0)) < 0.2
-            return float(facts.get("sibling_dist", 9.9)) < self._approach_r
+                return (float(start.get("danger", 0.0)) > 0.4
+                        and float(facts.get("danger", 0.0)) < 0.15)
+            return (float(start.get("sibling_dist", 9.9)) > 2.5
+                    and float(facts.get("sibling_dist", 9.9)) < self._approach_r)
         if kind == "test":
             return bool(facts.get("probe_active", False)) and not self._prev_probe
         if kind == "idle":
@@ -336,6 +347,7 @@ class GoalTracker:
             "chosen": (self._chosen.key if self._chosen else None),
             "random": (self._random.key if self._random else None),
             "start_step": self._start_step,
+            "start_facts": dict(getattr(self, "_start_facts", {})),
         }
 
     def load_state_dict(self, state: dict[str, Any]) -> None:
@@ -348,6 +360,7 @@ class GoalTracker:
         for z in state.get("zones", [])[-self._zones.maxlen:]:
             self._zones.append((int(z[0]), int(z[1])))
         self._start_step = int(state.get("start_step", 0))
+        self._start_facts = dict(state.get("start_facts", {}))
         self._chosen = None
         self._random = None
 
@@ -422,7 +435,7 @@ class GoalSession:
                 chosen = self.proposer.arbitrate(goals)
                 rand_goal = self._rng.choice(goals)
                 xy = (float(facts.get("x", 0.0)), float(facts.get("y", 0.0)))
-                self.tracker.start(chosen, rand_goal, xy)
+                self.tracker.start(chosen, rand_goal, xy, facts)
                 self._n_proposals += 1
                 # B18: the per-window award latch MUST reset when a new
                 # window starts, otherwise every later achievement is

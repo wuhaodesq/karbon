@@ -30,14 +30,28 @@ def test_practice_achievement_on_success():
 
 def test_approach_sibling_and_open_space():
     tr = GoalTracker()
-    tr.start(_g("approach", "sibling"), None, (0.0, 0.0))
+    tr.start(_g("approach", "sibling"), None, (0.0, 0.0),
+             _facts(sibling_dist=9.9))
     assert tr.step(_facts(sibling_dist=2.0))["chosen"] is False
     assert tr.step(_facts(sibling_dist=1.0))["chosen"] is True
 
     tr2 = GoalTracker()
-    tr2.start(_g("approach", "open_space"), None, (0.0, 0.0))
+    tr2.start(_g("approach", "open_space"), None, (0.0, 0.0),
+              _facts(danger=0.9))
     assert tr2.step(_facts(danger=0.8))["chosen"] is False
     assert tr2.step(_facts(danger=0.1))["chosen"] is True
+
+
+def test_ambient_proximity_is_not_achievement():
+    tr = GoalTracker()
+    tr.start(_g("approach", "sibling"), None, (0.0, 0.0),
+             _facts(sibling_dist=1.0))  # already near at start
+    assert tr.step(_facts(sibling_dist=0.5))["chosen"] is False
+
+    tr2 = GoalTracker()
+    tr2.start(_g("approach", "open_space"), None, (0.0, 0.0),
+              _facts(danger=0.05))  # already safe at start
+    assert tr2.step(_facts(danger=0.0))["chosen"] is False
 
 
 def test_test_achievement_on_probe_edge():
