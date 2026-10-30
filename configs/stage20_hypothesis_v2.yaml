@@ -145,6 +145,9 @@ advanced:
   goal_proposer_enabled: false
   goal_proposal_every: 200
   goal_monopoly_k: 12
+  goal_ttl_steps: 400
+  goal_inject_reward: false   # M2a shadow: achievements measured, no bonus yet
+  goal_bonus: 0.2
   concept_bridge_enabled: true
   concept_bridge_max_instances: 256
 

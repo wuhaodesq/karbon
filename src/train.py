@@ -94,7 +94,7 @@ from src.models.developmental_memory import MemoryManager
 from src.memory import EpisodicReplayMemory, SurpriseDetector
 from src.models.theory_of_mind import TheoryOfMind
 from src.models.homeostatic_drives import HomeostaticDrives
-from src.models.goal_proposer import GoalProposer
+from src.models.goal_proposer import GoalProposer, GoalSession
 from src.models.long_range_planner import LongRangePlanner
 from src.models.emotion_system import EmotionSystem
 from src.models.concept_graph import ConceptGraph
@@ -2127,20 +2127,30 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
         lp_selection=bool(_curr_cfg.get("knowledge_lp_selection", False)),
     )
     logger.info("KnowledgeLedger enabled (capacity=%d)", knowledge_ledger.capacity)
-    # --- Stage 24 M1: autonomous goal proposer (SHADOW: proposals only) ---
+    # --- Stage 24 M2: autonomous goal session (proposals + env-side judging) ---
     _adv_goal_cfg = config.get("advanced", {}) or {}
-    goal_proposer: GoalProposer | None = None
+    goal_session: GoalSession | None = None
+    _goal_last_xy: tuple[float, float] | None = None
     _goal_every = max(50, int(_adv_goal_cfg.get("goal_proposal_every", 200)))
     if bool(_adv_goal_cfg.get("goal_proposer_enabled", False)):
-        goal_proposer = GoalProposer(
+        _goal_proposer = GoalProposer(
             seed=int(_adv_goal_cfg.get("goal_proposer_seed", 0)),
             proposals=int(_adv_goal_cfg.get("goal_max_proposals", 8)),
             capacity=int(_adv_goal_cfg.get("goal_utility_capacity", 64)),
             monopoly_k=int(_adv_goal_cfg.get("goal_monopoly_k", 12)),
         )
-        health.register("goal_proposer", goal_proposer)
-        logger.info("GoalProposer enabled (SHADOW: proposals only, every %d steps)",
-                    _goal_every)
+        goal_session = GoalSession(
+            _goal_proposer,
+            seed=int(_adv_goal_cfg.get("goal_proposer_seed", 0)) + 1,
+            ttl=int(_adv_goal_cfg.get("goal_ttl_steps", 400)),
+            inject=bool(_adv_goal_cfg.get("goal_inject_reward", False)),
+            bonus=float(_adv_goal_cfg.get("goal_bonus", 0.2)),
+        )
+        logger.info(
+            "GoalSession enabled (every %d steps, ttl=%d, inject=%s, bonus=%.2f)",
+            _goal_every, int(_adv_goal_cfg.get("goal_ttl_steps", 400)),
+            bool(_adv_goal_cfg.get("goal_inject_reward", False)),
+            float(_adv_goal_cfg.get("goal_bonus", 0.2)))
 
     # --- Program Synthesis + Active Experimentation + Temporal Abstraction ---
     synth_cfg = config.get("program_synthesis")
@@ -2413,7 +2423,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             ("narrative_loop_state",     narrative_loop,               None),
             ("thought_action_state",     thought_action,               None),
             ("knowledge_ledger_state",   knowledge_ledger,             None),
-            ("goal_proposer_state",       goal_proposer,                None),
+            ("goal_session_state",        goal_session,                 None),
             # 2026-09-22: probe_net is now trained (probe-outcome learning);
             # persist its weights + update counter across restarts.
             ("hypothesis_tester_state",  hypothesis_tester,            None),
@@ -3278,43 +3288,75 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 except Exception:
                     pass
 
-            # --- Stage 24 M1: goal proposer SHADOW telemetry (no injection) ---
-            if goal_proposer is not None and state.step % _goal_every == 0:
+            # --- Stage 24 M2: goal session (achievement judged env-side) ---
+            if goal_session is not None and n_envs == 1:
                 try:
-                    # Neutral placeholder drives while HomeostaticDrives is
-                    # disabled (enabling drives changes training rewards; that
-                    # is a separate audited step, M2+). Disclosed in [goal].
-                    _dl = (homeostatic_drives.drive_levels()
-                           if homeostatic_drives is not None
-                           else {"curiosity": 0.6, "competence": 0.6,
-                                 "social": 0.6, "safety": 0.6, "rest": 0.6})
-                    _slopes: dict[str, float] = {}
-                    if knowledge_ledger is not None:
+                    _gx = 0.0
+                    _gy = 0.0
+                    _gmov = 0.0
+                    _gdanger = 0.0
+                    try:
+                        _lb = env._model.body("learner")
+                        _gx = float(env._data.xpos[_lb.id, 0])
+                        _gy = float(env._data.xpos[_lb.id, 1])
+                        _half = float(getattr(env, "_world_half", 2.0))
+                        _gdanger = max(0.0, 1.0 - (_half - max(abs(_gx), abs(_gy), 0.05)))
+                        if _goal_last_xy is not None:
+                            _gmov = min(1.0, float(np.hypot(
+                                _gx - _goal_last_xy[0],
+                                _gy - _goal_last_xy[1])) / 0.02)
+                        _goal_last_xy = (_gx, _gy)
+                    except Exception:
+                        pass
+                    _gsib = 9.9
+                    try:
+                        for _sn in ("sibling_0", "sibling_1"):
+                            try:
+                                _sb = env._model.body(_sn)
+                                _gsib = min(_gsib, float(np.hypot(
+                                    env._data.xpos[_sb.id, 0] - _gx,
+                                    env._data.xpos[_sb.id, 1] - _gy)))
+                            except Exception:
+                                break  # legit: extended world may be off
+                    except Exception:
+                        pass
+                    _gprobe = bool(
+                        hypothesis_tester is not None
+                        and getattr(hypothesis_tester,
+                                    "_active_hypothesis_id", None) is not None)
+                    _gfacts = {
+                        "x": _gx, "y": _gy,
+                        "movement": _gmov,
+                        "success": bool(float(extrinsic_r) > 0.5),
+                        "sibling_dist": _gsib,
+                        "danger": _gdanger,
+                        "probe_active": _gprobe,
+                        "novelty": (float(np.mean(int_r))
+                                     if curiosity_mode != "none" else 0.0),
+                    }
+                    _due = state.step % _goal_every == 0
+                    _gslopes: dict[str, float] = {}
+                    if _due and knowledge_ledger is not None:
                         for _tid, _v in knowledge_ledger.state_dict().get("tasks", {}).items():
-                            _slopes[str(_tid)] = float(_v.get("ema_ret_fast", 0.0)) \
+                            _gslopes[str(_tid)] = float(_v.get("ema_ret_fast", 0.0)) \
                                 - float(_v.get("ema_ret_slow", 0.0))
-                    _pending = 0
+                    _gpending = 0
                     if hypothesis_tester is not None:
                         try:
-                            _pending = 1 if (
+                            _gpending = 1 if (
                                 getattr(hypothesis_tester,
-                                        "_active_hypothesis_id", None)
-                                is not None
+                                        "_active_hypothesis_id", None) is not None
                                 or len(hypothesis_tester) > 0) else 0
                         except Exception:  # noqa: BLE001 - telemetry only
-                            _pending = 0
-                    _goals = goal_proposer.propose(_dl, _slopes, _pending)
-                    _chosen = goal_proposer.arbitrate(_goals)
+                            _gpending = 0
+                    _gret = goal_session.tick(_gfacts, _due, _gslopes, _gpending)
+                    if _gret.get("bonus"):
+                        total_r += float(_gret["bonus"])
                     if state.step % 5000 == 0:
-                        logger.info(
-                            "[goal] shadow step=%d proposed=%d kinds=%s active=%s util=%s",
-                            state.step, len(_goals),
-                            [g.kind for g in _goals],
-                            _chosen.key if _chosen else None,
-                            {g.key: round(g.utility, 2) for g in _goals[:4]},
-                        )
-                except Exception as _ge:  # noqa: BLE001 - telemetry only
-                    logger.warning("[goal] shadow error: %s", _ge)
+                        logger.info("[goal] step=%d %s", state.step,
+                                    goal_session.telemetry())
+                except Exception as _ge:  # noqa: BLE001 - defensive wiring
+                    logger.warning("[goal] session error: %s", _ge)
 
             # --- Emotion system: update from experience ---
             if emotion_system is not None and n_envs == 1:
