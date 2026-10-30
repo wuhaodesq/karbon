@@ -2132,6 +2132,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     goal_session: GoalSession | None = None
     _goal_last_xy: tuple[float, float] | None = None
     _goal_every = max(50, int(_adv_goal_cfg.get("goal_proposal_every", 200)))
+    _goal_task_bias = float(_adv_goal_cfg.get("goal_task_bias", 2.0))
     if bool(_adv_goal_cfg.get("goal_proposer_enabled", False)):
         _goal_proposer = GoalProposer(
             seed=int(_adv_goal_cfg.get("goal_proposer_seed", 0)),
@@ -3333,6 +3334,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         "probe_active": _gprobe,
                         "novelty": (float(np.mean(int_r))
                                      if curiosity_mode != "none" else 0.0),
+                        "task_id": (str(curr_active_task.id)
+                                     if curr_active_task is not None else ""),
                     }
                     _due = state.step % _goal_every == 0
                     _gslopes: dict[str, float] = {}
@@ -5204,6 +5207,22 @@ and state.step % 50000 < rollout_capacity):
                         except Exception:  # noqa: BLE001 - telemetry only
                             pass
                         _weights = _kw if _weights is None else _weights * _kw
+                        # Stage 24 M2: goal -> curriculum coupling (bounded):
+                        # an active practice goal doubles its task's weight.
+                        if (_weights is not None and goal_session is not None
+                                and goal_session.active_goal is not None
+                                and goal_session.active_goal.kind == "practice"):
+                            try:
+                                _gtid = int(goal_session.active_goal.target)
+                                for _ti, (_tid, _spec) in enumerate(_items):
+                                    if int(_tid) == _gtid:
+                                        _weights[_ti] *= _goal_task_bias
+                                        logger.info(
+                                            "[curriculum] goal_bias task=%d x%.1f",
+                                            _gtid, _goal_task_bias)
+                                        break
+                            except (TypeError, ValueError, IndexError):
+                                pass
                 except Exception as _ke:
                     logger.warning("[curriculum] knowledge preference failed: %s", _ke)
             if _weights is not None and _items and float(_weights.sum()) > 0.0:

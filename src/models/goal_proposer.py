@@ -236,7 +236,7 @@ class GoalTracker:
     within-run control (no reward, no feedback).
     """
 
-    def __init__(self, ttl: int = 400, zone_history: int = 64,
+    def __init__(self, ttl: int = 400, zone_history: int = 128,
                  idle_k: int = 60, approach_r: float = 1.2) -> None:
         self._ttl = max(1, int(ttl))
         self._zones: deque[tuple[int, int]] = deque(maxlen=max(8, int(zone_history)))
@@ -260,7 +260,7 @@ class GoalTracker:
         self._start_step = self._steps
         self._idle_run = 0
         self._hit = {"chosen": False, "random": False}
-        self._zones.append((int(xy[0] // 2), int(xy[1] // 2)))
+        self._zones.append((int(xy[0] // 1), int(xy[1] // 1)))
 
     def stop(self) -> None:
         self._active = False
@@ -289,11 +289,12 @@ class GoalTracker:
             return False
         kind, target = goal.kind, goal.target
         if kind == "explore":
-            cell = (int(float(facts.get("x", 0.0)) // 2),
-                    int(float(facts.get("y", 0.0)) // 2))
+            cell = (int(float(facts.get("x", 0.0)) // 1),
+                    int(float(facts.get("y", 0.0)) // 1))
             return cell not in self._zones
         if kind == "practice":
-            return bool(facts.get("success", False))
+            return (bool(facts.get("success", False))
+                    and str(facts.get("task_id", "")) == str(target))
         if kind == "approach":
             if target == "open_space":
                 return float(facts.get("danger", 0.0)) < 0.2
@@ -309,7 +310,7 @@ class GoalTracker:
         self._steps += 1
         x = float(facts.get("x", 0.0))
         y = float(facts.get("y", 0.0))
-        cell = (int(x // 2), int(y // 2))
+        cell = (int(x // 1), int(y // 1))
         if not self._active:
             self._zones.append(cell)
             self._prev_probe = bool(facts.get("probe_active", False))
@@ -378,6 +379,10 @@ class GoalSession:
     @property
     def inject(self) -> bool:
         return self._inject
+
+    @property
+    def active_goal(self):
+        return self.tracker.chosen
 
     # --------------------------------------------------------- drive proxies
     def drive_proxies(self, facts: dict) -> dict[str, float]:

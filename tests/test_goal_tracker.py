@@ -23,9 +23,9 @@ def test_explore_achievement_on_new_zone():
 
 def test_practice_achievement_on_success():
     tr = GoalTracker()
-    tr.start(_g("practice", "current_task"), None, (0.0, 0.0))
-    assert tr.step(_facts())["chosen"] is False
-    assert tr.step(_facts(success=True))["chosen"] is True
+    tr.start(_g("practice", "7"), None, (0.0, 0.0))
+    assert tr.step(_facts(task_id="7"))["chosen"] is False
+    assert tr.step(_facts(success=True, task_id="7"))["chosen"] is True
 
 
 def test_approach_sibling_and_open_space():
@@ -75,14 +75,14 @@ def test_session_bonus_only_when_inject():
     s_off.tick(_facts(), due=True)
     s_off.tracker._chosen = _g("practice", "t", 0.5)
     s_off.tracker._hit = {"chosen": False, "random": False}
-    r = s_off.tick(_facts(success=True), due=False)
+    r = s_off.tick(_facts(success=True, task_id="t"), due=False)
     assert r["chosen_achieved"] is True and r["bonus"] == 0.0
 
     s_on = GoalSession(GoalProposer(seed=0), seed=1, ttl=400, inject=True)
     s_on.tick(_facts(), due=True)
     s_on.tracker._chosen = _g("practice", "t", 0.5)
     s_on.tracker._hit = {"chosen": False, "random": False}
-    r = s_on.tick(_facts(success=True), due=False)
+    r = s_on.tick(_facts(success=True, task_id="t"), due=False)
     assert r["chosen_achieved"] is True and 0.0 < r["bonus"] <= 0.2
 
 
@@ -94,7 +94,7 @@ def test_random_control_counted_without_bonus():
     sess.tracker._chosen = _g("practice", "t", 0.5)
     sess.tracker._random = _g("practice", "t", 0.5)
     sess.tracker._hit = {"chosen": False, "random": False}
-    r = sess.tick(_facts(success=True), due=False)
+    r = sess.tick(_facts(success=True, task_id="t"), due=False)
     assert r["chosen_achieved"] and r["random_achieved"]
     assert sess.telemetry()["achieved_random"] == 1
     assert r["bonus"] <= 0.2
@@ -130,7 +130,7 @@ def test_regression_b18_award_resets_each_window():
     sess.tick(_facts(), due=True)
     sess.tracker._chosen = _g("practice", "t", 0.5)
     sess.tracker._hit = {"chosen": False, "random": False}
-    r1 = sess.tick(_facts(success=True), due=False)
+    r1 = sess.tick(_facts(success=True, task_id="t"), due=False)
     assert r1["chosen_achieved"] and r1["bonus"] > 0.0
     # expire the window, start a new one, force the same achievable goal
     sess.tick(_facts(), due=False)
@@ -138,7 +138,23 @@ def test_regression_b18_award_resets_each_window():
     sess.tick(_facts(), due=True)
     sess.tracker._chosen = _g("practice", "t", 0.5)
     sess.tracker._hit = {"chosen": False, "random": False}
-    r2 = sess.tick(_facts(success=True), due=False)
+    r2 = sess.tick(_facts(success=True, task_id="t"), due=False)
     assert r2["chosen_achieved"] and r2["bonus"] > 0.0
     assert sess.telemetry()["achieved_chosen"] == 2
+
+
+
+
+def test_practice_requires_matching_task():
+    tr = GoalTracker()
+    tr.start(_g("practice", "1"), None, (0.0, 0.0))
+    assert tr.step(_facts(success=True, task_id="0"))["chosen"] is False
+    assert tr.step(_facts(success=True, task_id="1"))["chosen"] is True
+
+
+def test_explore_uses_one_meter_cells():
+    tr = GoalTracker()
+    tr.start(_g("explore", "novel_zone"), None, (0.0, 0.0))
+    assert tr.step(_facts(x=0.9, y=0.9))["chosen"] is False  # same 1m cell
+    assert tr.step(_facts(x=0.1, y=1.1))["chosen"] is True   # new cell
 
