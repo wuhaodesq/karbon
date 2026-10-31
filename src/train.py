@@ -365,6 +365,7 @@ class TransitionBatch:
     teach: torch.Tensor = None  # Stage 20h: (B,) teacher action label, -1 = none
     belief_slot: torch.Tensor = None  # Stage 20s: (B, 3*slots) true last_known offset target
     gru_state: torch.Tensor = None  # Stage 20v: (B, d_model) GRU hidden state
+    goal: torch.Tensor = None  # Stage 24 M2: (B, goal_dim) active-goal vector
 
 
 class RolloutBuffer:
@@ -382,13 +383,14 @@ class RolloutBuffer:
     def __init__(
         self, capacity: int, obs_shape: tuple[int, ...], device: torch.device,
         n_envs: int = 1, proprio_dim: int = 0, belief_slot_dim: int = 0,
-        gru_dim: int = 0,
+        gru_dim: int = 0, goal_dim: int = 0,
     ) -> None:
         self._capacity = int(capacity)
         self.n_envs = int(n_envs)
         self.proprio_dim = int(proprio_dim)
         self.belief_slot_dim = int(belief_slot_dim)
         self.gru_dim = int(gru_dim)
+        self.goal_dim = int(goal_dim)
         self.obs = torch.zeros(
             (capacity, self.n_envs, *obs_shape), dtype=torch.uint8, device=device
         )
@@ -400,6 +402,10 @@ class RolloutBuffer:
         )
         self.gru_state = torch.zeros(
             (capacity, max(1, self.n_envs), self.gru_dim), dtype=torch.float32, device=device
+        )
+        self.goal = torch.zeros(
+            (capacity, max(1, self.n_envs), max(1, self.goal_dim)),
+            dtype=torch.float32, device=device,
         )
         self.teach = torch.full(
             (capacity, max(1, self.n_envs)), -1, dtype=torch.long, device=device
@@ -436,6 +442,7 @@ class RolloutBuffer:
         teacher_action: int | None = None,
         belief_slot: np.ndarray | None = None,
         gru_state: np.ndarray | None = None,
+        goal: np.ndarray | None = None,
     ) -> None:
         """Add ``n_envs`` transitions for one collected timestep.
 
@@ -466,6 +473,9 @@ class RolloutBuffer:
         if gru_state is not None and self.gru_dim > 0:
             _g = np.asarray(gru_state, dtype=np.float32).reshape(self.n_envs, -1)
             self.gru_state[i, :, : _g.shape[1]] = torch.from_numpy(_g)
+        if goal is not None and self.goal_dim > 0:
+            _gv = np.asarray(goal, dtype=np.float32).reshape(self.n_envs, -1)
+            self.goal[i, :, : _gv.shape[1]] = torch.from_numpy(_gv)
         self.actions[i] = torch.as_tensor(np.asarray(action)).to(self.actions.dtype)
         self.logprobs[i] = torch.as_tensor(np.asarray(logprob)).to(self.logprobs.dtype)
         self.values[i] = torch.as_tensor(np.asarray(value)).to(self.values.dtype)
@@ -490,6 +500,8 @@ class RolloutBuffer:
             if self.belief_slot_dim > 0 else None,
             gru_state=self.gru_state[:T].reshape(T * N, self.gru_dim)
             if self.gru_dim > 0 else None,
+            goal=self.goal[:T].reshape(T * N, self.goal_dim)
+            if self.goal_dim > 0 else None,
         )
 
 
@@ -1133,7 +1145,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                            proprio_dim=env_proprio_dim,
                            belief_slot_dim=3 * int(env_cfg.get("occluder_obs_slots", 0))
                            if int(env_cfg.get("occluder_obs_slots", 0)) > 0 else 0,
-                           gru_dim=model.d_model if _use_gru else 0)
+                           gru_dim=model.d_model if _use_gru else 0,
+                           goal_dim=14)
 
     # Hierarchical manager buffer (smaller: every K steps)
     _is_hierarchical = use_hierarchical
@@ -2968,14 +2981,28 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             with torch.no_grad():
                 t_model = time.perf_counter()
                 _skill_delta = active_skill.weights if active_skill is not None else None
+                # Stage 24 M2: active goal -> fixed-size vector (zero-init
+                # projection in the model; no-op until it learns).
+                _goal_np = np.zeros(14, dtype=np.float32)
+                if goal_session is not None and goal_session.active_goal is not None:
+                    _ag = goal_session.active_goal
+                    _kinds = ("explore", "practice", "approach", "test", "idle")
+                    if _ag.kind in _kinds:
+                        _goal_np[_kinds.index(_ag.kind)] = 1.0
+                    _goal_np[5] = float(_ag.utility)
+                    if (_ag.kind == "practice" and str(_ag.target).isdigit()
+                            and int(_ag.target) < 8):
+                        _goal_np[6 + int(_ag.target)] = 1.0
+                _goal_t = torch.from_numpy(_goal_np).unsqueeze(0).to(device)
                 if _collect_cognitive and n_envs == 1:
                     logits, value, hidden = model(
                         obs_t, return_hidden=True, skill_delta=_skill_delta,
-                        proprio=prop_t, proprio_hook=_hook,
+                        proprio=prop_t, proprio_hook=_hook, goal=_goal_t,
                     )
                 else:
                     logits, value = model(obs_t, skill_delta=_skill_delta,
-                                          proprio=prop_t, proprio_hook=_hook)  # value: (N,)
+                                          proprio=prop_t, proprio_hook=_hook,
+                                          goal=_goal_t)  # value: (N,)
                 dist = torch.distributions.Categorical(logits=logits)
                 action = dist.sample()              # (N,)
                 logprob = dist.log_prob(action)     # (N,)
@@ -3356,8 +3383,15 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     if _gret.get("bonus"):
                         total_r += float(_gret["bonus"])
                     if state.step % 5000 == 0:
-                        logger.info("[goal] step=%d %s", state.step,
-                                    goal_session.telemetry())
+                        _telem = goal_session.telemetry()
+                        try:
+                            _gp = getattr(model, "goal_proj", None)
+                            _telem["goal_proj_norm"] = (
+                                round(float(_gp.weight.detach().norm()), 5)
+                                if _gp is not None else 0.0)
+                        except Exception:  # noqa: BLE001 - telemetry only
+                            pass
+                        logger.info("[goal] step=%d %s", state.step, _telem)
                 except Exception as _ge:  # noqa: BLE001 - defensive wiring
                     logger.warning("[goal] session error: %s", _ge)
 
@@ -3583,6 +3617,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 teacher_action=int(getattr(env, "last_teacher_action", -1)),
                 belief_slot=true_slot.cpu().numpy() if true_slot is not None else None,
                 gru_state=_gru_state_to_store,
+                goal=_goal_np[None, :],
             )
             t_buf_end = time.perf_counter()
 
@@ -4374,6 +4409,7 @@ and state.step % 50000 < rollout_capacity):
                 _mb_teach = getattr(batch, "teach", None)
                 _mb_belief = getattr(batch, "belief_slot", None)
                 _mb_gru = getattr(batch, "gru_state", None)
+                _mb_goal = getattr(batch, "goal", None)
                 # Stage 20v: use the stored per-step GRU state so the PPO
                 # forward sees the same temporal context as rollout.
                 if _use_gru and _mb_gru is not None:
@@ -4384,6 +4420,7 @@ and state.step % 50000 < rollout_capacity):
                     proprio_hook=_ppo_hook,
                     return_hidden=True,
                     update_gru=False,
+                    goal=_mb_goal[mb_idx] if _mb_goal is not None else None,
                 )
                 # Stage 20h#6: bound logits every forward. Deterministic
                 # policies push the optimal-action logit toward +/-inf
@@ -5388,6 +5425,9 @@ and state.step % 50000 < rollout_capacity):
                 extra["narrative_loop_state"] = narrative_loop.state_dict()
             if knowledge_ledger is not None:
                 extra["knowledge_ledger_state"] = knowledge_ledger.state_dict()
+            if goal_session is not None:
+                # A12/A17: restore map AND save side must be symmetric.
+                extra["goal_session_state"] = goal_session.state_dict()
             if thought_action is not None:
                 # Stage 19-FiLM: persist the ThoughtActionLoop + its TinyTextEncoder
                 # (FiLM projection learns from PPO; losing it on resume would

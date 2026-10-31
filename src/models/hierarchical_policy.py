@@ -187,6 +187,7 @@ class HierarchicalActorCritic(nn.Module):
         proprio_dim: int = 0,  # Stage 20f: proprio (incl. occluder slots) -> policy
         belief_slots: int = 0,  # Stage 20s: internal object-permanence belief head
         use_gru: bool = False,  # Stage 20v: recurrent temporal memory
+        goal_dim: int = 14,  # Stage 24 M2: goal vector -> zero-init modulation
     ) -> None:
         super().__init__()
         if d_model % n_heads != 0:
@@ -265,6 +266,18 @@ class HierarchicalActorCritic(nn.Module):
         else:
             self.proprio_mlp = None
 
+        # Stage 24 M2: goal-conditioned modulation. Zero-init => the
+        # forward pass is IDENTICAL to the old model at startup; the
+        # projection learns from PPO which goals actually pay (achievement
+        # bonus). goal=None keeps every legacy call site unchanged.
+        self.goal_dim = int(goal_dim)
+        if self.goal_dim > 0:
+            self.goal_proj = nn.Linear(self.goal_dim, d_model)
+            nn.init.zeros_(self.goal_proj.weight)
+            nn.init.zeros_(self.goal_proj.bias)
+        else:
+            self.goal_proj = None
+
         # Stage 20s: internal object-permanence belief head. Predicts the
         # occluded-object last_known offset from the policy hidden state h so
         # the agent can recall position WITHOUT the env proprio slot cue. The
@@ -320,6 +333,7 @@ class HierarchicalActorCritic(nn.Module):
         skill_delta: "Any | None" = None,
         proprio: "torch.Tensor | None" = None,
         proprio_hook: "Any | None" = None,
+        goal: "torch.Tensor | None" = None,
         update_gru: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass. Returns (action_logits, worker_value).
@@ -409,6 +423,11 @@ class HierarchicalActorCritic(nn.Module):
         # add (no inplace) to keep autograd graphs valid.
         if proprio is not None and self.proprio_mlp is not None:
             h = h + self.proprio_mlp(proprio.float())
+
+        # Stage 24 M2: goal modulation (zero-init at startup; no-op when
+        # absent). Plain add (no inplace) to keep autograd graphs valid.
+        if goal is not None and getattr(self, "goal_proj", None) is not None:
+            h = h + self.goal_proj(goal.float())
 
         # Manager: regenerate sub-goal at period boundary
         # Device guard: ensure cached sub-goal is on the same device as h
