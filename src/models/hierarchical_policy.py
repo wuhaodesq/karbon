@@ -187,7 +187,7 @@ class HierarchicalActorCritic(nn.Module):
         proprio_dim: int = 0,  # Stage 20f: proprio (incl. occluder slots) -> policy
         belief_slots: int = 0,  # Stage 20s: internal object-permanence belief head
         use_gru: bool = False,  # Stage 20v: recurrent temporal memory
-        goal_dim: int = 14,  # Stage 24 M2: goal vector -> zero-init modulation
+        goal_dim: int = 21,  # Stage 24 M2: goal vector -> zero-init modulation
     ) -> None:
         super().__init__()
         if d_model % n_heads != 0:

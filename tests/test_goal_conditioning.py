@@ -5,7 +5,7 @@ from src.models.hierarchical_policy import HierarchicalActorCritic
 from src.train import RolloutBuffer
 
 
-def _model(goal_dim=14):
+def _model(goal_dim=21):
     torch.manual_seed(0)
     return HierarchicalActorCritic(
         obs_shape=(8, 8, 3), num_actions=4, d_model=32, n_layers=1,
@@ -19,7 +19,7 @@ def test_zero_init_goal_is_identity():
     prop = torch.randn(2, 6)
     with torch.no_grad():
         l1, v1 = m(obs, proprio=prop)
-        l2, v2 = m(obs, proprio=prop, goal=torch.zeros(2, 14))
+        l2, v2 = m(obs, proprio=prop, goal=torch.zeros(2, 21))
     assert torch.allclose(l1, l2, atol=1e-6)
     assert torch.allclose(v1, v2, atol=1e-6)
 
@@ -31,7 +31,7 @@ def test_nonzero_goal_changes_logits():
     m.eval()
     obs = torch.randint(0, 255, (2, 8, 8, 3), dtype=torch.uint8)
     prop = torch.randn(2, 6)
-    goal = torch.zeros(2, 14)
+    goal = torch.zeros(2, 21)
     goal[:, 1] = 1.0  # practice
     with torch.no_grad():
         l1, _ = m(obs, proprio=prop)
@@ -42,9 +42,9 @@ def test_nonzero_goal_changes_logits():
 def test_buffer_goal_roundtrip():
     device = torch.device("cpu")
     buf = RolloutBuffer(4, (8, 8, 3), device=device, n_envs=1,
-                        proprio_dim=6, goal_dim=14)
+                        proprio_dim=6, goal_dim=21)
     for i in range(3):
-        g = torch.zeros(1, 14)
+        g = torch.zeros(1, 21)
         g[0, i] = 1.0
         buf.add(
             obs=torch.zeros(1, 8, 8, 3, dtype=torch.uint8).numpy(),
@@ -52,6 +52,6 @@ def test_buffer_goal_roundtrip():
             done=[False], goal=g.numpy(),
         )
     batch = buf.as_batch()
-    assert batch.goal.shape == (3, 14)
+    assert batch.goal.shape == (3, 21)
     assert batch.goal[1, 1].item() == 1.0
     assert batch.goal[2, 2].item() == 1.0

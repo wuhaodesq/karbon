@@ -1146,7 +1146,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                            belief_slot_dim=3 * int(env_cfg.get("occluder_obs_slots", 0))
                            if int(env_cfg.get("occluder_obs_slots", 0)) > 0 else 0,
                            gru_dim=model.d_model if _use_gru else 0,
-                           goal_dim=14)
+                           goal_dim=21)
 
     # Hierarchical manager buffer (smaller: every K steps)
     _is_hierarchical = use_hierarchical
@@ -2981,18 +2981,41 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             with torch.no_grad():
                 t_model = time.perf_counter()
                 _skill_delta = active_skill.weights if active_skill is not None else None
+                _gx_ref = _gy_ref = 0.0
+                try:
+                    _lb_ref = env._model.body("learner")
+                    _gx_ref = float(env._data.xpos[_lb_ref.id, 0])
+                    _gy_ref = float(env._data.xpos[_lb_ref.id, 1])
+                except Exception:  # noqa: BLE001 - perception fallback
+                    pass
                 # Stage 24 M2: active goal -> fixed-size vector (zero-init
                 # projection in the model; no-op until it learns).
-                _goal_np = np.zeros(14, dtype=np.float32)
+                _goal_np = np.zeros(21, dtype=np.float32)
                 if goal_session is not None and goal_session.active_goal is not None:
                     _ag = goal_session.active_goal
-                    _kinds = ("explore", "practice", "approach", "test", "idle")
+                    _kinds = ("explore", "practice", "approach", "test",
+                              "idle", "reach")
                     if _ag.kind in _kinds:
                         _goal_np[_kinds.index(_ag.kind)] = 1.0
-                    _goal_np[5] = float(_ag.utility)
+                    _goal_np[6] = float(_ag.utility)
                     if (_ag.kind == "practice" and str(_ag.target).isdigit()
                             and int(_ag.target) < 8):
-                        _goal_np[6 + int(_ag.target)] = 1.0
+                        _goal_np[7 + int(_ag.target)] = 1.0
+                    elif _ag.kind == "reach" and str(_ag.target).isdigit():
+                        # target relative position + kind one-hot (actionable)
+                        try:
+                            _tid = int(_ag.target)
+                            _tb = env._model.body(f"obj_{_tid}")
+                            _tx = float(env._data.xpos[_tb.id, 0])
+                            _ty = float(env._data.xpos[_tb.id, 1])
+                            _goal_np[15] = float(np.clip((_tx - _gx_ref) / 4.0, -1, 1))
+                            _goal_np[16] = float(np.clip((_ty - _gy_ref) / 4.0, -1, 1))
+                            _tkind = str(getattr(env.objects[_tid], "kind", ""))
+                            _tkinds = ("box", "sphere", "cylinder", "capsule")
+                            if _tkind in _tkinds:
+                                _goal_np[17 + _tkinds.index(_tkind)] = 1.0
+                        except Exception:  # noqa: BLE001 - telemetry only
+                            pass
                 _goal_t = torch.from_numpy(_goal_np).unsqueeze(0).to(device)
                 if _collect_cognitive and n_envs == 1:
                     logits, value, hidden = model(
@@ -3352,6 +3375,18 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         hypothesis_tester is not None
                         and getattr(hypothesis_tester,
                                     "_active_hypothesis_id", None) is not None)
+                    _gtct = 9.9
+                    try:
+                        if (goal_session is not None
+                                and goal_session.active_goal is not None
+                                and goal_session.active_goal.kind == "reach"):
+                            _tid_r = int(goal_session.active_goal.target)
+                            _tb_r = env._model.body(f"obj_{_tid_r}")
+                            _gtct = float(np.hypot(
+                                env._data.xpos[_tb_r.id, 0] - _gx,
+                                env._data.xpos[_tb_r.id, 1] - _gy))
+                    except Exception:  # noqa: BLE001 - perception fallback
+                        pass
                     _gfacts = {
                         "x": _gx, "y": _gy,
                         "movement": _gmov,
@@ -3363,8 +3398,23 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                      if curiosity_mode != "none" else 0.0),
                         "task_id": (str(curr_active_task.id)
                                      if curr_active_task is not None else ""),
+                        "target_dist": _gtct,
                     }
                     _due = state.step % _goal_every == 0
+                    _gtargets = None
+                    if _due:
+                        try:
+                            _cx = []
+                            for _i in range(min(len(env.objects), 16)):
+                                _ob = env._model.body(f"obj_{_i}")
+                                _d = float(np.hypot(
+                                    env._data.xpos[_ob.id, 0] - _gx,
+                                    env._data.xpos[_ob.id, 1] - _gy))
+                                _cx.append({"id": _i, "dist": _d})
+                            _cx.sort(key=lambda _t: _t["dist"])
+                            _gtargets = _cx[:4]
+                        except Exception:  # noqa: BLE001 - perception fallback
+                            _gtargets = None
                     _gslopes: dict[str, float] = {}
                     if _due and knowledge_ledger is not None:
                         for _tid, _v in knowledge_ledger.state_dict().get("tasks", {}).items():
@@ -3379,7 +3429,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                 or len(hypothesis_tester) > 0) else 0
                         except Exception:  # noqa: BLE001 - telemetry only
                             _gpending = 0
-                    _gret = goal_session.tick(_gfacts, _due, _gslopes, _gpending)
+                    _gret = goal_session.tick(_gfacts, _due, _gslopes,
+                                              _gpending, _gtargets)
                     if _gret.get("bonus"):
                         total_r += float(_gret["bonus"])
                     if state.step % 5000 == 0:

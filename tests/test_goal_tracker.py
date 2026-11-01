@@ -172,3 +172,30 @@ def test_explore_uses_one_meter_cells():
     assert tr.step(_facts(x=0.9, y=0.9))["chosen"] is False  # same 1m cell
     assert tr.step(_facts(x=0.1, y=1.1))["chosen"] is True   # new cell
 
+
+
+def test_reach_goal_arrival_delta():
+    tr = GoalTracker()
+    tr.start(_g("reach", "7"), None, (0.0, 0.0),
+             _facts(target_dist=3.0))
+    assert tr.step(_facts(target_dist=2.0))["chosen"] is False
+    assert tr.step(_facts(target_dist=0.5))["chosen"] is True
+
+    tr2 = GoalTracker()
+    tr2.start(_g("reach", "7"), None, (0.0, 0.0),
+              _facts(target_dist=0.5))  # already close: ambient arrival no
+    assert tr2.step(_facts(target_dist=0.3))["chosen"] is False
+
+
+def test_reach_proposals_from_targets():
+    gp = GoalProposer(seed=0)
+    goals = gp.propose({"curiosity": 0.5, "competence": 0.5,
+                        "social": 0.5, "safety": 0.5, "rest": 0.5},
+                       targets=[{"id": 3, "dist": 2.4},
+                                {"id": 5, "dist": 0.5}])
+    assert goals
+    keys = {g.key for g in goals}
+    assert "reach:3" in keys and "reach:5" in keys
+    r3 = next(g for g in goals if g.key == "reach:3")
+    r5 = next(g for g in goals if g.key == "reach:5")
+    assert r3.utility > r5.utility  # farther target -> more urgent

@@ -100,6 +100,7 @@ class GoalProposer:
         drive_levels: dict[str, float],
         lp_slopes: dict[str, float] | None = None,
         pending_hypotheses: int = 0,
+        targets: list[dict] | None = None,
     ) -> list[Goal]:
         """Drive levels (0..1) -> candidate goals, utility-sorted, bounded."""
         goals: dict[str, Goal] = {}
@@ -126,6 +127,18 @@ class GoalProposer:
             u = max(0.0, min(1.0, 0.6 * s + 0.4 * learn(key)))
             if key not in goals or u > goals[key].utility:
                 goals[key] = Goal("practice", str(task), u, source="lp")
+
+        for tgt in (targets or [])[: self._max_proposals]:
+            try:
+                tid = int(tgt["id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            dist = float(tgt.get("dist", 9.9))
+            key = f"reach:{tid}"
+            # urgency grows when the object is FAR (an approachable target)
+            urgency = max(0.0, min(1.0, dist / 3.0))
+            u = max(0.0, min(1.0, 0.6 * urgency + 0.4 * learn(key)))
+            goals[key] = Goal("reach", str(tid), u, source="percept")
 
         if pending_hypotheses > 0:
             key = "test:hypothesis"
@@ -265,6 +278,7 @@ class GoalTracker:
         self._start_facts = {
             "sibling_dist": float(_f.get("sibling_dist", 9.9)),
             "danger": float(_f.get("danger", 0.0)),
+            "target_dist": float(_f.get("target_dist", 9.9)),
         }
         self._zones.append((int(xy[0] // 1), int(xy[1] // 1)))
 
@@ -312,6 +326,10 @@ class GoalTracker:
                     and float(facts.get("sibling_dist", 9.9)) < self._approach_r)
         if kind == "test":
             return bool(facts.get("probe_active", False)) and not self._prev_probe
+        if kind == "reach":
+            start = getattr(self, "_start_facts", {})
+            return (float(start.get("target_dist", 9.9)) > 1.5
+                    and float(facts.get("target_dist", 9.9)) < 0.8)
         if kind == "idle":
             return self._idle_run >= self._idle_k
         return False
@@ -421,7 +439,8 @@ class GoalSession:
     # ------------------------------------------------------------------ tick
     def tick(self, facts: dict, due: bool = False,
              lp_slopes: dict[str, float] | None = None,
-             pending_hypotheses: int = 0) -> dict:
+             pending_hypotheses: int = 0,
+             targets: list[dict] | None = None) -> dict:
         if self.tracker.expired:
             self._expired += 1
             if self.tracker.chosen is not None:
@@ -430,7 +449,8 @@ class GoalSession:
         drove = False
         if due and not self.tracker.active:
             drives = self.drive_proxies(facts)
-            goals = self.proposer.propose(drives, lp_slopes, pending_hypotheses)
+            goals = self.proposer.propose(drives, lp_slopes,
+                                          pending_hypotheses, targets)
             if goals:
                 chosen = self.proposer.arbitrate(goals)
                 rand_goal = self._rng.choice(goals)
