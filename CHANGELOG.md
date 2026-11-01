@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+### Stage 24 中期判定 (2026-11-01) 📉
+
+- **m3_autotrigger 开火** (46.15M 好相位, 扩展世界双种子): OP 0.657/0.679
+  (↑0.10), ToM 0.530/0.547 (↑0.06), systematic 0.707/0.710 (↑0.05),
+  物理/手段持平高位; **数感 0.575→0.063/0.213 回归** — 分解为稀疏场景
+  行为权衡 (回合末远离物体群, 与 op 0.76 遮挡行为一致), task3/4 反升;
+  待行为探针确认 (docs/stage24_design.md §8)。
+- **M2b 目标条件化判定: 判据未过 (诚实负结果)** — inject 纪元
+  chosen 38.2% vs control 40.6%; 根因: practice 目标在 400 步窗口内
+  结构性不可达 (课程 20k 步切换)。M2 下一迭代: 窗口内可执行的
+  物体到达目标 (reach:<object>, 目标向量含相对位置)。
+
+
 ### Stage 24 M1 开工: 自主目标设定 (2026-10-29) 🧭
 
 - **GoalProposer** (`src/models/goal_proposer.py`, 导出 `src.models`):
