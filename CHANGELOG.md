@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+### M2b 回退: 目标条件化判据未过 (2026-11-01) ↩️
+
+- 区分度未过 (inject 纪元 chosen 38.2% vs control 40.6%); 更严重:
+  **op 连续两段 <0.30** (0.282/0.261, no_move 桶 50%) → 按预注册
+  相位规则执行回退协议: goal_proposer_enabled: false (goal 向量
+  恒 0, 无注入; 提案/追踪/对照代码保留)。
+- 回退测试进行中: 接下来两段 diag 恢复 ≥0.50 → 归因目标通道;
+  否则另查。goal_proj_norm 1.32 / no_move 50% 同期为嫌疑证据。
+- 纪律: 不调参抢救; 机制中有价值部分留作离线复用。
+
+
 ### 崩溃修复 B19 (2026-11-01) 🛠️
 
 - 13:09 训练段 rc=1: skill_library.retrieve_by_embedding 的候选三元组
