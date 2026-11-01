@@ -293,3 +293,28 @@ def test_m2_reuse_loop_records_usage(tmp_path):
     assert stored.usage_count == 2
     assert stored.avg_reward > 0.5
 
+
+
+
+def test_retrieve_by_embedding_with_missing_key_gap(tmp_path):
+    """B19 regression: skills WITHOUT key_embedding leave gaps in `valid`.
+
+    The candidate position (i) must be used, not the GPU slot (valid[i]) -
+    otherwise valid[best_idx] raises IndexError (killed a 3h segment on
+    2026-11-01).
+    """
+    lib = _make_lib(tmp_path, gpu_cap=4, cpu_cap=2, ssd_shards=2,
+                    ssd_shard_size=2, sim=0.9999)
+    s0 = lib.new_skill()
+    assert lib.add(s0) in ("added", "merged")
+    s1 = lib.new_skill()
+    key = torch.randn(16)
+    s1.key_embedding = key
+    assert lib.add(s1) in ("added", "merged")
+    # entry 0 has no key_embedding -> valid has exactly one element ([1])
+    lib._gpu[0].key_embedding = None
+    entry, sim = lib.retrieve_by_embedding(key, min_similarity=0.5)
+    assert entry is not None
+    assert entry.id == s1.id
+    assert abs(sim - 1.0) < 1e-3
+

@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+### 崩溃修复 B19 (2026-11-01) 🛠️
+
+- 13:09 训练段 rc=1: skill_library.retrieve_by_embedding 的候选三元组
+  存 GPU 槽位 (alid[i]) 而非候选位置 (i), 返回时双重索引
+  alid[best_idx] — 槽位连续时恰好无感, 一旦有 skills 缺 key_embedding
+  (ckpt 恢复的旧技能) 形成空洞 → IndexError。链的 no-progress 守卫
+  自动恢复 (12:37→13:09 段丢失, 从 46.80M 续跑)。
+- 修复 + 回归测试 (带空洞的检索); 台账 B19 (索引空洞边界)。
+
+
 ### Stage 24 中期判定 (2026-11-01) 📉
 
 - **m3_autotrigger 开火** (46.15M 好相位, 扩展世界双种子): OP 0.657/0.679

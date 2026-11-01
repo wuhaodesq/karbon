@@ -299,8 +299,14 @@ class BoundedSkillLibrary:
         others = torch.stack(keys, dim=0)
         cos = F.cosine_similarity(q_flat, others, dim=1)
         # Candidates above threshold; choose by SCORE (value), sim as tiebreak.
+        # NOTE (B19, 2026-11-01): the third element MUST be the candidate
+        # POSITION `i` (index into `valid`), not `valid[i]` (the GPU
+        # slot). With contiguous slots they are equal, which masked the bug
+        # until a skill without key_embedding left a gap: valid[best_idx]
+        # then raised IndexError and killed a 3h segment (log 2026-11-01
+        # 13:09:56).
         cands = [
-            (float(cos[i]), self._score(self._gpu[valid[i]]), valid[i])
+            (float(cos[i]), self._score(self._gpu[valid[i]]), i)
             for i in range(len(cos))
             if float(cos[i]) >= min_similarity
         ]
