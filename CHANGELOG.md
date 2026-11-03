@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+### Stage 25 M-L1: 语言进入行为回路 (2026-11-03) 🗣️
+
+- docs/stage25_language_training_design.md: 预注册判据 (指令到达率
+  ≥ 随机指令对照 +10pp; op ≥0.50 带; 单段 <0.30 或连续 2 段 <0.45
+  立即回退) 与三纪律 (专属奖励/接入即监控/消融=输入置零)。
+- src/models/instruction_channel.py: 指令窗口 (400 步) 采样 (从场景
+  现存物体, 可解析), 语义向量 (kind 4 + valid + color 7 + dx/dy, 21 维
+  复用 goal 管道), 环境侧到达判定 (0.8m, 一次性 +3.0, 每窗口 ≤1),
+  同运行随机指令对照臂 (无奖金); 7/7 单测。
+- train.py: 接线 + 检查点恢复; **启用时显式清零 goal_proj** (M2b 教训:
+  不带入旧偏置); config 键就位 (默认 false)。
+- 解析层披露: M-L1 用已验证词表的结构化语义, 原始文本编码留 M-L2。
+
+
 ### 48.55M 好相位评估: 归因闭环 + 数感回升 (2026-11-02) 📈
 
 - 回退后首次全套 (双种子): OP 0.675/0.678, 手段 1.0, ToM 0.558/0.560,

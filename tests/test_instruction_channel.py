@@ -1,0 +1,87 @@
+"""Tests for the Stage 25 M-L1 InstructionChannel (pure logic)."""
+from src.models.instruction_channel import (
+    COLORS,
+    KINDS,
+    VEC_DIM,
+    Instruction,
+    InstructionChannel,
+    build_vector,
+    color_name,
+)
+
+
+def _objects():
+    return [
+        {"id": 0, "kind": "box", "color": "red"},
+        {"id": 1, "kind": "box", "color": "blue"},
+        {"id": 2, "kind": "sphere", "color": "green"},
+        {"id": 3, "kind": "cylinder", "color": "red"},
+    ]
+
+
+def test_color_names():
+    assert color_name((0.9, 0.1, 0.1)) == "red"
+    assert color_name((0.1, 0.9, 0.1)) == "green"
+    assert color_name((0.1, 0.1, 0.9)) == "blue"
+
+
+def test_vector_layout():
+    v = build_vector(Instruction("box", "red", "go to the red box"), 2.0, -4.0)
+    assert len(v) == VEC_DIM
+    assert v[0] == 1.0 and v[4] == 1.0  # kind box + valid
+    assert v[5 + COLORS.index("red")] == 1.0
+    assert abs(v[12] - 0.5) < 1e-9 and abs(v[13] + 1.0) < 1e-9
+
+
+def test_sampling_resolvable_and_control():
+    ch = InstructionChannel(seed=0)
+    smp = ch.sample(_objects())
+    assert smp is not None
+    chosen, control, cid, ctrl_id = smp
+    assert chosen.kind in KINDS and chosen.color in COLORS
+    assert cid in (0, 1, 2, 3)
+    assert ctrl_id in (0, 1, 2, 3)
+
+
+def test_sampling_empty_returns_none():
+    ch = InstructionChannel(seed=0)
+    assert ch.sample([]) is None
+    assert ch.start([], 0) is False
+
+
+def test_window_arrival_bonus_once():
+    ch = InstructionChannel(seed=1, window_steps=10, reach_radius=0.8,
+                            bonus=3.0)
+    assert ch.start(_objects(), 0) is True
+    r1 = ch.step(1, chosen_dist=2.0, control_dist=2.0)
+    assert r1["bonus"] == 0.0
+    r2 = ch.step(2, chosen_dist=0.5, control_dist=0.5)
+    assert r2["bonus"] == 3.0 and r2["chosen_arrived"]
+    r3 = ch.step(3, chosen_dist=0.4, control_dist=0.4)
+    assert r3["bonus"] == 0.0  # one-shot
+    assert ch.telemetry()["arrived_chosen"] == 1
+    assert ch.telemetry()["arrived_control"] == 1
+
+
+def test_window_expiry_and_restart():
+    ch = InstructionChannel(seed=2, window_steps=5)
+    ch.start(_objects(), 0)
+    for st in range(1, 5):
+        ch.step(st, 9.9, 9.9)
+    r = ch.step(5, 9.9, 9.9)
+    assert r["expired"] is True
+    r2 = ch.step(6, 0.1, 0.1)
+    assert r2["bonus"] == 0.0 and r2["expired"] is True
+    assert ch.start(_objects(), 7) is True
+
+
+def test_state_roundtrip():
+    ch = InstructionChannel(seed=3, window_steps=10)
+    ch.start(_objects(), 0)
+    ch.step(1, 0.5, 2.0)
+    st = ch.state_dict()
+    ch2 = InstructionChannel(seed=99, window_steps=10)
+    ch2.load_state_dict(st)
+    assert ch2.telemetry()["n_windows"] == ch.telemetry()["n_windows"]
+    assert ch2.telemetry()["arrived_chosen"] == ch.telemetry()["arrived_chosen"]
+    assert ch2.active == ch.active

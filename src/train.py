@@ -95,6 +95,7 @@ from src.memory import EpisodicReplayMemory, SurpriseDetector
 from src.models.theory_of_mind import TheoryOfMind
 from src.models.homeostatic_drives import HomeostaticDrives
 from src.models.goal_proposer import GoalProposer, GoalSession
+from src.models.instruction_channel import InstructionChannel, build_vector, color_name
 from src.models.long_range_planner import LongRangePlanner
 from src.models.emotion_system import EmotionSystem
 from src.models.concept_graph import ConceptGraph
@@ -2143,6 +2144,32 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # --- Stage 24 M2: autonomous goal session (proposals + env-side judging) ---
     _adv_goal_cfg = config.get("advanced", {}) or {}
     goal_session: GoalSession | None = None
+    # Stage 25 M-L1: instruction channel (language in the action loop).
+    instruction_channel: InstructionChannel | None = None
+    if bool(_adv_goal_cfg.get("instruction_channel_enabled", False)):
+        instruction_channel = InstructionChannel(
+            seed=int(_adv_goal_cfg.get("goal_proposer_seed", 0)) + 2,
+            window_steps=int(_adv_goal_cfg.get("instruction_window_steps", 400)),
+            reach_radius=float(_adv_goal_cfg.get("instruction_reach_radius", 0.8)),
+            bonus=float(_adv_goal_cfg.get("instruction_bonus", 3.0)),
+        )
+        logger.info(
+            "InstructionChannel enabled (window=%d, bonus=%.1f, radius=%.2f)",
+            int(_adv_goal_cfg.get("instruction_window_steps", 400)),
+            float(_adv_goal_cfg.get("instruction_bonus", 3.0)),
+            float(_adv_goal_cfg.get("instruction_reach_radius", 0.8)))
+        # M2b lesson: the goal_proj may carry trained weights from the
+        # reverted goal era. Zero it so the instruction channel starts from
+        # a clean zero-init projection (explicit, logged).
+        try:
+            _gp = getattr(model, "goal_proj", None)
+            if _gp is not None:
+                with torch.no_grad():
+                    _gp.weight.zero_()
+                    _gp.bias.zero_()
+                logger.info("InstructionChannel: goal_proj zeroed (fresh channel)")
+        except Exception as _zg:  # noqa: BLE001 - defensive
+            logger.warning("goal_proj zeroing failed: %s", _zg)
     _goal_last_xy: tuple[float, float] | None = None
     _goal_every = max(50, int(_adv_goal_cfg.get("goal_proposal_every", 200)))
     _goal_task_bias = float(_adv_goal_cfg.get("goal_task_bias", 2.0))
@@ -2438,6 +2465,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             ("thought_action_state",     thought_action,               None),
             ("knowledge_ledger_state",   knowledge_ledger,             None),
             ("goal_session_state",        goal_session,                 None),
+            ("instruction_channel_state", instruction_channel,          None),
             # 2026-09-22: probe_net is now trained (probe-outcome learning);
             # persist its weights + update counter across restarts.
             ("hypothesis_tester_state",  hypothesis_tester,            None),
@@ -3016,6 +3044,22 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                 _goal_np[17 + _tkinds.index(_tkind)] = 1.0
                         except Exception:  # noqa: BLE001 - telemetry only
                             pass
+                if (instruction_channel is not None
+                        and instruction_channel.active
+                        and instruction_channel.chosen is not None):
+                    # Stage 25 M-L1: instruction semantics into the same
+                    # 21-dim channel (zero-init projection; dormant goal
+                    # path stays untouched).
+                    try:
+                        _tb3 = env._model.body(
+                            f"obj_{instruction_channel.target_id}")
+                        _dxv = float(env._data.xpos[_tb3.id, 0]) - _gx_ref
+                        _dyv = float(env._data.xpos[_tb3.id, 1]) - _gy_ref
+                    except Exception:  # noqa: BLE001 - perception fallback
+                        _dxv = _dyv = 0.0
+                    _goal_np[:] = np.asarray(
+                        build_vector(instruction_channel.chosen, _dxv, _dyv),
+                        dtype=np.float32)
                 _goal_t = torch.from_numpy(_goal_np).unsqueeze(0).to(device)
                 if _collect_cognitive and n_envs == 1:
                     logits, value, hidden = model(
@@ -3445,6 +3489,55 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         logger.info("[goal] step=%d %s", state.step, _telem)
                 except Exception as _ge:  # noqa: BLE001 - defensive wiring
                     logger.warning("[goal] session error: %s", _ge)
+
+            # --- Stage 25 M-L1: instruction channel (env-side judged) ---
+            if instruction_channel is not None and n_envs == 1:
+                try:
+                    _ix = _iy = 0.0
+                    try:
+                        _ib = env._model.body("learner")
+                        _ix = float(env._data.xpos[_ib.id, 0])
+                        _iy = float(env._data.xpos[_ib.id, 1])
+                    except Exception:  # noqa: BLE001 - perception fallback
+                        pass
+                    if not instruction_channel.active:
+                        _objs = []
+                        try:
+                            for _oi, _oo in enumerate(env.objects[:16]):
+                                _objs.append({
+                                    "id": _oi,
+                                    "kind": str(getattr(_oo, "kind", "")),
+                                    "color": color_name(
+                                        getattr(_oo, "color", (0.5, 0.5, 0.5))),
+                                })
+                        except Exception:  # noqa: BLE001
+                            pass
+                        instruction_channel.start(_objs, state.step)
+                    _d_ch = 9.9
+                    _d_ctl = 9.9
+                    try:
+                        if instruction_channel.target_id >= 0:
+                            _tb2 = env._model.body(
+                                f"obj_{instruction_channel.target_id}")
+                            _d_ch = float(np.hypot(
+                                env._data.xpos[_tb2.id, 0] - _ix,
+                                env._data.xpos[_tb2.id, 1] - _iy))
+                        if instruction_channel.control_id >= 0:
+                            _cb2 = env._model.body(
+                                f"obj_{instruction_channel.control_id}")
+                            _d_ctl = float(np.hypot(
+                                env._data.xpos[_cb2.id, 0] - _ix,
+                                env._data.xpos[_cb2.id, 1] - _iy))
+                    except Exception:  # noqa: BLE001 - perception fallback
+                        pass
+                    _iret = instruction_channel.step(state.step, _d_ch, _d_ctl)
+                    if _iret.get("bonus"):
+                        total_r += float(_iret["bonus"])
+                    if state.step % 5000 == 0:
+                        logger.info("[instr] step=%d %s", state.step,
+                                    instruction_channel.telemetry())
+                except Exception as _ie:  # noqa: BLE001 - defensive wiring
+                    logger.warning("[instr] error: %s", _ie)
 
             # --- Emotion system: update from experience ---
             if emotion_system is not None and n_envs == 1:
@@ -5479,6 +5572,9 @@ and state.step % 50000 < rollout_capacity):
             if goal_session is not None:
                 # A12/A17: restore map AND save side must be symmetric.
                 extra["goal_session_state"] = goal_session.state_dict()
+            if instruction_channel is not None:
+                extra["instruction_channel_state"] = (
+                    instruction_channel.state_dict())
             if thought_action is not None:
                 # Stage 19-FiLM: persist the ThoughtActionLoop + its TinyTextEncoder
                 # (FiLM projection learns from PPO; losing it on resume would

@@ -149,6 +149,11 @@ advanced:
   goal_inject_reward: false   # M2a shadow: achievements measured, no bonus yet
   goal_bonus: 0.2
   goal_task_bias: 2.0
+  # Stage 25 M-L1: instruction channel (language in the action loop)
+  instruction_channel_enabled: false
+  instruction_window_steps: 400
+  instruction_bonus: 3.0
+  instruction_reach_radius: 0.8
   concept_bridge_enabled: true
   concept_bridge_max_instances: 256
 

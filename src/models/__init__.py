@@ -14,6 +14,7 @@ from .world_model import RSSM, RSSMConfig, RSSMState
 from .visual_analyzer import VisualAnalyzer
 from .hierarchical_policy import HierarchicalActorCritic, SubGoalHead, GoalConditionedActionHead
 from .goal_proposer import Goal, GoalProposer
+from .instruction_channel import InstructionChannel
 
 __all__ = [
     "BackendName",
@@ -22,6 +23,7 @@ __all__ = [
     "GoalConditionedActionHead",
     "Goal",
     "GoalProposer",
+    "InstructionChannel",
     "VisualAnalyzer",
     "FFN",
     "HybridBackbone",
