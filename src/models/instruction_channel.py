@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import math
 import random
+from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
@@ -93,7 +94,7 @@ class InstructionChannel:
         self,
         seed: int = 0,
         window_steps: int = 400,
-        reach_radius: float = 0.8,
+        reach_radius: float = 0.5,
         bonus: float = 3.0,
     ) -> None:
         self._rng = random.Random(seed)
@@ -111,6 +112,13 @@ class InstructionChannel:
         self._n_windows = 0
         self._arrived_chosen = 0
         self._arrived_control = 0
+        # bounded arrival-time buffers (instrument v2: time-to-arrival is the
+        # primary metric; the 0.8 m arrival rate hit a ceiling - both arms
+        # ~95% by ambient proximity, an instrument flaw, B16 family).
+        self._time_chosen: deque[int] = deque(maxlen=64)
+        self._time_control: deque[int] = deque(maxlen=64)
+        self._start_d_chosen: deque[float] = deque(maxlen=64)
+        self._start_d_control: deque[float] = deque(maxlen=64)
 
     # -------------------------------------------------------------- sampling
     def sample(self, objects: list[dict]) -> tuple[Instruction, Instruction,
@@ -158,6 +166,7 @@ class InstructionChannel:
         self._awarded = False
         self._paid = False
         self._ctrl_counted = False
+        self._got_start = False
         self._n_windows += 1
         return True
 
@@ -190,6 +199,10 @@ class InstructionChannel:
         if not self._active:
             return {"bonus": 0.0, "chosen_arrived": False,
                     "control_arrived": False, "expired": True}
+        if not getattr(self, "_got_start", False):
+            self._start_d_chosen.append(float(chosen_dist))
+            self._start_d_control.append(float(control_dist))
+            self._got_start = True
         chosen_arrived = float(chosen_dist) <= self._radius
         control_arrived = float(control_dist) <= self._radius
         bonus = 0.0
@@ -197,23 +210,31 @@ class InstructionChannel:
             if not self._awarded:
                 self._awarded = True
                 self._arrived_chosen += 1
+                self._time_chosen.append(int(step) - int(self._start))
             if not self._paid:
                 bonus = self._bonus
                 self._paid = True
         if control_arrived and not self._ctrl_counted:
             self._arrived_control += 1
             self._ctrl_counted = True
+            self._time_control.append(int(step) - int(self._start))
         return {"bonus": bonus, "chosen_arrived": chosen_arrived,
                 "control_arrived": control_arrived, "expired": False}
 
     # ----------------------------------------------------------- telemetry
     def telemetry(self) -> dict[str, Any]:
+        def _mean(q) -> float | None:
+            return round(float(sum(q) / len(q)), 1) if len(q) else None
         return {
             "active": self._chosen.text if self._chosen else None,
             "control": self._control.text if self._control else None,
             "n_windows": self._n_windows,
             "arrived_chosen": self._arrived_chosen,
             "arrived_control": self._arrived_control,
+            "t_chosen": _mean(self._time_chosen),
+            "t_control": _mean(self._time_control),
+            "d0_chosen": _mean(self._start_d_chosen),
+            "d0_control": _mean(self._start_d_control),
             "bonus_paid": bool(getattr(self, "_paid", False)),
         }
 
@@ -229,6 +250,11 @@ class InstructionChannel:
             "n_windows": self._n_windows,
             "arrived_chosen": self._arrived_chosen,
             "arrived_control": self._arrived_control,
+            "time_chosen": list(self._time_chosen),
+            "time_control": list(self._time_control),
+            "start_d_chosen": list(self._start_d_chosen),
+            "start_d_control": list(self._start_d_control),
+            "got_start": bool(getattr(self, "_got_start", False)),
             "rng_state": self._rng.getstate(),
         }
 
@@ -248,6 +274,15 @@ class InstructionChannel:
         self._n_windows = int(state.get("n_windows", 0))
         self._arrived_chosen = int(state.get("arrived_chosen", 0))
         self._arrived_control = int(state.get("arrived_control", 0))
+        self._time_chosen.clear()
+        self._time_chosen.extend(int(x) for x in state.get("time_chosen", [])[-64:])
+        self._time_control.clear()
+        self._time_control.extend(int(x) for x in state.get("time_control", [])[-64:])
+        self._start_d_chosen.clear()
+        self._start_d_chosen.extend(float(x) for x in state.get("start_d_chosen", [])[-64:])
+        self._start_d_control.clear()
+        self._start_d_control.extend(float(x) for x in state.get("start_d_control", [])[-64:])
+        self._got_start = bool(state.get("got_start", False))
         rs = state.get("rng_state")
         if rs is not None:
             try:

@@ -85,3 +85,27 @@ def test_state_roundtrip():
     assert ch2.telemetry()["n_windows"] == ch.telemetry()["n_windows"]
     assert ch2.telemetry()["arrived_chosen"] == ch.telemetry()["arrived_chosen"]
     assert ch2.active == ch.active
+
+
+
+def test_time_to_arrival_tracking():
+    ch = InstructionChannel(seed=4, window_steps=100, reach_radius=0.5,
+                            bonus=3.0)
+    ch.start(_objects(), 0)
+    ch.step(1, chosen_dist=2.0, control_dist=2.6)
+    ch.step(2, chosen_dist=1.0, control_dist=2.4)
+    ch.step(3, chosen_dist=0.4, control_dist=2.0)   # chosen arrives at t=3
+    ch.step(4, chosen_dist=0.3, control_dist=0.4)   # control arrives at t=4
+    t = ch.telemetry()
+    assert t["arrived_chosen"] == 1 and t["arrived_control"] == 1
+    assert t["t_chosen"] == 3.0 and t["t_control"] == 4.0
+    assert abs(t["d0_chosen"] - 2.0) < 1e-9
+    assert abs(t["d0_control"] - 2.6) < 1e-9
+
+
+def test_tighter_radius_blocks_ambient_arrival():
+    ch = InstructionChannel(seed=5, window_steps=50, reach_radius=0.5)
+    ch.start(_objects(), 0)
+    r = ch.step(1, chosen_dist=0.7, control_dist=0.7)  # inside old 0.8, not 0.5
+    assert r["chosen_arrived"] is False and r["bonus"] == 0.0
+

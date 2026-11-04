@@ -153,7 +153,7 @@ advanced:
   instruction_channel_enabled: false
   instruction_window_steps: 400
   instruction_bonus: 3.0
-  instruction_reach_radius: 0.8
+  instruction_reach_radius: 0.5   # instrument v2: 0.8 hit a ceiling
   concept_bridge_enabled: true
   concept_bridge_max_instances: 256
 
