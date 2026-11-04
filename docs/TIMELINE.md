@@ -116,9 +116,13 @@ timeline
   Stage 20 封存要点见 docs/stage20_report.md。
   **Stage 22 (抽象概念) sealed 2026-10-18**; **Stage 23 (开放世界永续)
   sealed 2026-10-29** — 见 docs/stage22_report.md / docs/stage23_report.md。
-- **In progress**: Stage 24 (自主目标设定闭环, 15y+) — 设计草案
-  `docs/stage24_design.md`; M1 GoalProposer 已实现 (有界/确定性/8 测试),
-  阴影遥测 -> 奖励注入 -> 在线反馈 三步走。
+- **In progress**: Stage 25 (语言进入行为回路) — `docs/stage25_language_training_design.md`;
+  M-L1 指令通道上线 (op 稳定), 仪器 v2 (到达时间) + 世界放大 8×8m (M2-p3)
+  后复测中。
+- **Closed (负结果)**: Stage 24 (自主目标设定) — 机制建成但判据未过
+  (区分度不足 + op 坍塌), 已回退; 双稳态调查结案 (`docs/stage24_design.md` §8/§9)。
+- **Planned**: Stage 26 (接地阅读/社会继承) — `docs/stage25_grounded_reading_design.md`
+  (A 档: 文本→验证→语义库→巩固进权重; 硬件增量 ~1-2GB, 符合有界公理)。
 - **est. age**: 15y+ (好相位档案口径: 27.1M — OP 0.847, est 9.0y 双种子);
   平衡相位快照仅作结构参考。
 - **Architecture**: model-grower 扩容经证据评估**推迟** (Stage 23 M3 决策);
@@ -202,6 +206,9 @@ Stage 23 (开放世界永续学习) · 15y+ · 新架构整合
 | 21 | 递归元认知 | 当前架构可扩展 (S21 实测) | 反思自我监督 (MetaMonitor 二级自我模型 + 矛盾自纠错 + 审慎门控) | 递归自监控 (过程级自预测 skill > 0), 13-14y | ✅ **sealed 2026-10-11**: M1-M3 通过 + M4 机制验证 (择时诚实负结果); soak5 748k 步长程; 详见 docs/stage21_report.md |
 | 22 | 抽象概念框架 | 需要新架构 | 具体->抽象推理 (概念层级 + 跨概念形式推理) | 抽象概念任务通过率, 14-15y | ✅ **sealed 2026-10-18**: M1 结构恢复 (12/12+3/3) / M2 规则电池 recall+prec 1.0 / M3 类比 top-1 1.0; M4 概念桥在线 3 天+零退化, num 复验 1/3 (时代同带), op 战役 0.13→0.80 (双种子, 超越金档 0.69); 详见 docs/stage22_report.md |
 | 23 | 开放世界永续 | 新架构整合 | 自主目标设定 (扩展世界接入 + 内驱->自主目标 + 无限稳定) | 内在动机替代课程驱动, 100万步+, 15y+ | ✅ **sealed 2026-10-29**: M1 环境丰富化 (op 0.80-0.86) / M2 内驱->LP 课程 + Extended 世界常驻 (24.85M 起) / M3 广度 (27.1M 好相位 est 9.0y 双种子) + 架构决策 (推迟扩容, 证据记录) + 语言双门 (L-out 1.0/0.0, L-in 0.94/1.0-memory) / M4 连续血统 17.4M 步 0 崩坏; 平衡相位 0.50-0.60 监控带 (决议归档); 详见 docs/stage23_report.md |
+| 24 | 自主目标设定 | 新架构尝试 | 内驱->自提目标 + 目标条件化 | 自提目标达成率 vs 随机对照 +10pp; op 不变量 | ❌ **closed 2026-11-01 (诚实负结果)**: 机制建成 (proposal/仲裁/环境侧判定/反馈); 判据未过 (chosen 38.2% vs control 40.6%) + op 坍塌 (0.282/0.261) → 已回退; 双稳态调查结案 (任务混合无驱动, 自恢复); 详见 docs/stage24_design.md §8/§9 |
+| 25 | 语言进入行为回路 | 当前架构 | 指令->窗口采样/语义向量/到达奖金 + 同运行对照 | 到达时间 chosen ≥20% 快于 control; op ≥0.50 | 🔄 **进行中**: M-L1 通道上线 (op 稳定), 仪器 v2 (到达时间) + 世界放大 8×8m (M2-p3) 后复测中; 详见 docs/stage25_language_training_design.md |
+| 26 | 接地阅读 (社会继承) | 需新语言通道 (A 档) | 文本断言->经验验证->语义库->巩固进权重 | 验证精度 ≥0.95; 每段摄入; held-out 泛化 ≥0.7; 阅读组知识获取 ≥ 自经验 3× | 📋 **planned (设计报告就绪)**: docs/stage25_grounded_reading_design.md; 硬件增量 ~1-2GB 磁盘 + 0.3GB VRAM (home_64g 内) |
 
 ## North Star Gap Analysis / 北极星差距分析
 
