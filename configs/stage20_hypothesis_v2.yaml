@@ -59,6 +59,7 @@ env:
   num_siblings: 2
   season_cycle_steps: 500000
   num_objects: 8
+  object_spawn_half: 4.0            # M2-p3 (2026-11-04): 8x8m arena (3.0 failed the spread criterion: median 1.91m)
   max_episode_steps: 600
   render_size: 128
   action_force: 50.0

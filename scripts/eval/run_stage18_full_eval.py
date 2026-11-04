@@ -311,6 +311,7 @@ def main():
             # this vector describes. Train/eval observation shapes must match
             # or the resumed policy sees a different input dim.
             occluder_obs_slots=int(cfg["env"].get("occluder_obs_slots", 0)),
+            object_spawn_half=float(cfg["env"].get("object_spawn_half", 1.8)),
             # Stage 21: arrival_reveal forwarded to ALL probes (not just
             # cross) — the far probe must use the same event semantics as
             # training (events persist until the agent arrives/deadline),

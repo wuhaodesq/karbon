@@ -477,6 +477,7 @@ class ThreeDWorld:
         occluder_obs_slots: int = 0,  # Stage 20e: 遮挡记忆槽注入观测 (0=off, 容量<=3)
         occluder_teacher_force: float = 0.0,  # Stage 20h: BC 教学接管率 (0=off, 1=每步接管)
         focus_op_only: bool = False,  # Stage 20b: 课程固化 - 封闭其他目标, 专训 op
+        object_spawn_half: float = 1.8,  # M2-p3 (2026-11-04): object spawn box half-extent (m)
     ) -> None:
         if not _mj_available:
             raise ImportError("mujoco is required for ThreeDWorld. Run: pip install mujoco")
@@ -497,6 +498,7 @@ class ThreeDWorld:
         self._occluder_reveal_bonus = float(occluder_reveal_bonus)
         self._occluder_reveal_ratio = float(occluder_reveal_ratio)
         self._occluder_reach_reward = float(occluder_reach_reward)
+        self._object_spawn_half = float(object_spawn_half)
         self._occluder_reach_radius = float(occluder_reach_radius)
         self._occluder_reward_radius = float(occluder_reward_radius) \
             if occluder_reward_radius > 0.0 else float(occluder_reach_radius)
@@ -1215,9 +1217,10 @@ class ThreeDWorld:
         for i in range(min(self._num_objects, len(self._object_lib))):
             obj = self._object_lib[i]
             for _ in range(20):
+                _h = float(getattr(self, "_object_spawn_half", 1.8))
                 pos = (
-                    self._rng.uniform(-1.8, 1.8),
-                    self._rng.uniform(-1.8, 1.8),
+                    self._rng.uniform(-_h, _h),
+                    self._rng.uniform(-_h, _h),
                     self._rng.uniform(0.08, 1.2),
                 )
                 # Avoid overlap
