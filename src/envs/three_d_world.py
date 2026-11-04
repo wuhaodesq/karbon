@@ -965,6 +965,7 @@ class ThreeDWorld:
         # Physics step
         mujoco.mj_step(self._model, self._data)
         self._bounded_object_velocities()
+        self._bound_learner()
 
         # Sync held object position (virtual grasp)
         if self._held_obj_id is not None:
@@ -1920,6 +1921,29 @@ class ThreeDWorld:
             _expose_exc("_sync_held_object")
 
     # ------------------------------------------------------------------ chain tasks
+
+    def _bound_learner(self) -> None:
+        """M2-p3 (2026-11-04): keep the learner inside the arena.
+
+        The velocity-controlled agent has no intrinsic position bounds; in
+        the enlarged arena it can accelerate away indefinitely (observed:
+        instruction target distances 85-134 m). Clamp the learner's x/y
+        joints to the arena (+0.5 m margin) and zero the out-of-bound
+        velocity component. Physical-world 'walls' metaphor; the probe
+        contract (obs/proprio) is unchanged.
+        """
+        try:
+            lim = float(getattr(self, "_object_spawn_half", 1.8)) + 0.5
+            for axis in ("x", "y"):
+                jid = self._model.joint(f"learner_{axis}").id
+                adr = self._model.jnt_qposadr[jid]
+                p = float(self._data.qpos[adr])
+                if p > lim or p < -lim:
+                    self._data.qpos[adr] = max(-lim, min(lim, p))
+                    dadr = self._model.jnt_dofadr[jid]
+                    self._data.qvel[dadr] = 0.0
+        except Exception:
+            pass  # legit: learner may be absent during scaffold build
 
     def _bounded_object_velocities(self) -> None:
         """Clamp free-joint object velocity and recover from solver blow-ups.

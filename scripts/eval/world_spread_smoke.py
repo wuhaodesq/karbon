@@ -52,8 +52,30 @@ def main() -> None:
                     float(env._data.xpos[b.id, 1])))
     d = [float(np.hypot(a[0] - b[0], a[1] - b[1]))
          for a, b in itertools.combinations(pos, 2)]
+    # M2-p3 fix check: random-walk 300 steps and verify the learner stays
+    # inside the arena (no boundary drift; observed 2026-11-04).
+    lim = float(args.spawn_half) + 0.5
+    max_abs = 0.0
+    rng = np.random.RandomState(11)
+    lb = env._model.body("learner")
+    for _ in range(300):
+        env.step(int(rng.randint(0, 8)))
+        max_abs = max(max_abs, abs(float(env._data.xpos[lb.id, 0])),
+                      abs(float(env._data.xpos[lb.id, 1])))
+    # directed drift test: hold +x (action 3) for 400 steps; the clamp must
+    # stop the learner at the arena bound (the real failure mode observed).
+    env.reset(seed=13)
+    lb = env._model.body("learner")
+    dir_max = 0.0
+    for _ in range(400):
+        env.step(3)
+        dir_max = max(dir_max, abs(float(env._data.xpos[lb.id, 0])))
     res = {
         "spawn_half": float(args.spawn_half),
+        "learner_max_abs_xy": round(max_abs, 3),
+        "learner_bound_ok": bool(max_abs <= lim + 0.2),
+        "directed_drift_max": round(dir_max, 3),
+        "directed_bound_ok": bool(dir_max <= lim + 0.2),
         "obs_shape": list(env.observation_shape),
         "proprio_dim": int(env.proprio_dim),
         "num_actions": int(env.action_space_n),
