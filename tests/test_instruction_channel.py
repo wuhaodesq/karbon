@@ -41,6 +41,9 @@ def test_sampling_resolvable_and_control():
     assert chosen.kind in KINDS and chosen.color in COLORS
     assert cid in (0, 1, 2, 3)
     assert ctrl_id in (0, 1, 2, 3)
+    # M-L1c: the control must be a DIFFERENT present object (a same-target
+    # fallback made every pair a tie and collapsed the win rate to ~0.08).
+    assert ctrl_id != cid
 
 
 def test_sampling_empty_returns_none():

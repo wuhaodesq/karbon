@@ -142,13 +142,22 @@ class InstructionChannel:
         keys = sorted(pairs)
         ck, cc = keys[self._rng.randrange(len(keys))]
         ch_id = pairs[(ck, cc)][self._rng.randrange(len(pairs[(ck, cc)]))]
-        # control: uniform over ALL (kind, color) pairs, not just present ones
-        # (a random instruction the agent was never asked to follow).
-        rk = KINDS[self._rng.randrange(len(KINDS))]
-        rc = COLORS[self._rng.randrange(len(COLORS))]
-        cands = pairs.get((rk, rc), [])
-        ctrl_id = (cands[self._rng.randrange(len(cands))] if cands
-                   else ch_id)  # unresolvable control falls back to a real id
+        # M-L1c (2026-11-05): the control must be a DIFFERENT PRESENT object.
+        # Sampling the full kind x color space mostly yields ABSENT pairs,
+        # which fell back to the chosen id -> the two arms tracked the same
+        # target and tied (win_rate collapsed to ~0.08; found in the logs).
+        others = [int(o["id"]) for o in objects
+                  if int(o["id"]) != ch_id and str(o.get("kind", "")) in KINDS
+                  and str(o.get("color", "")) in COLORS]
+        if others:
+            ctrl_id = others[self._rng.randrange(len(others))]
+            rk = str(next(o["kind"] for o in objects
+                          if int(o["id"]) == ctrl_id))
+            rc = str(next(o["color"] for o in objects
+                          if int(o["id"]) == ctrl_id))
+        else:
+            ctrl_id = ch_id
+            rk, rc = ck, cc
         tpl = TEMPLATES[self._rng.randrange(len(TEMPLATES))]
         if "{color}" not in tpl:
             chosen = Instruction(ck, cc, f"go to the {ck}")
