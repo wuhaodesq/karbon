@@ -143,3 +143,24 @@ def test_control_first_pays_nothing():
         ch.step(s, 0.4, 0.4)
     assert ch.telemetry()["win_rate"] == 0.0
 
+
+
+
+def test_shaping_caps_and_reset():
+    ch = InstructionChannel(seed=8, window_steps=100, reach_radius=0.5,
+                            bonus=3.0)
+    ch.start(_objects(), 0)
+    assert ch.shaping(3.0, gain=0.5, per_step_cap=0.02) == 0.0  # first read
+    r = ch.shaping(2.0, gain=0.5, per_step_cap=0.02)  # progress 1.0
+    assert abs(r - 0.02) < 1e-9  # per-step cap
+    # total cap: simulate many steps
+    total = r
+    d = 2.0
+    for _ in range(1000):
+        d -= 0.5
+        total += ch.shaping(d, gain=0.5, per_step_cap=0.02, total_cap=0.05)
+    assert abs(total - 0.05) < 1e-9
+    # a new window resets the accumulator
+    ch.start(_objects(), 200)
+    assert ch.shaping(1.0, gain=0.5, per_step_cap=0.02) == 0.0
+

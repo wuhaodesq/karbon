@@ -155,6 +155,10 @@ advanced:
   instruction_window_steps: 400
   instruction_bonus: 3.0
   instruction_reach_radius: 0.5   # instrument v2: 0.8 hit a ceiling
+  # M-L1d (2026-11-05): bounded dense shaping toward the named target
+  instruction_shaping_gain: 0.5
+  instruction_shaping_cap: 0.02
+  instruction_shaping_total: 8.0
   concept_bridge_enabled: true
   concept_bridge_max_instances: 256
 

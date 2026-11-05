@@ -112,6 +112,8 @@ class InstructionChannel:
         self._n_windows = 0
         self._arrived_chosen = 0
         self._arrived_control = 0
+        self._prev_d: float | None = None
+        self._shaping_total = 0.0
         # bounded arrival-time buffers (instrument v2: time-to-arrival is the
         # primary metric; the 0.8 m arrival rate hit a ceiling - both arms
         # ~95% by ambient proximity, an instrument flaw, B16 family).
@@ -183,6 +185,8 @@ class InstructionChannel:
         self._pair_recorded = False
         self._chosen_t: int | None = None
         self._control_t: int | None = None
+        self._prev_d: float | None = None
+        self._shaping_total = 0.0
         self._n_windows += 1
         return True
 
@@ -254,6 +258,26 @@ class InstructionChannel:
         return {"bonus": bonus, "chosen_arrived": chosen_arrived,
                 "control_arrived": control_arrived, "expired": False}
 
+    def shaping(self, dist: float, gain: float = 0.5,
+                per_step_cap: float = 0.02, total_cap: float = 8.0) -> float:
+        """M-L1d: bounded progress shaping toward the NAMED target.
+
+        Dense, causally tied to the instruction (only the named object is
+        shaped), B10-safe: per-step cap + per-window total cap; paid only
+        while a window is active. This mirrors the proven occluder-reach
+        shaping and breaks the sparse-bonus circularity.
+        """
+        if not self._active:
+            return 0.0
+        r = 0.0
+        if self._prev_d is not None:
+            progress = max(0.0, float(self._prev_d) - float(dist))
+            r = min(float(gain) * progress, float(per_step_cap))
+            r = min(r, max(0.0, float(total_cap) - self._shaping_total))
+        self._prev_d = float(dist)
+        self._shaping_total += r
+        return r
+
     # ----------------------------------------------------------- telemetry
     def telemetry(self) -> dict[str, Any]:
         def _mean(q) -> float | None:
@@ -274,6 +298,7 @@ class InstructionChannel:
                                      if p["t_ch"] < p["t_ctl"])
                                  / max(1, len(self._pairs)), 3)
                           if self._pairs else None),
+            "shaping_total": round(self._shaping_total, 3),
         }
 
     # --------------------------------------------------------------- state
@@ -295,6 +320,8 @@ class InstructionChannel:
             "got_start": bool(getattr(self, "_got_start", False)),
             "pairs": list(self._pairs),
             "pair_recorded": bool(getattr(self, "_pair_recorded", False)),
+            "prev_d": self._prev_d,
+            "shaping_total": self._shaping_total,
             "chosen_t": self._chosen_t,
             "control_t": self._control_t,
             "rng_state": self._rng.getstate(),
@@ -329,6 +356,8 @@ class InstructionChannel:
         for p in state.get("pairs", [])[-64:]:
             self._pairs.append(dict(p))
         self._pair_recorded = bool(state.get("pair_recorded", False))
+        self._prev_d = state.get("prev_d")
+        self._shaping_total = float(state.get("shaping_total", 0.0))
         self._chosen_t = state.get("chosen_t")
         self._control_t = state.get("control_t")
         rs = state.get("rng_state")

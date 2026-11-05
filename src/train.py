@@ -3536,6 +3536,18 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     _iret = instruction_channel.step(state.step, _d_ch, _d_ctl)
                     if _iret.get("bonus"):
                         total_r += float(_iret["bonus"])
+                    # M-L1d: bounded dense shaping toward the named target.
+                    if instruction_channel.active and _d_ch < 9.0:
+                        _sh = instruction_channel.shaping(
+                            _d_ch,
+                            gain=float(_adv_goal_cfg.get(
+                                "instruction_shaping_gain", 0.5)),
+                            per_step_cap=float(_adv_goal_cfg.get(
+                                "instruction_shaping_cap", 0.02)),
+                            total_cap=float(_adv_goal_cfg.get(
+                                "instruction_shaping_total", 8.0)))
+                        if _sh > 0.0:
+                            total_r += float(_sh)
                     if state.step % 5000 == 0:
                         _itelem = instruction_channel.telemetry()
                         try:
