@@ -171,6 +171,7 @@ class InstructionChannel:
         self._paid = False
         self._ctrl_counted = False
         self._got_start = False
+        self._pair_recorded = False
         self._chosen_t: int | None = None
         self._control_t: int | None = None
         self._n_windows += 1
@@ -202,15 +203,6 @@ class InstructionChannel:
         self._step = int(step)
         if self.expired:
             self._active = False
-            if self._chosen_t is not None and self._control_t is not None:
-                self._pairs.append({
-                    "t_ch": int(self._chosen_t),
-                    "t_ctl": int(self._control_t),
-                    "d0_ch": (float(self._start_d_chosen[-1])
-                               if self._start_d_chosen else -1.0),
-                    "d0_ctl": (float(self._start_d_control[-1])
-                                if self._start_d_control else -1.0),
-                })
         if not self._active:
             return {"bonus": 0.0, "chosen_arrived": False,
                     "control_arrived": False, "expired": True}
@@ -237,6 +229,19 @@ class InstructionChannel:
             self._control_t = int(step) - int(self._start)
             self._arrived_control += 1
             self._time_control.append(self._control_t)
+        # M-L1b throughput: record the pair as soon as BOTH arms have
+        # arrived (previously only at window expiry -> ~0.5 pairs/min).
+        if (self._chosen_t is not None and self._control_t is not None
+                and not getattr(self, "_pair_recorded", False)):
+            self._pairs.append({
+                "t_ch": int(self._chosen_t),
+                "t_ctl": int(self._control_t),
+                "d0_ch": (float(self._start_d_chosen[-1])
+                           if self._start_d_chosen else -1.0),
+                "d0_ctl": (float(self._start_d_control[-1])
+                            if self._start_d_control else -1.0),
+            })
+            self._pair_recorded = True
         return {"bonus": bonus, "chosen_arrived": chosen_arrived,
                 "control_arrived": control_arrived, "expired": False}
 
@@ -280,6 +285,7 @@ class InstructionChannel:
             "start_d_control": list(self._start_d_control),
             "got_start": bool(getattr(self, "_got_start", False)),
             "pairs": list(self._pairs),
+            "pair_recorded": bool(getattr(self, "_pair_recorded", False)),
             "chosen_t": self._chosen_t,
             "control_t": self._control_t,
             "rng_state": self._rng.getstate(),
@@ -313,6 +319,7 @@ class InstructionChannel:
         self._pairs.clear()
         for p in state.get("pairs", [])[-64:]:
             self._pairs.append(dict(p))
+        self._pair_recorded = bool(state.get("pair_recorded", False))
         self._chosen_t = state.get("chosen_t")
         self._control_t = state.get("control_t")
         rs = state.get("rng_state")
