@@ -117,6 +117,10 @@ class InstructionChannel:
         # ~95% by ambient proximity, an instrument flaw, B16 family).
         self._time_chosen: deque[int] = deque(maxlen=64)
         self._time_control: deque[int] = deque(maxlen=64)
+        # M-L1b: PAIRED per-window outcomes (both arms start from the same
+        # agent position at the same moment, so the paired comparison is
+        # d0-controlled; raw time is dominated by start distance).
+        self._pairs: deque[dict] = deque(maxlen=64)
         self._start_d_chosen: deque[float] = deque(maxlen=64)
         self._start_d_control: deque[float] = deque(maxlen=64)
 
@@ -167,6 +171,8 @@ class InstructionChannel:
         self._paid = False
         self._ctrl_counted = False
         self._got_start = False
+        self._chosen_t: int | None = None
+        self._control_t: int | None = None
         self._n_windows += 1
         return True
 
@@ -196,6 +202,15 @@ class InstructionChannel:
         self._step = int(step)
         if self.expired:
             self._active = False
+            if self._chosen_t is not None and self._control_t is not None:
+                self._pairs.append({
+                    "t_ch": int(self._chosen_t),
+                    "t_ctl": int(self._control_t),
+                    "d0_ch": (float(self._start_d_chosen[-1])
+                               if self._start_d_chosen else -1.0),
+                    "d0_ctl": (float(self._start_d_control[-1])
+                                if self._start_d_control else -1.0),
+                })
         if not self._active:
             return {"bonus": 0.0, "chosen_arrived": False,
                     "control_arrived": False, "expired": True}
@@ -206,18 +221,22 @@ class InstructionChannel:
         chosen_arrived = float(chosen_dist) <= self._radius
         control_arrived = float(control_dist) <= self._radius
         bonus = 0.0
-        if chosen_arrived:
-            if not self._awarded:
-                self._awarded = True
-                self._arrived_chosen += 1
-                self._time_chosen.append(int(step) - int(self._start))
-            if not self._paid:
+        if chosen_arrived and self._chosen_t is None:
+            self._chosen_t = int(step) - int(self._start)
+            self._arrived_chosen += 1
+            self._time_chosen.append(self._chosen_t)
+            self._awarded = True
+            # M-L1b: pay only if the CHOSEN target was reached BEFORE the
+            # arbitrary control target (paired-first rule; the control may
+            # not have arrived yet, which still counts as chosen-first).
+            if not self._paid and not self._ctrl_counted:
                 bonus = self._bonus
                 self._paid = True
         if control_arrived and not self._ctrl_counted:
-            self._arrived_control += 1
             self._ctrl_counted = True
-            self._time_control.append(int(step) - int(self._start))
+            self._control_t = int(step) - int(self._start)
+            self._arrived_control += 1
+            self._time_control.append(self._control_t)
         return {"bonus": bonus, "chosen_arrived": chosen_arrived,
                 "control_arrived": control_arrived, "expired": False}
 
@@ -236,6 +255,11 @@ class InstructionChannel:
             "d0_chosen": _mean(self._start_d_chosen),
             "d0_control": _mean(self._start_d_control),
             "bonus_paid": bool(getattr(self, "_paid", False)),
+            "pairs": len(self._pairs),
+            "win_rate": (round(sum(1 for p in self._pairs
+                                     if p["t_ch"] < p["t_ctl"])
+                                 / max(1, len(self._pairs)), 3)
+                          if self._pairs else None),
         }
 
     # --------------------------------------------------------------- state
@@ -255,6 +279,9 @@ class InstructionChannel:
             "start_d_chosen": list(self._start_d_chosen),
             "start_d_control": list(self._start_d_control),
             "got_start": bool(getattr(self, "_got_start", False)),
+            "pairs": list(self._pairs),
+            "chosen_t": self._chosen_t,
+            "control_t": self._control_t,
             "rng_state": self._rng.getstate(),
         }
 
@@ -283,6 +310,11 @@ class InstructionChannel:
         self._start_d_control.clear()
         self._start_d_control.extend(float(x) for x in state.get("start_d_control", [])[-64:])
         self._got_start = bool(state.get("got_start", False))
+        self._pairs.clear()
+        for p in state.get("pairs", [])[-64:]:
+            self._pairs.append(dict(p))
+        self._chosen_t = state.get("chosen_t")
+        self._control_t = state.get("control_t")
         rs = state.get("rng_state")
         if rs is not None:
             try:

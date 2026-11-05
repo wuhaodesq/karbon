@@ -3537,8 +3537,15 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     if _iret.get("bonus"):
                         total_r += float(_iret["bonus"])
                     if state.step % 5000 == 0:
-                        logger.info("[instr] step=%d %s", state.step,
-                                    instruction_channel.telemetry())
+                        _itelem = instruction_channel.telemetry()
+                        try:
+                            _igp = getattr(model, "goal_proj", None)
+                            _itelem["proj_norm"] = (
+                                round(float(_igp.weight.detach().norm()), 5)
+                                if _igp is not None else 0.0)
+                        except Exception:  # noqa: BLE001 - telemetry only
+                            pass
+                        logger.info("[instr] step=%d %s", state.step, _itelem)
                 except Exception as _ie:  # noqa: BLE001 - defensive wiring
                     logger.warning("[instr] error: %s", _ie)
 

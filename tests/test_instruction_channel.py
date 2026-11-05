@@ -109,3 +109,34 @@ def test_tighter_radius_blocks_ambient_arrival():
     r = ch.step(1, chosen_dist=0.7, control_dist=0.7)  # inside old 0.8, not 0.5
     assert r["chosen_arrived"] is False and r["bonus"] == 0.0
 
+
+
+
+def test_paired_first_bonus_and_win_rate():
+    ch = InstructionChannel(seed=6, window_steps=20, reach_radius=0.5,
+                            bonus=3.0)
+    ch.start(_objects(), 0)
+    ch.step(1, chosen_dist=0.4, control_dist=2.0)   # chosen first -> bonus
+    ch.step(2, chosen_dist=0.4, control_dist=0.4)   # control arrives later
+    t = ch.telemetry()
+    assert t["arrived_chosen"] == 1 and t["arrived_control"] == 1
+    # window ends -> pair recorded, then the win rate is available
+    for st in range(3, 22):
+        ch.step(st, 0.4, 0.4)
+    t2 = ch.telemetry()
+    assert t2["pairs"] == 1
+    assert t2["win_rate"] == 1.0
+
+
+def test_control_first_pays_nothing():
+    ch = InstructionChannel(seed=7, window_steps=20, reach_radius=0.5,
+                            bonus=3.0)
+    ch.start(_objects(), 0)
+    r1 = ch.step(1, chosen_dist=2.0, control_dist=0.4)  # control first
+    assert r1["bonus"] == 0.0
+    r2 = ch.step(2, chosen_dist=0.4, control_dist=0.4)  # chosen later
+    assert r2["bonus"] == 0.0  # paired-first rule: control already arrived
+    for s in range(3, 22):
+        ch.step(s, 0.4, 0.4)
+    assert ch.telemetry()["win_rate"] == 0.0
+
