@@ -15,6 +15,7 @@ from .visual_analyzer import VisualAnalyzer
 from .hierarchical_policy import HierarchicalActorCritic, SubGoalHead, GoalConditionedActionHead
 from .goal_proposer import Goal, GoalProposer
 from .instruction_channel import InstructionChannel
+from .assertion_verifier import SceneFacts, SceneObject, verify as verify_assertion
 
 __all__ = [
     "BackendName",
@@ -24,6 +25,9 @@ __all__ = [
     "Goal",
     "GoalProposer",
     "InstructionChannel",
+    "SceneFacts",
+    "SceneObject",
+    "verify_assertion",
     "VisualAnalyzer",
     "FFN",
     "HybridBackbone",
