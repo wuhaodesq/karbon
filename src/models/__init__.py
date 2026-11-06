@@ -16,6 +16,7 @@ from .hierarchical_policy import HierarchicalActorCritic, SubGoalHead, GoalCondi
 from .goal_proposer import Goal, GoalProposer
 from .instruction_channel import InstructionChannel
 from .assertion_verifier import SceneFacts, SceneObject, verify as verify_assertion
+from .grounded_facts import AssertionGenerator, GroundedFactStore, ingest_scene
 
 __all__ = [
     "BackendName",
@@ -28,6 +29,9 @@ __all__ = [
     "SceneFacts",
     "SceneObject",
     "verify_assertion",
+    "AssertionGenerator",
+    "GroundedFactStore",
+    "ingest_scene",
     "VisualAnalyzer",
     "FFN",
     "HybridBackbone",

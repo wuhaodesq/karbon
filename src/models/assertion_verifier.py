@@ -56,8 +56,14 @@ class SceneFacts:
     def from_env(cls, env) -> "SceneFacts":
         objs = [SceneObject.from_env(i, o) for i, o in enumerate(env.objects)]
         try:
-            occ = frozenset(int(oid) for oid, _x, _y
-                            in env.get_occlusion_signal().get("active", []))
+            # Read the raw map (NO side effects): env.get_occlusion_signal()
+            # clears the just_occluded/just_revealed queues, which the
+            # hypothesis tester consumes — an ingest call must never steal
+            # those one-step signals.
+            occ = frozenset(
+                int(str(k).split("_")[-1])
+                for k, v in getattr(env, "_active_occlusions_3d", {}).items()
+                if v.get("truly_occluded", False))
         except Exception:  # noqa: BLE001 - facts fallback
             occ = frozenset()
         return cls(objects=objs, occluded_ids=occ)

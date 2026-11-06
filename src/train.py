@@ -96,6 +96,9 @@ from src.models.theory_of_mind import TheoryOfMind
 from src.models.homeostatic_drives import HomeostaticDrives
 from src.models.goal_proposer import GoalProposer, GoalSession
 from src.models.instruction_channel import InstructionChannel, build_vector, color_name
+from src.models.assertion_verifier import SceneFacts
+from src.models.grounded_facts import (
+    AssertionGenerator, GroundedFactStore, ingest_scene)
 from src.models.long_range_planner import LongRangePlanner
 from src.models.emotion_system import EmotionSystem
 from src.models.concept_graph import ConceptGraph
@@ -2147,6 +2150,17 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # --- Stage 24 M2: autonomous goal session (proposals + env-side judging) ---
     _adv_goal_cfg = config.get("advanced", {}) or {}
     goal_session: GoalSession | None = None
+    # Stage 26 R2: grounded facts (verified assertions -> semantic store).
+    grounded_facts: GroundedFactStore | None = None
+    _facts_gen: AssertionGenerator | None = None
+    _facts_every = max(500, int(_adv_goal_cfg.get("grounded_ingest_every", 5000)))
+    if bool(_adv_goal_cfg.get("grounded_facts_enabled", False)):
+        grounded_facts = GroundedFactStore(
+            capacity=int(_adv_goal_cfg.get("grounded_facts_capacity", 100000)))
+        _facts_gen = AssertionGenerator(
+            seed=int(_adv_goal_cfg.get("goal_proposer_seed", 0)) + 3)
+        logger.info("GroundedFacts enabled (capacity=%d, ingest every %d steps)",
+                    grounded_facts.capacity, _facts_every)
     # Stage 25 M-L1: instruction channel (language in the action loop).
     instruction_channel: InstructionChannel | None = None
     if bool(_adv_goal_cfg.get("instruction_channel_enabled", False)):
@@ -2469,6 +2483,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             ("knowledge_ledger_state",   knowledge_ledger,             None),
             ("goal_session_state",        goal_session,                 None),
             ("instruction_channel_state", instruction_channel,          None),
+            ("grounded_facts_state",      grounded_facts,               None),
             # 2026-09-22: probe_net is now trained (probe-outcome learning);
             # persist its weights + update counter across restarts.
             ("hypothesis_tester_state",  hypothesis_tester,            None),
@@ -3560,6 +3575,20 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         logger.info("[instr] step=%d %s", state.step, _itelem)
                 except Exception as _ie:  # noqa: BLE001 - defensive wiring
                     logger.warning("[instr] error: %s", _ie)
+
+            # --- Stage 26 R2: grounded fact ingestion (CPU-only, safe) ---
+            if (grounded_facts is not None and _facts_gen is not None
+                    and n_envs == 1 and state.step % _facts_every == 0):
+                try:
+                    _sfacts = SceneFacts.from_env(env)
+                    _fstats = ingest_scene(grounded_facts, _sfacts, _facts_gen,
+                                           state.step, n=24)
+                    if state.step % 25000 == 0:
+                        _ftelem = grounded_facts.telemetry()
+                        _ftelem["last_batch"] = _fstats
+                        logger.info("[facts] step=%d %s", state.step, _ftelem)
+                except Exception as _fe:  # noqa: BLE001 - defensive wiring
+                    logger.warning("[facts] ingest error: %s", _fe)
 
             # --- Emotion system: update from experience ---
             if emotion_system is not None and n_envs == 1:
@@ -5597,6 +5626,8 @@ and state.step % 50000 < rollout_capacity):
             if instruction_channel is not None:
                 extra["instruction_channel_state"] = (
                     instruction_channel.state_dict())
+            if grounded_facts is not None:
+                extra["grounded_facts_state"] = grounded_facts.state_dict()
             if thought_action is not None:
                 # Stage 19-FiLM: persist the ThoughtActionLoop + its TinyTextEncoder
                 # (FiLM projection learns from PPO; losing it on resume would

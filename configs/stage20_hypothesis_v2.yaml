@@ -159,6 +159,10 @@ advanced:
   instruction_shaping_gain: 0.5
   instruction_shaping_cap: 0.02
   instruction_shaping_total: 8.0
+  # Stage 26 R2: grounded facts (verified assertions -> semantic store)
+  grounded_facts_enabled: true
+  grounded_facts_capacity: 100000
+  grounded_ingest_every: 5000
   concept_bridge_enabled: true
   concept_bridge_max_instances: 256
 

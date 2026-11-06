@@ -64,9 +64,7 @@ def test_facts_from_env_contract():
 
     class _E:
         objects = [_O("box", (0.9, 0.1, 0.1)), _O("sphere", (0.1, 0.1, 0.9))]
-
-        def get_occlusion_signal(self):
-            return {"active": [(1, 0.0, 0.0)]}
+        _active_occlusions_3d = {"occ_1": {"truly_occluded": True}}
 
     f = SceneFacts.from_env(_E())
     assert len(f.objects) == 2
