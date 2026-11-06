@@ -172,10 +172,17 @@ class AssertionGenerator:
             if r < 0.30 and kinds_present:
                 k = self._rng.choice(kinds_present)
                 c = sum(1 for o in objs if o.kind == k)
-                claim = c + (1 if self._rng.random() < 0.4 else -1)
-                claim = max(0, claim)
+                roll = self._rng.random()
+                # 50% TRUE (claim == c), else an off-by-one FALSE claim.
+                # (The first version always claimed c±1 -> every count
+                # assertion was false; the accepted rate collapsed to 26%.)
+                if roll < 0.5:
+                    claim = c
+                else:
+                    claim = max(0, c + (1 if roll < 0.75 else -1))
                 word = NUM_WORDS.get(claim, str(claim))
-                out.append(f"there are {word} {self._plural(k)}")
+                noun = self._plural(k) if claim != 1 else k
+                out.append(f"there are {word} {noun}")
             elif r < 0.55 and kinds_present and colours_present:
                 k = self._rng.choice(kinds_present)
                 c = self._rng.choice(colours_present)

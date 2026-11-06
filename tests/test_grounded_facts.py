@@ -77,3 +77,12 @@ def test_ingest_scene_counts_match_verdicts():
     assert sum(stats.values()) == 40
     t = st.telemetry()
     assert t["accepted_total"] + t["rejected_total"] + t["unverifiable_total"] == 40
+
+
+def test_generator_true_rate_reasonable():
+    g = AssertionGenerator(seed=11)
+    f = _facts(occluded=[1])
+    verdicts = [verify(x, f)['status'] for x in g.generate(f, n=200)]
+    true_rate = verdicts.count('true') / 200
+    assert 0.30 <= true_rate <= 0.70, true_rate
+    assert 'false' in verdicts and 'unverifiable' in verdicts
