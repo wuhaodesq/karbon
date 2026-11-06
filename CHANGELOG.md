@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+### Stage 25 M-L1 终局: 诚实负结果, 通道关闭 (2026-11-06) 🚪
+
+- M-L1d (稠密塑形) 两段 win_rate 0.531/0.578 → 0.469 (均值 ≈0.52 < 0.55
+  终止线) → 按预注册终止; instruction_channel_enabled: false。
+- 设计级结论: 结构化语义向量 + 有界塑形在本架构下不能教会稳定的
+  指令跟随 (机会线附近振荡); 通道安全 (op 0.62-0.80 无坍塌) 但无收益。
+- 四轮仪器修复链入档 (到达率天花板/时间被 d0 主导/对照臂平局/
+  稀疏奖金循环); 代码与配对测量保留离线复用。
+- 接口层语言 (L-out 1.0/0.0; L-in 0.94/1.0-memory) 结论不受影响。
+
+
 ### Stage 26 立项: 接地阅读 (社会继承) (2026-11-04) 📖
 
 - **设计**: docs/stage25_grounded_reading_design.md — 文本断言必须先经
