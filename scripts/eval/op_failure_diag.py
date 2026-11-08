@@ -78,7 +78,11 @@ def analyze_event(ev: dict) -> dict | None:
 
 
 def _make_env(cfg: dict, num_objects: int, action_force: float, max_steps: int,
-              env_type: str = "threed") -> ThreeDWorld:
+              env_type: str = "threed",
+              num_sense_radius: float | None = None,
+              learner_spawn_radius: float = 0.0) -> ThreeDWorld:
+    _nsr = float(cfg["env"].get("num_sense_radius", 3.0)
+                 if num_sense_radius is None else num_sense_radius)
     if env_type == "extended":
         # Stage 23 M2-p2: measure in the expanded world (4 rooms + siblings).
         from src.envs.extended_3d_world import ExtendedThreeDWorld
@@ -98,6 +102,8 @@ def _make_env(cfg: dict, num_objects: int, action_force: float, max_steps: int,
             object_crossing_hold_steps=int(cfg["env"].get("object_crossing_hold_steps", 0)),
             object_crossing_fixed_object=int(cfg["env"].get("object_crossing_fixed_object", -1)),
             object_crossing_fixed_wall=int(cfg["env"].get("object_crossing_fixed_wall", -1)),
+            num_sense_radius=_nsr,
+            learner_spawn_radius=float(learner_spawn_radius),
         )
         env._auto_reset = False
         return env
@@ -110,6 +116,8 @@ def _make_env(cfg: dict, num_objects: int, action_force: float, max_steps: int,
         num_occluders=int(cfg["env"].get("num_occluders", 0)),
         occluder_obs_slots=int(cfg["env"].get("occluder_obs_slots", 0)),
         occluder_arrival_reveal=bool(cfg["env"].get("occluder_arrival_reveal", False)),
+        num_sense_radius=_nsr,
+        learner_spawn_radius=float(learner_spawn_radius),
     )
     env._auto_reset = False
     return env
@@ -130,7 +138,9 @@ def _run_one_ckpt(ckpt_path: str, cfg: dict, args, device) -> dict:
         tag = str(spec.get("tag", tid))
         env = _make_env(cfg, int(spec["num_objects"]),
                         float(spec.get("action_force", 50.0)), args.max_steps,
-                        env_type=getattr(args, "env_type", "threed"))
+                        env_type=getattr(args, "env_type", "threed"),
+                        learner_spawn_radius=float(getattr(
+                            args, "op_spawn_radius", 0.0)))
         if model is None:
             model = _s18e.build_model(
                 env.observation_shape, env.action_space_n, cfg["model"], device,
@@ -140,6 +150,12 @@ def _run_one_ckpt(ckpt_path: str, cfg: dict, args, device) -> dict:
         rng = np.random.RandomState(args.seed + tid)
         evs_all: list[dict] = []
         zero_eps = 0
+        # R2a exposure metric: radial position statistics (how often the
+        # agent is in the occlusion-active wall band, separate from the
+        # capability pass rate).
+        _rad_sum = 0.0
+        _rad_n = 0
+        _wall_steps = 0
         for _ep in range(args.episodes):
             obs = env.reset(seed=int(rng.randint(0, 2**31 - 1)))
             try:
@@ -162,12 +178,25 @@ def _run_one_ckpt(ckpt_path: str, cfg: dict, args, device) -> dict:
                 obs = step_out.obs
                 done = bool(step_out.terminated) or bool(step_out.truncated)
                 step_i += 1
+                try:
+                    _lb = env._model.body("learner")
+                    _rx = float(env._data.xpos[_lb.id, 0])
+                    _ry = float(env._data.xpos[_lb.id, 1])
+                    _rr = (_rx * _rx + _ry * _ry) ** 0.5
+                    _rad_sum += _rr
+                    _rad_n += 1
+                    if 0.4 <= _rr <= 1.8:
+                        _wall_steps += 1
+                except Exception:
+                    pass
             eps_events = [e for e in (analyze_event(ev) for ev in list(env._occlusion_events)) if e]
             if not eps_events:
                 zero_eps += 1
             evs_all.extend(eps_events)
         n = len(evs_all)
         pass_rate = sum(1 for e in evs_all if e["pass"]) / max(1, n)
+        _wall_frac = round(_wall_steps / max(1, _rad_n), 3)
+        _mean_rad = round(_rad_sum / max(1, _rad_n), 3)
         results[str(tid)] = {
             "tag": tag,
             "num_objects": int(spec["num_objects"]),
@@ -179,6 +208,8 @@ def _run_one_ckpt(ckpt_path: str, cfg: dict, args, device) -> dict:
             "buckets": {b: sum(1 for e in evs_all if e["bucket"] == b)
                         for b in ("pass", "no_move", "weak", "close")},
             "events": evs_all,
+            "exposure_wall_frac": _wall_frac,
+            "mean_radius": _mean_rad,
         }
         print(f"[diag] {step} task {tid} ({tag}): events={n} zero_eps={zero_eps} "
               f"pass={pass_rate:.3f} buckets={results[str(tid)]['buckets']}", flush=True)
@@ -186,8 +217,13 @@ def _run_one_ckpt(ckpt_path: str, cfg: dict, args, device) -> dict:
 
     overall = [e for r in results.values() for e in r["events"]]
     n = len(overall)
+    _wf = [r.get("exposure_wall_frac", 0.0) for r in results.values()]
+    _mr = [r.get("mean_radius", 0.0) for r in results.values()]
     summary = {
         "n_events": n,
+        "exposure_wall_frac": round(float(sum(_wf) / max(1, len(_wf))), 3),
+        "mean_radius": round(float(sum(_mr) / max(1, len(_mr))), 3),
+        "op_spawn_radius": float(getattr(args, "op_spawn_radius", 0.0)),
         "pass_rate": round(sum(1 for e in overall if e["pass"]) / max(1, n), 3),
         "buckets": {b: sum(1 for e in overall if e["bucket"] == b)
                     for b in ("pass", "no_move", "weak", "close")},
@@ -212,6 +248,9 @@ def main() -> None:
     ap.add_argument("--env-type", type=str, default="threed",
                     choices=["threed", "extended"],
                     help="eval world: threed (historical) or extended (M2-p2)")
+    ap.add_argument("--op-spawn-radius", type=float, default=0.0,
+                    help="R2a: spawn the learner on a ring r>0 (wall zone) "
+                         "for the capability test; 0 = historical protocol")
     args = ap.parse_args()
 
     device = get_device()

@@ -824,6 +824,7 @@ def _threed_env_kwargs(spec: dict, env_cfg: dict) -> dict:
             "occluder_arrival_reveal", env_cfg.get("occluder_arrival_reveal", False))),
         occluder_obs_slots=int(env_cfg.get("occluder_obs_slots", 0)),
         object_spawn_half=float(spec.get("object_spawn_half", env_cfg.get("object_spawn_half", 1.8))),
+        num_sense_radius=float(env_cfg.get("num_sense_radius", 3.0)),
         focus_op_only=bool(spec.get("focus_op_only", env_cfg.get("focus_op_only", False))),
         occluder_shaping_weight=float(spec.get(
             "occluder_shaping_weight", env_cfg.get("occluder_shaping_weight", 0.0))),
@@ -973,6 +974,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             object_crossing_fixed_wall=int(env_cfg.get("object_crossing_fixed_wall", -1)),
             occluder_obs_slots=int(env_cfg.get("occluder_obs_slots", 0)),
             object_spawn_half=float(env_cfg.get("object_spawn_half", 1.8)),
+            num_sense_radius=float(env_cfg.get("num_sense_radius", 3.0)),
             focus_op_only=bool(env_cfg.get("focus_op_only", False)),
             occluder_shaping_weight=float(env_cfg.get("occluder_shaping_weight", 0.0)),
             occluder_reveal_bonus=float(env_cfg.get("occluder_reveal_bonus", 0.0)),
@@ -1023,6 +1025,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             object_crossing_fixed_wall=int(env_cfg.get("object_crossing_fixed_wall", -1)),
             occluder_obs_slots=int(env_cfg.get("occluder_obs_slots", 0)),
             object_spawn_half=float(env_cfg.get("object_spawn_half", 1.8)),
+            num_sense_radius=float(env_cfg.get("num_sense_radius", 3.0)),
             focus_op_only=bool(env_cfg.get("focus_op_only", False)),
             occluder_shaping_weight=float(env_cfg.get("occluder_shaping_weight", 0.0)),
             occluder_reveal_bonus=float(env_cfg.get("occluder_reveal_bonus", 0.0)),

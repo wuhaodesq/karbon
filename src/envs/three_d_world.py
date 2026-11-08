@@ -478,6 +478,8 @@ class ThreeDWorld:
         occluder_teacher_force: float = 0.0,  # Stage 20h: BC 教学接管率 (0=off, 1=每步接管)
         focus_op_only: bool = False,  # Stage 20b: 课程固化 - 封闭其他目标, 专训 op
         object_spawn_half: float = 1.8,  # M2-p3 (2026-11-04): object spawn box half-extent (m)
+        num_sense_radius: float = 3.0,  # R2a (2026-11-08): perceptual horizon for the count trial
+        learner_spawn_radius: float = 0.0,  # op-eval: spawn on a ring r>0 (wall zone); 0=default box
     ) -> None:
         if not _mj_available:
             raise ImportError("mujoco is required for ThreeDWorld. Run: pip install mujoco")
@@ -499,6 +501,8 @@ class ThreeDWorld:
         self._occluder_reveal_ratio = float(occluder_reveal_ratio)
         self._occluder_reach_reward = float(occluder_reach_reward)
         self._object_spawn_half = float(object_spawn_half)
+        self._num_sense_radius = float(num_sense_radius)
+        self._learner_spawn_radius = float(learner_spawn_radius)
         self._occluder_reach_radius = float(occluder_reach_radius)
         self._occluder_reward_radius = float(occluder_reward_radius) \
             if occluder_reward_radius > 0.0 else float(occluder_reach_radius)
@@ -1120,14 +1124,18 @@ class ThreeDWorld:
                 learner_id = self._model.body("learner").id if self._model else None
                 ax = float(self._data.xpos[learner_id, 0]) if learner_id is not None else 0.0
                 ay = float(self._data.xpos[learner_id, 1]) if learner_id is not None else 0.0
-                # Count objects within 3.0 distance (wider 3D awareness)
+                # Count objects within the PERCEPTUAL HORIZON (R2a,
+                # 2026-11-08): the milestone's semantics is "how many
+                # objects are within the agent's sensory field", not a
+                # hardcoded 3 m (a room-sized constant from the small world).
+                _nsr = float(getattr(self, "_num_sense_radius", 3.0))
                 nearby = 0
                 for i in range(self._num_objects):
                     try:
                         body_id = self._model.body(f"obj_{i}").id
                         ox = float(self._data.xpos[body_id, 0])
                         oy = float(self._data.xpos[body_id, 1])
-                        if ((ax - ox)**2 + (ay - oy)**2) ** 0.5 < 3.0:
+                        if ((ax - ox)**2 + (ay - oy)**2) ** 0.5 < _nsr:
                             nearby += 1
                     except Exception:
                         continue  # legit: per-object loop, obj_ may be gone
@@ -1195,9 +1203,17 @@ class ThreeDWorld:
         agent_size = 0.12 + self._dev_age * 0.08  # 0.12 (infant) → 0.20 (child)
         self._agent_size = agent_size
 
+        _lsr = float(getattr(self, "_learner_spawn_radius", 0.0))
+        if _lsr > 0.0:
+            _ang = self._rng.uniform(0.0, 2.0 * np.pi)
+            _lpos = (_lsr * float(np.cos(_ang)), _lsr * float(np.sin(_ang)),
+                     agent_size)
+        else:
+            _lpos = (self._rng.uniform(-0.5, 0.5),
+                     self._rng.uniform(-0.5, 0.5), agent_size)
         builder.add_agent(
             name="learner",
-            position=(self._rng.uniform(-0.5, 0.5), self._rng.uniform(-0.5, 0.5), agent_size),
+            position=_lpos,
             size=agent_size,
             color=(0.0, 0.9, 0.4, 1.0),
             can_move=True,

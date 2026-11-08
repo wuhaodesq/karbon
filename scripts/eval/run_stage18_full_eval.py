@@ -285,6 +285,10 @@ def main():
                     choices=["threed", "extended"],
                     help="evaluation world: threed (historical) or extended "
                          "(Stage 23 M2-p2: 4 rooms + siblings + seasons)")
+    ap.add_argument("--op-spawn-radius", type=float, default=0.0,
+                    help="R2a: spawn the learner on a ring r>0 (occlusion-"
+                         "active wall zone) for the OP milestone trials; "
+                         "0 = historical protocol")
     args = ap.parse_args()
 
     device = get_device(None)
@@ -320,6 +324,8 @@ def main():
             # (measured: far stuck at 0.06-0.07 while training LOS arrival
             # rate is 0.75+).
             occluder_arrival_reveal=bool(cfg["env"].get("occluder_arrival_reveal", False)),
+            num_sense_radius=float(cfg["env"].get("num_sense_radius", 3.0)),
+            learner_spawn_radius=float(getattr(args, "op_spawn_radius", 0.0)),
         )
         if probe == "cross":
             # 20i C-probe: replay the training crossing curriculum (fixed
