@@ -4416,10 +4416,32 @@ and state.step % 50000 < rollout_capacity):
                     summary = env.summary()
                     current_ep = summary.get("episodes", 0)
                     if current_ep - num_sense_last_train >= num_sense_train_every:
-                        slot_batch = model.encoder(obs_t)
+                        # R3 (2026-11-09): the label must match what the
+                        # slots can represent - objects within the PERCEPTUAL
+                        # horizon, not the world total (the mismatch is why
+                        # the head eval read 0.0 for months). Same helper as
+                        # the eval (shared caliber).
+                        with torch.no_grad():
+                            slot_batch = model.encoder(obs_t)
+                        _nsr = float((config.get("env", {}) or {}).get(
+                            "num_sense_radius", 3.0))
+                        _cnt = 0
+                        try:
+                            _lb = env._model.body("learner")
+                            _lp = (float(env._data.xpos[_lb.id, 0]),
+                                   float(env._data.xpos[_lb.id, 1]))
+                            _pos = []
+                            for _oi in range(int(getattr(env, "_num_objects", 0))):
+                                _ob = env._model.body(f"obj_{_oi}")
+                                _pos.append((float(env._data.xpos[_ob.id, 0]),
+                                             float(env._data.xpos[_ob.id, 1])))
+                            from src.models.grounded_facts import count_within_radius
+                            _cnt = count_within_radius(_pos, _lp, _nsr)
+                        except Exception:  # noqa: BLE001 - label fallback
+                            _cnt = (len(env._objects)
+                                    if hasattr(env, "_objects") else 0)
                         true_count = torch.tensor(
-                            [min(len(env._objects), number_sense._max_count)
-                             if hasattr(env, '_objects') else 3],
+                            [min(_cnt, number_sense._max_count)],
                             dtype=torch.long, device=device)
                         n_loss = number_sense.loss(slot_batch, true_count)
                         num_sense_optimizer.zero_grad()

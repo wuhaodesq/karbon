@@ -228,7 +228,22 @@ def measure_number_sense(ns_state, model, env, device, model_cfg, num_sense_cfg,
             if slots is None:
                 continue
             est = int(ns.predict_count(slots).item())
-        true_count = len(env.objects)
+        # R3: same perceptual-horizon caliber as training (shared helper).
+        from src.models.grounded_facts import count_within_radius
+        _nsr = float(cfg["env"].get("num_sense_radius", 3.0)) \
+            if isinstance(cfg, dict) else 3.0
+        try:
+            _lb = env._model.body("learner")
+            _lp = (float(env._data.xpos[_lb.id, 0]),
+                   float(env._data.xpos[_lb.id, 1]))
+            _pos = []
+            for _oi in range(int(getattr(env, "_num_objects", 0))):
+                _ob = env._model.body(f"obj_{_oi}")
+                _pos.append((float(env._data.xpos[_ob.id, 0]),
+                             float(env._data.xpos[_ob.id, 1])))
+            true_count = count_within_radius(_pos, _lp, _nsr)
+        except Exception:  # noqa: BLE001 - truth fallback
+            true_count = len(env.objects)
         if est == true_count:
             correct += 1
         errs.append(abs(est - true_count))

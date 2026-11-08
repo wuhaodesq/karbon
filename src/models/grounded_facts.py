@@ -205,6 +205,23 @@ class AssertionGenerator:
         return out
 
 
+def count_within_radius(positions, agent_xy, radius: float) -> int:
+    """R3: cardinality within the perceptual horizon (shared caliber).
+
+    positions: iterable of (x, y); agent_xy: (x, y). Pure logic so the
+    training target and the eval target can never drift apart again.
+    """
+    ax, ay = float(agent_xy[0]), float(agent_xy[1])
+    r2 = float(radius) ** 2
+    n = 0
+    for px, py in positions:
+        dx = float(px) - ax
+        dy = float(py) - ay
+        if dx * dx + dy * dy <= r2:
+            n += 1
+    return n
+
+
 def ingest_scene(store: GroundedFactStore, facts: SceneFacts,
                  generator: AssertionGenerator, step: int,
                  n: int = 24) -> dict[str, int]:

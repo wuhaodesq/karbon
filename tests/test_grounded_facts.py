@@ -86,3 +86,13 @@ def test_generator_true_rate_reasonable():
     true_rate = verdicts.count('true') / 200
     assert 0.30 <= true_rate <= 0.70, true_rate
     assert 'false' in verdicts and 'unverifiable' in verdicts
+
+
+
+def test_count_within_radius():
+    from src.models.grounded_facts import count_within_radius
+    pos = [(0.0, 0.0), (1.0, 0.0), (3.9, 0.0), (4.1, 0.0), (0.0, -4.0)]
+    assert count_within_radius(pos, (0.0, 0.0), 4.0) == 4
+    assert count_within_radius(pos, (1.0, 0.0), 1.5) == 2
+    assert count_within_radius([], (0.0, 0.0), 4.0) == 0
+
