@@ -116,6 +116,7 @@ def _make_env(cfg: dict, num_objects: int, action_force: float, max_steps: int,
         num_occluders=int(cfg["env"].get("num_occluders", 0)),
         occluder_obs_slots=int(cfg["env"].get("occluder_obs_slots", 0)),
         occluder_arrival_reveal=bool(cfg["env"].get("occluder_arrival_reveal", False)),
+        object_spawn_half=float(cfg["env"].get("object_spawn_half", 1.8)),
         num_sense_radius=_nsr,
         learner_spawn_radius=float(learner_spawn_radius),
     )
