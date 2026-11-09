@@ -229,9 +229,10 @@ def measure_number_sense(ns_state, model, env, device, model_cfg, num_sense_cfg,
                 continue
             est = int(ns.predict_count(slots).item())
         # R3: same perceptual-horizon caliber as training (shared helper).
+        # The radius comes from the ENV (constructor-forwarded from cfg) -
+        # `cfg` is not in this function's scope (NameError crash 2026-11-09).
         from src.models.grounded_facts import count_within_radius
-        _nsr = float(cfg["env"].get("num_sense_radius", 3.0)) \
-            if isinstance(cfg, dict) else 3.0
+        _nsr = float(getattr(env, "_num_sense_radius", 3.0))
         try:
             _lb = env._model.body("learner")
             _lp = (float(env._data.xpos[_lb.id, 0]),
