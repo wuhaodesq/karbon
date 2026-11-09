@@ -551,6 +551,22 @@ def main():
                   f"age={info['estimated_age']:.1f}y "
                   + " ".join(f"{k}={v:.2f}" for k, v in info["scores"].items()))
     print(f"  ToM module          : {results['tom_module']}")
+    # R2a ToM caliber (2026-11-09): the milestone's legacy path falls back to
+    # the occlusion approach ratio (a duplicate of the OP instrument) because
+    # tom_score is never fed. Feed the REAL module composite instead:
+    # mean(perspective_ok, false_belief_ok, surprise_ok), disclosed.
+    try:
+        _tm = results.get("tom_module") or {}
+        _comp = (float(bool(_tm.get("perspective_ok", False)))
+                 + float(bool(_tm.get("false_belief_ok", False)))
+                 + float(bool(_tm.get("surprise_ok", False)))) / 3.0
+        _m3 = results.get("milestones_3d")
+        if isinstance(_m3, dict) and "scores" in _m3:
+            _m3["scores"]["theory_of_mind"] = round(_comp, 4)
+            _m3.setdefault("passed", {})["theory_of_mind"] = _comp >= 0.5
+            _m3["theory_of_mind_caliber"] = "module_composite"
+    except Exception as _te:  # noqa: BLE001 - telemetry only
+        print("[s18e] tom caliber override failed:", _te)
     print(f"  NumberSense head    : {results['number_sense']}")
     print(f"  Scene description   : {results['scene_description']}")
     if "milestones_3d_cross" in results:
