@@ -78,3 +78,18 @@
   - **尺度迁移**列为受监控的发育目标 (大世界追索能力);
   - 双轨报告继续: 大世界能力分 (headline) + 小世界迁移诊断 + 暴露分。
 - **本说明写于决定时**, 非事后追认; 旧档案全部保留并标注口径。
+
+## 7. ToM 口径修正 (2026-11-09, 取证后)
+
+- **取证**: `_eval_theory_of_mind` 优先 `tom_score`; 全套评估从未传入 →
+  回退到"遮挡逼近比率" (与 OP 同一把尺子; 历史 ToM 与 OP 曲线同步可证:
+  0.68↔0.847 / 0.47↔0.56 / 0.33↔0.24)。**ToM 0.33 不是回退**, 是同
+  一布局效应的重复投影。
+- **真实模块** (tom_module 专项): perspective_ok ✓, false_belief_ok ✓
+  (双种子), surprise_discrimination 负 (-0.02/-0.08) — 唯一的真缺口。
+- **新口径 (预注册)**: 里程碑 theory_of_mind = 模块合成分
+  mean(perspective_ok, false_belief_ok, surprise_ok) (≥0.5 判过);
+  评估 JSON 标注 `theory_of_mind_caliber: module_composite`。
+  历史档案标注 "occlusion-derived 口径", 不混算。
+- **影响**: 61.80M 该 ckpt 合成分 = 2/3 = **0.667** (surprise 未过),
+  即"ToM 主能力在线, 惊讶判别是缺口" — 比 0.33 的误读诚实得多。
