@@ -3619,6 +3619,13 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     if state.step % 25000 == 0:
                         _ftelem = grounded_facts.telemetry()
                         _ftelem["last_batch"] = _fstats
+                        try:
+                            _ogp = getattr(model, "obj_proj", None)
+                            _ftelem["obj_proj_norm"] = (
+                                round(float(_ogp.weight.detach().norm()), 5)
+                                if _ogp is not None else 0.0)
+                        except Exception:  # noqa: BLE001 - telemetry only
+                            pass
                         logger.info("[facts] step=%d %s", state.step, _ftelem)
                 except Exception as _fe:  # noqa: BLE001 - defensive wiring
                     logger.warning("[facts] ingest error: %s", _fe)
