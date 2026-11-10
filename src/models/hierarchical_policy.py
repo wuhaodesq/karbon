@@ -188,6 +188,7 @@ class HierarchicalActorCritic(nn.Module):
         belief_slots: int = 0,  # Stage 20s: internal object-permanence belief head
         use_gru: bool = False,  # Stage 20v: recurrent temporal memory
         goal_dim: int = 21,  # Stage 24 M2: goal vector -> zero-init modulation
+        obj_slot_dim: int = 0,  # R3-b: attention-window object slots
     ) -> None:
         super().__init__()
         if d_model % n_heads != 0:
@@ -278,6 +279,14 @@ class HierarchicalActorCritic(nn.Module):
         else:
             self.goal_proj = None
 
+        self.obj_slot_dim = int(obj_slot_dim)
+        if self.obj_slot_dim > 0:
+            self.obj_proj = nn.Linear(self.obj_slot_dim, d_model)
+            nn.init.zeros_(self.obj_proj.weight)
+            nn.init.zeros_(self.obj_proj.bias)
+        else:
+            self.obj_proj = None
+
         # Stage 20s: internal object-permanence belief head. Predicts the
         # occluded-object last_known offset from the policy hidden state h so
         # the agent can recall position WITHOUT the env proprio slot cue. The
@@ -334,6 +343,7 @@ class HierarchicalActorCritic(nn.Module):
         proprio: "torch.Tensor | None" = None,
         proprio_hook: "Any | None" = None,
         goal: "torch.Tensor | None" = None,
+        obj_slots: "torch.Tensor | None" = None,
         update_gru: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass. Returns (action_logits, worker_value).
@@ -428,6 +438,10 @@ class HierarchicalActorCritic(nn.Module):
         # absent). Plain add (no inplace) to keep autograd graphs valid.
         if goal is not None and getattr(self, "goal_proj", None) is not None:
             h = h + self.goal_proj(goal.float())
+
+        # R3-b: attention-window object slots (zero-init -> no-op at start).
+        if obj_slots is not None and getattr(self, "obj_proj", None) is not None:
+            h = h + self.obj_proj(obj_slots.float())
 
         # Manager: regenerate sub-goal at period boundary
         # Device guard: ensure cached sub-goal is on the same device as h

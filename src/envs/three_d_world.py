@@ -2386,6 +2386,79 @@ class ThreeDWorld:
         return float(max(0.0, min(float(getattr(self, "_op_reward_clamp", 5.0)) + 5.0,
                                   reward)))
 
+    _SLOT_KINDS = ("box", "sphere", "cylinder", "capsule")
+    _SLOT_COLORS = ("red", "orange", "yellow", "green", "cyan", "blue",
+                    "purple")
+
+    @staticmethod
+    def _slot_color_name(rgb) -> str:
+        import colorsys as _cs
+        r, g, b = float(rgb[0]), float(rgb[1]), float(rgb[2])
+        h, sat, _v = _cs.rgb_to_hsv(r, g, b)
+        hue = h * 360.0
+        if sat < 0.15:
+            return "gray"
+        if hue < 20 or hue >= 340:
+            return "red"
+        if hue < 45:
+            return "orange"
+        if hue < 70:
+            return "yellow"
+        if hue < 165:
+            return "green"
+        if hue < 200:
+            return "cyan"
+        if hue < 265:
+            return "blue"
+        return "purple"
+
+    @property
+    def obj_slot_dim(self) -> int:
+        """Declared object-slot input width (K=4 slots x 14 features)."""
+        return 4 * 14
+
+    def object_slots(self) -> np.ndarray:
+        """R3-b (2026-11-10): the K nearest objects as a bounded attention
+        window (like a child's subitizing window). Per slot: dx/4, dy/4,
+        dist/4, kind one-hot (4), colour one-hot (7) = 14 dims; empty slots
+        are zeros; K = 4 (declared capacity). Pure perception - no reward
+        channel involved.
+        """
+        k = 4
+        dim = 14
+        out = np.zeros(k * dim, dtype=np.float32)
+        try:
+            lb = self._model.body("learner")
+            ax = float(self._data.xpos[lb.id, 0])
+            ay = float(self._data.xpos[lb.id, 1])
+            cand = []
+            for i in range(int(self._num_objects)):
+                ob = self._model.body(f"obj_{i}")
+                ox = float(self._data.xpos[ob.id, 0])
+                oy = float(self._data.xpos[ob.id, 1])
+                d = math.hypot(ox - ax, oy - ay)
+                cand.append((d, i, ox, oy))
+            cand.sort(key=lambda t: (t[0], t[1]))
+            for si, (d, i, ox, oy) in enumerate(cand[:k]):
+                base = si * dim
+                out[base] = (ox - ax) / 4.0
+                out[base + 1] = (oy - ay) / 4.0
+                out[base + 2] = d / 4.0
+                try:
+                    obj = self._object_lib[i]
+                except Exception:
+                    obj = None
+                kind = str(getattr(obj, "kind", ""))
+                if kind in self._SLOT_KINDS:
+                    out[base + 3 + self._SLOT_KINDS.index(kind)] = 1.0
+                col = self._slot_color_name(
+                    getattr(obj, "color", (0.5, 0.5, 0.5)))
+                if col in self._SLOT_COLORS:
+                    out[base + 7 + self._SLOT_COLORS.index(col)] = 1.0
+        except Exception:
+            pass  # legit: learner/objects absent during scaffold
+        return out
+
     def _proprio(self) -> np.ndarray:
         """Return proprioceptive vector (12 or 16 dim depending on dev age)."""
         try:

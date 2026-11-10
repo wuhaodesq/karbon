@@ -370,6 +370,7 @@ class TransitionBatch:
     belief_slot: torch.Tensor = None  # Stage 20s: (B, 3*slots) true last_known offset target
     gru_state: torch.Tensor = None  # Stage 20v: (B, d_model) GRU hidden state
     goal: torch.Tensor = None  # Stage 24 M2: (B, goal_dim) active-goal vector
+    objslots: torch.Tensor = None  # R3-b: (B, obj_slot_dim) attention-window slots
 
 
 class RolloutBuffer:
@@ -387,7 +388,7 @@ class RolloutBuffer:
     def __init__(
         self, capacity: int, obs_shape: tuple[int, ...], device: torch.device,
         n_envs: int = 1, proprio_dim: int = 0, belief_slot_dim: int = 0,
-        gru_dim: int = 0, goal_dim: int = 0,
+        gru_dim: int = 0, goal_dim: int = 0, obj_slot_dim: int = 0,
     ) -> None:
         self._capacity = int(capacity)
         self.n_envs = int(n_envs)
@@ -395,6 +396,7 @@ class RolloutBuffer:
         self.belief_slot_dim = int(belief_slot_dim)
         self.gru_dim = int(gru_dim)
         self.goal_dim = int(goal_dim)
+        self.obj_slot_dim = int(obj_slot_dim)
         self.obs = torch.zeros(
             (capacity, self.n_envs, *obs_shape), dtype=torch.uint8, device=device
         )
@@ -409,6 +411,10 @@ class RolloutBuffer:
         )
         self.goal = torch.zeros(
             (capacity, max(1, self.n_envs), max(1, self.goal_dim)),
+            dtype=torch.float32, device=device,
+        )
+        self.objslots = torch.zeros(
+            (capacity, max(1, self.n_envs), max(1, self.obj_slot_dim)),
             dtype=torch.float32, device=device,
         )
         self.teach = torch.full(
@@ -447,6 +453,7 @@ class RolloutBuffer:
         belief_slot: np.ndarray | None = None,
         gru_state: np.ndarray | None = None,
         goal: np.ndarray | None = None,
+        obj_slots: np.ndarray | None = None,
     ) -> None:
         """Add ``n_envs`` transitions for one collected timestep.
 
@@ -480,6 +487,9 @@ class RolloutBuffer:
         if goal is not None and self.goal_dim > 0:
             _gv = np.asarray(goal, dtype=np.float32).reshape(self.n_envs, -1)
             self.goal[i, :, : _gv.shape[1]] = torch.from_numpy(_gv)
+        if obj_slots is not None and self.obj_slot_dim > 0:
+            _ov = np.asarray(obj_slots, dtype=np.float32).reshape(self.n_envs, -1)
+            self.objslots[i, :, : _ov.shape[1]] = torch.from_numpy(_ov)
         self.actions[i] = torch.as_tensor(np.asarray(action)).to(self.actions.dtype)
         self.logprobs[i] = torch.as_tensor(np.asarray(logprob)).to(self.logprobs.dtype)
         self.values[i] = torch.as_tensor(np.asarray(value)).to(self.values.dtype)
@@ -506,6 +516,8 @@ class RolloutBuffer:
             if self.gru_dim > 0 else None,
             goal=self.goal[:T].reshape(T * N, self.goal_dim)
             if self.goal_dim > 0 else None,
+            objslots=self.objslots[:T].reshape(T * N, self.obj_slot_dim)
+            if self.obj_slot_dim > 0 else None,
         )
 
 
@@ -1102,6 +1114,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             slot_dim=int(model_cfg.get("slot_dim", 128)),
             slot_num_iterations=int(model_cfg.get("slot_num_iterations", 3)),
             sub_goal_every=int(model_cfg.get("sub_goal_every", 10)),
+        obj_slot_dim=(56 if bool((config.get("advanced", {}) or {}).get(
+            "obj_slot_input", False)) else 0),
             proprio_dim=env_proprio_dim,  # Stage 20f: proprio incl. occluder slots
             belief_slots=int(env_cfg.get("occluder_obs_slots", 0)),  # Stage 20s: internal belief head
             use_gru=bool(model_cfg.get("use_gru", False)),  # Stage 20v: recurrent temporal memory
@@ -1156,7 +1170,9 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                            belief_slot_dim=3 * int(env_cfg.get("occluder_obs_slots", 0))
                            if int(env_cfg.get("occluder_obs_slots", 0)) > 0 else 0,
                            gru_dim=model.d_model if _use_gru else 0,
-                           goal_dim=21)
+                           goal_dim=21,
+                           obj_slot_dim=(56 if bool((config.get("advanced", {}) or {}).get(
+                               "obj_slot_input", False)) else 0))
 
     # Hierarchical manager buffer (smaller: every K steps)
     _is_hierarchical = use_hierarchical
@@ -3082,15 +3098,29 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                         build_vector(instruction_channel.chosen, _dxv, _dyv),
                         dtype=np.float32)
                 _goal_t = torch.from_numpy(_goal_np).unsqueeze(0).to(device)
+                # R3-b: attention-window object slots (zeros when disabled
+                # or batched envs; the projection is zero-init so zeros are
+                # a true no-op).
+                if bool((config.get("advanced", {}) or {}).get(
+                        "obj_slot_input", False)) and n_envs == 1:
+                    try:
+                        _oslots_np = env.object_slots()
+                    except Exception:  # noqa: BLE001 - perception fallback
+                        _oslots_np = np.zeros(56, dtype=np.float32)
+                else:
+                    _oslots_np = np.zeros(56, dtype=np.float32)
+                _obj_t = torch.from_numpy(_oslots_np).unsqueeze(0).to(device)
                 if _collect_cognitive and n_envs == 1:
                     logits, value, hidden = model(
                         obs_t, return_hidden=True, skill_delta=_skill_delta,
                         proprio=prop_t, proprio_hook=_hook, goal=_goal_t,
+                        obj_slots=_obj_t,
                     )
                 else:
                     logits, value = model(obs_t, skill_delta=_skill_delta,
                                           proprio=prop_t, proprio_hook=_hook,
-                                          goal=_goal_t)  # value: (N,)
+                                          goal=_goal_t,
+                                          obj_slots=_obj_t)  # value: (N,)
                 dist = torch.distributions.Categorical(logits=logits)
                 action = dist.sample()              # (N,)
                 logprob = dist.log_prob(action)     # (N,)
@@ -3816,6 +3846,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 belief_slot=true_slot.cpu().numpy() if true_slot is not None else None,
                 gru_state=_gru_state_to_store,
                 goal=_goal_np[None, :],
+                obj_slots=_oslots_np[None, :],
             )
             t_buf_end = time.perf_counter()
 
@@ -4630,6 +4661,7 @@ and state.step % 50000 < rollout_capacity):
                 _mb_belief = getattr(batch, "belief_slot", None)
                 _mb_gru = getattr(batch, "gru_state", None)
                 _mb_goal = getattr(batch, "goal", None)
+                _mb_oslots = getattr(batch, "objslots", None)
                 # Stage 20v: use the stored per-step GRU state so the PPO
                 # forward sees the same temporal context as rollout.
                 if _use_gru and _mb_gru is not None:
@@ -4641,6 +4673,7 @@ and state.step % 50000 < rollout_capacity):
                     return_hidden=True,
                     update_gru=False,
                     goal=_mb_goal[mb_idx] if _mb_goal is not None else None,
+                    obj_slots=_mb_oslots[mb_idx] if _mb_oslots is not None else None,
                 )
                 # Stage 20h#6: bound logits every forward. Deterministic
                 # policies push the optimal-action logit toward +/-inf
