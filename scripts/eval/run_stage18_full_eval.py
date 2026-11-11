@@ -341,6 +341,8 @@ def main():
             # rate is 0.75+).
             occluder_arrival_reveal=bool(cfg["env"].get("occluder_arrival_reveal", False)),
             num_sense_radius=float(cfg["env"].get("num_sense_radius", 3.0)),
+            camera_pos=tuple(cfg["env"].get("camera_pos", (0.0, -1.0, 0.8))),
+            camera_fovy=float(cfg["env"].get("camera_fovy", 60.0)),
             learner_spawn_radius=float(getattr(args, "op_spawn_radius", 0.0)),
         )
         if probe == "cross":

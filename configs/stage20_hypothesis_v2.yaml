@@ -61,6 +61,10 @@ env:
   num_objects: 8
   object_spawn_half: 4.0            # M2-p3 (2026-11-04): 8x8m arena (3.0 failed the spread criterion: median 1.91m)
   num_sense_radius: 4.0            # R2a (2026-11-08): count trial uses the perceptual horizon
+  # Perception (2026-11-11): wide observation camera (visible 1.2 -> 6.2
+  # objects within the 4m horizon; offline camera-variant probe)
+  camera_pos: [0.0, -1.5, 1.2]
+  camera_fovy: 90.0
   max_episode_steps: 600
   render_size: 128
   action_force: 50.0

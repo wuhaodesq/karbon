@@ -815,8 +815,6 @@ def _threed_env_kwargs(spec: dict, env_cfg: dict) -> dict:
         render_size=int(env_cfg.get("render_size", 128)),
         action_force=float(spec.get("action_force", env_cfg.get("action_force", 50.0))),
         developmental_age=float(env_cfg.get("developmental_age", 0.0)),
-        camera_pos=tuple(env_cfg.get("camera_pos", [0.0, -1.0, 0.8])),
-        camera_fovy=float(env_cfg.get("camera_fovy", 60.0)),
         num_occluders=int(spec.get("num_occluders", env_cfg.get("num_occluders", 0))),
         occluder_trace=bool(env_cfg.get("occluder_trace", False)),
         occluder_target_reward=float(spec.get(
@@ -837,6 +835,8 @@ def _threed_env_kwargs(spec: dict, env_cfg: dict) -> dict:
         occluder_obs_slots=int(env_cfg.get("occluder_obs_slots", 0)),
         object_spawn_half=float(spec.get("object_spawn_half", env_cfg.get("object_spawn_half", 1.8))),
         num_sense_radius=float(env_cfg.get("num_sense_radius", 3.0)),
+        camera_pos=tuple(env_cfg.get("camera_pos", (0.0, -1.0, 0.8))),
+        camera_fovy=float(env_cfg.get("camera_fovy", 60.0)),
         focus_op_only=bool(spec.get("focus_op_only", env_cfg.get("focus_op_only", False))),
         occluder_shaping_weight=float(spec.get(
             "occluder_shaping_weight", env_cfg.get("occluder_shaping_weight", 0.0))),
@@ -971,8 +971,6 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             render_size=int(env_cfg.get("render_size", 256)),
             action_force=float(env_cfg.get("action_force", 2.0)),
             developmental_age=float(env_cfg.get("developmental_age", 0.0)),
-            camera_pos=tuple(env_cfg.get("camera_pos", [0.0, -1.0, 0.8])),
-            camera_fovy=float(env_cfg.get("camera_fovy", 60.0)),
             # Stage 20 occluder params — must match _build_env_from_spec so the
             # pre-curriculum env and curriculum envs share proprio shape (the
             # model's proprio_mlp is built from env_proprio_dim BEFORE the
@@ -987,6 +985,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             occluder_obs_slots=int(env_cfg.get("occluder_obs_slots", 0)),
             object_spawn_half=float(env_cfg.get("object_spawn_half", 1.8)),
             num_sense_radius=float(env_cfg.get("num_sense_radius", 3.0)),
+            camera_pos=tuple(env_cfg.get("camera_pos", (0.0, -1.0, 0.8))),
+            camera_fovy=float(env_cfg.get("camera_fovy", 60.0)),
             focus_op_only=bool(env_cfg.get("focus_op_only", False)),
             occluder_shaping_weight=float(env_cfg.get("occluder_shaping_weight", 0.0)),
             occluder_reveal_bonus=float(env_cfg.get("occluder_reveal_bonus", 0.0)),
@@ -1038,6 +1038,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             occluder_obs_slots=int(env_cfg.get("occluder_obs_slots", 0)),
             object_spawn_half=float(env_cfg.get("object_spawn_half", 1.8)),
             num_sense_radius=float(env_cfg.get("num_sense_radius", 3.0)),
+            camera_pos=tuple(env_cfg.get("camera_pos", (0.0, -1.0, 0.8))),
+            camera_fovy=float(env_cfg.get("camera_fovy", 60.0)),
             focus_op_only=bool(env_cfg.get("focus_op_only", False)),
             occluder_shaping_weight=float(env_cfg.get("occluder_shaping_weight", 0.0)),
             occluder_reveal_bonus=float(env_cfg.get("occluder_reveal_bonus", 0.0)),
