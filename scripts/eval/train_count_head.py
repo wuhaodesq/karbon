@@ -59,6 +59,8 @@ def collect(cfg, device, samples: int, seed: int):
         object_crossing_hold_steps=int(ec.get("object_crossing_hold_steps", 0)),
         object_spawn_half=float(ec.get("object_spawn_half", 4.0)),
         num_sense_radius=float(ec.get("num_sense_radius", 4.0)),
+        camera_pos=tuple(ec.get("camera_pos", (0.0, -1.0, 0.8))),
+        camera_fovy=float(ec.get("camera_fovy", 60.0)),
     )
     rng = np.random.RandomState(seed)
     xs, ys = [], []

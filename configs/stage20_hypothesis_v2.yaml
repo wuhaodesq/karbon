@@ -117,6 +117,13 @@ llm_fusion:
   enabled: false
 
 # --- Advanced Cognition ---
+long_range_planner:
+  enabled: false           # M-P3: dormant again (depth-10 MCTS cannot bridge the ~200-step chain; cadence per-cycle makes override negligible)
+  max_depth: 10
+  max_nodes: 500
+  num_simulations: 50
+  plan_every_steps: 500
+  override: false          # keep off until a skill-level planner exists
 advanced:
   counterfactual_enabled: true
   counterfactual_max_steps: 5

@@ -1978,6 +1978,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     # --- Long-Range Planner ---
     planner_cfg = config.get("long_range_planner")
     long_range_planner: LongRangePlanner | None = None
+    _plan_queue: list[int] = []  # M-P3 bounded action override queue (always defined)
     if planner_cfg and bool(planner_cfg.get("enabled", False)):
         long_range_planner = LongRangePlanner(
             num_actions=num_actions,
@@ -3125,6 +3126,11 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                                           obj_slots=_obj_t)  # value: (N,)
                 dist = torch.distributions.Categorical(logits=logits)
                 action = dist.sample()              # (N,)
+                # M-P3: planner override (single-env rollout only)
+                if _plan_queue and n_envs == 1:
+                    _pa = int(_plan_queue.pop(0))
+                    action = torch.tensor([_pa], device=action.device,
+                                          dtype=action.dtype)
                 logprob = dist.log_prob(action)     # (N,)
                 # --- Stage 20: hypothesis-deduction occlusion loop ---
                 # Occlusion event -> propose hypothesis (obj at last_known) ->
@@ -5262,7 +5268,7 @@ and state.step % 50000 < rollout_capacity):
 
         # --- Long-range planning: periodic replan ---
         if (long_range_planner is not None and wm is not None
-                and state.step % max(1, planner_cfg.get("plan_every_steps", 500)) < rollout_capacity):
+                and state.step % max(1, planner_cfg.get("plan_every_steps", 500)) == 0):
             try:
                 obs_t = _obs_to_tensor(obs, device)
                 wm_obs = obs_t.float().reshape(1, -1) / 255.0
@@ -5284,9 +5290,15 @@ and state.step % 50000 < rollout_capacity):
                         logger.debug("[cf_plan] validated plan (len=%d)", len(plan))
 
                 if plan:
-                    logger.debug("[plan] plan: %s (len=%d)", plan[:5], len(plan))
-            except Exception:
-                pass
+                    # M-P3: hand the plan to the rollout action override
+                    # (bounded: at most len(plan) steps, one plan per window).
+                    if bool(planner_cfg.get("override", False)):
+                        _plan_queue = [int(a) for a in plan[: 16]]
+                    logger.info("[plan] len=%d first=%s override=%s",
+                                len(plan), plan[:5],
+                                bool(planner_cfg.get("override", False)))
+            except Exception as _pe:  # noqa: BLE001 - planner must not kill training
+                logger.warning("[plan] planner error: %s", _pe)
 
         # --- Stage 7: symbolic rule override on next batch ---
         if symbolic_layer is not None and len(symbolic_layer.rule_memory) > 0:
