@@ -343,6 +343,7 @@ def main():
             num_sense_radius=float(cfg["env"].get("num_sense_radius", 3.0)),
             camera_pos=tuple(cfg["env"].get("camera_pos", (0.0, -1.0, 0.8))),
             camera_fovy=float(cfg["env"].get("camera_fovy", 60.0)),
+            force_task_type=str(cfg["env"].get("force_task_type", "")),
             learner_spawn_radius=float(getattr(args, "op_spawn_radius", 0.0)),
         )
         if probe == "cross":

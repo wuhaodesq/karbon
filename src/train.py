@@ -837,6 +837,7 @@ def _threed_env_kwargs(spec: dict, env_cfg: dict) -> dict:
         num_sense_radius=float(env_cfg.get("num_sense_radius", 3.0)),
         camera_pos=tuple(env_cfg.get("camera_pos", (0.0, -1.0, 0.8))),
         camera_fovy=float(env_cfg.get("camera_fovy", 60.0)),
+        force_task_type=str(env_cfg.get("force_task_type", "")),
         focus_op_only=bool(spec.get("focus_op_only", env_cfg.get("focus_op_only", False))),
         occluder_shaping_weight=float(spec.get(
             "occluder_shaping_weight", env_cfg.get("occluder_shaping_weight", 0.0))),
@@ -987,6 +988,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             num_sense_radius=float(env_cfg.get("num_sense_radius", 3.0)),
             camera_pos=tuple(env_cfg.get("camera_pos", (0.0, -1.0, 0.8))),
             camera_fovy=float(env_cfg.get("camera_fovy", 60.0)),
+            force_task_type=str(env_cfg.get("force_task_type", "")),
             focus_op_only=bool(env_cfg.get("focus_op_only", False)),
             occluder_shaping_weight=float(env_cfg.get("occluder_shaping_weight", 0.0)),
             occluder_reveal_bonus=float(env_cfg.get("occluder_reveal_bonus", 0.0)),
@@ -1040,6 +1042,7 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
             num_sense_radius=float(env_cfg.get("num_sense_radius", 3.0)),
             camera_pos=tuple(env_cfg.get("camera_pos", (0.0, -1.0, 0.8))),
             camera_fovy=float(env_cfg.get("camera_fovy", 60.0)),
+            force_task_type=str(env_cfg.get("force_task_type", "")),
             focus_op_only=bool(env_cfg.get("focus_op_only", False)),
             occluder_shaping_weight=float(env_cfg.get("occluder_shaping_weight", 0.0)),
             occluder_reveal_bonus=float(env_cfg.get("occluder_reveal_bonus", 0.0)),

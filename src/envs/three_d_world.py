@@ -478,6 +478,7 @@ class ThreeDWorld:
         occluder_teacher_force: float = 0.0,  # Stage 20h: BC 教学接管率 (0=off, 1=每步接管)
         focus_op_only: bool = False,  # Stage 20b: 课程固化 - 封闭其他目标, 专训 op
         object_spawn_half: float = 1.8,  # M2-p3 (2026-11-04): object spawn box half-extent (m)
+        force_task_type: str = "",  # P-A (2026-11-12): force obstacle/key_door
         num_sense_radius: float = 3.0,  # R2a (2026-11-08): perceptual horizon for the count trial
         learner_spawn_radius: float = 0.0,  # op-eval: spawn on a ring r>0 (wall zone); 0=default box
     ) -> None:
@@ -501,6 +502,7 @@ class ThreeDWorld:
         self._occluder_reveal_ratio = float(occluder_reveal_ratio)
         self._occluder_reach_reward = float(occluder_reach_reward)
         self._object_spawn_half = float(object_spawn_half)
+        self._force_task_type = str(force_task_type or "")
         self._num_sense_radius = float(num_sense_radius)
         self._learner_spawn_radius = float(learner_spawn_radius)
         self._occluder_reach_radius = float(occluder_reach_radius)
@@ -2011,6 +2013,10 @@ class ThreeDWorld:
             else:
                 self._task_type = "free_play"
 
+        # P-A: curriculum can force the chain task for a bounded window.
+        if self._force_task_type in ("obstacle", "key_door"):
+            self._task_type = self._force_task_type
+
         # Select a target object (reward) from existing objects
         if self._task_type == "obstacle":
             self._task_target_body = f"obj_{min(self._num_objects - 1, 0)}"
@@ -2019,6 +2025,7 @@ class ThreeDWorld:
             self._task_target_body = f"obj_{min(self._num_objects - 1, 0)}"
             self._task_key_body = f"obj_{min(self._num_objects - 1, 1)}"
             self._task_door_open = False
+            self._task_prev_door_dist = None
 
     def _update_chain_task(self, dx: float, dy: float) -> float:
         """Update chain task progress and return bonus reward."""
@@ -2051,6 +2058,12 @@ class ThreeDWorld:
                     tx = float(self._data.xpos[tid, 0])
                     ty = float(self._data.xpos[tid, 1])
                     dist = ((ax - tx)**2 + (ay - ty)**2) ** 0.5
+                    # P-A shaping: one-sided potential progress while carrying
+                    # the key (bounded: 0.3 x total distance travelled/window).
+                    _pd = getattr(self, "_task_prev_door_dist", None)
+                    if _pd is not None and _pd > dist:
+                        bonus += 0.3 * (_pd - dist)
+                    self._task_prev_door_dist = dist
                     if dist < 0.5:
                         self._task_door_open = True
                         bonus = 1.0

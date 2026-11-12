@@ -106,6 +106,7 @@ def _make_env(cfg: dict, num_objects: int, action_force: float, max_steps: int,
             learner_spawn_radius=float(learner_spawn_radius),
             camera_pos=tuple(cfg["env"].get("camera_pos", (0.0, -1.0, 0.8))),
             camera_fovy=float(cfg["env"].get("camera_fovy", 60.0)),
+            force_task_type=str(cfg["env"].get("force_task_type", "")),
         )
         env._auto_reset = False
         return env
@@ -123,6 +124,7 @@ def _make_env(cfg: dict, num_objects: int, action_force: float, max_steps: int,
         learner_spawn_radius=float(learner_spawn_radius),
         camera_pos=tuple(cfg["env"].get("camera_pos", (0.0, -1.0, 0.8))),
         camera_fovy=float(cfg["env"].get("camera_fovy", 60.0)),
+        force_task_type=str(cfg["env"].get("force_task_type", "")),
     )
     env._auto_reset = False
     return env
