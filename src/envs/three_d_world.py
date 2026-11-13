@@ -481,6 +481,9 @@ class ThreeDWorld:
         force_task_type: str = "",  # P-A (2026-11-12): force obstacle/key_door
         num_sense_radius: float = 3.0,  # R2a (2026-11-08): perceptual horizon for the count trial
         learner_spawn_radius: float = 0.0,  # op-eval: spawn on a ring r>0 (wall zone); 0=default box
+        exec_goal_enabled: bool = False,  # Stage 27 M1: 目标级执行层 (选择->承诺->结算)
+        exec_goal_commit_weight: float = 0.0,  # M1: 每步朝被选目标 lk 的方向塑形
+        exec_goal_settle_bonus: float = 0.0,  # M1: 被选事件结算时一次性奖励
     ) -> None:
         if not _mj_available:
             raise ImportError("mujoco is required for ThreeDWorld. Run: pip install mujoco")
@@ -505,6 +508,16 @@ class ThreeDWorld:
         self._force_task_type = str(force_task_type or "")
         self._num_sense_radius = float(num_sense_radius)
         self._learner_spawn_radius = float(learner_spawn_radius)
+        # Stage 27 M1: executive goal layer — the trainer samples a slot index
+        # from the learned head and commits it here; the chosen EVENT key is
+        # captured at commit time (slot order is distance-sorted and drifts,
+        # so the key must be resolved once, not re-read every step).
+        self._exec_goal_enabled = bool(exec_goal_enabled)
+        self._exec_goal_commit_weight = (
+            float(exec_goal_commit_weight) if self._exec_goal_enabled else 0.0)
+        self._exec_goal_settle_bonus = (
+            float(exec_goal_settle_bonus) if self._exec_goal_enabled else 0.0)
+        self._exec_goal_key: str | None = None
         self._occluder_reach_radius = float(occluder_reach_radius)
         self._occluder_reward_radius = float(occluder_reward_radius) \
             if occluder_reward_radius > 0.0 else float(occluder_reach_radius)
@@ -1308,6 +1321,8 @@ class ThreeDWorld:
         self._occ_signal_active = []
         self._occ_signal_just_occluded = []
         self._occ_signal_just_revealed = []
+        # Stage 27 M1: a rebuilt scene has no events — release any commitment.
+        self._exec_goal_key = None
         # Stage 20-ToM: reset caregiver gaze/belief state on scene rebuild.
         self._cg_gaze_id = -1
         self._cg_last_seen = None
@@ -1613,7 +1628,15 @@ class ThreeDWorld:
         NEXT call to _occluder_only_reward (reveals fire after reward in the
         step's signal tracking). 1-frame delay is invisible to PPO's GAE.
         """
-        if self._occluder_reveal_bonus <= 0.0:
+        # Stage 27 M1: executive settlement — the chosen event ending is a
+        # commitment outcome regardless of success; pay the one-shot bonus only
+        # on a successful (search-worthy) settlement. Independent of the
+        # reveal-attribution lane (works when occluder_reveal_bonus is 0).
+        _exec_sel = (
+            self._exec_goal_settle_bonus > 0.0 and key == self._exec_goal_key)
+        if _exec_sel:
+            self._exec_goal_key = None
+        if self._occluder_reveal_bonus <= 0.0 and not _exec_sel:
             return
         ev = self._active_occlusions_3d.get(key)
         if not ev:
@@ -1627,14 +1650,19 @@ class ThreeDWorld:
         sx, sy = traj[0]
         d0 = math.hypot(sx - lk[0], sy - lk[1])
         d_now = math.hypot(ax - lk[0], ay - lk[1])
+        _ok = self._approach_ok(
+            d_now, d0, self._occluder_reveal_ratio,
+            self._occluder_reach_radius)
+        if _exec_sel and _ok and d0 >= self._occluder_search_min_start:
+            self._reveal_bonus_pending += self._exec_goal_settle_bonus
+        if self._occluder_reveal_bonus <= 0.0:
+            return
         # Stage 20j threshold-gate probe counters: every valid tracking
         # attempt counts an arrival; an approach success counts a hit.
         # Same semantic as the eval op metric (but isomorphized to the
         # absolute-reach hard floor in Stage 20k, see _approach_ok).
         self._gate_arrivals += 1
-        if self._approach_ok(
-                d_now, d0, self._occluder_reveal_ratio,
-                self._occluder_reach_radius):
+        if _ok:
             self._gate_success += 1
             # 2026-09-25 anti-farm: pay the reveal attribution only for
             # search-worthy (far-start) events; the tgate metric above stays
@@ -2250,6 +2278,23 @@ class ThreeDWorld:
                         occ["hold_paid"] = _hp + 1
                 prev = occ.get("prev_agent_dist", dist)
                 occ["prev_agent_dist"] = dist
+                # Stage 27 M1: executive commitment — per-step direction credit
+                # toward the CHOSEN event's last_known (asymmetric: approach
+                # earns, away is neutral; no in-circle or time-based jackpot →
+                # B10-safe). Zero unless the trainer committed this key.
+                if (self._exec_goal_commit_weight > 0.0
+                        and key == self._exec_goal_key):
+                    dxw, dyw = lk[0] - ax, lk[1] - ay
+                    dwlen = math.hypot(dxw, dyw)
+                    if dwlen > 1e-6:
+                        bid = self._model.body("learner").id
+                        dof = self._model.body_dofadr[bid]
+                        if dof >= 0:
+                            vxw = float(self._data.qvel[dof])
+                            vyw = float(self._data.qvel[dof + 1])
+                            vwlen = math.hypot(vxw, vyw) + 1e-9
+                            dotw = (vxw * dxw + vyw * dyw) / (vwlen * dwlen)
+                            r += max(0.0, dotw) * self._exec_goal_commit_weight
                 if dist < prev:
                     r += (prev - dist) * self._occluder_target_reward
                 if (self._occluder_shaping_weight > 0.0
@@ -2471,6 +2516,47 @@ class ThreeDWorld:
         except Exception:
             pass  # legit: learner/objects absent during scaffold
         return out
+
+    def _active_occlusion_slot_keys(self) -> list[str]:
+        """Event keys of active occlusions in the SAME order as the obs slots.
+
+        ``_proprio`` sorts the active last-known positions by distance
+        (nearest first, stable). The executive layer's slot index must map to
+        that exact order, otherwise "slot 1" would mean different events to
+        the policy and to the reward.
+        """
+        keys: list[str] = []
+        try:
+            ax = float(self._data.body("learner").xpos[0])
+            ay = float(self._data.body("learner").xpos[1])
+        except Exception:
+            _expose_exc("_active_occlusion_slot_keys")
+            return keys
+        cands: list[tuple[float, str]] = []
+        for key, occ in self._active_occlusions_3d.items():
+            lk = occ.get("last_known")
+            if lk is None:
+                continue
+            cands.append((math.hypot(lk[0] - ax, lk[1] - ay), key))
+        cands.sort(key=lambda t: t[0])  # stable, distance-only (same as _proprio)
+        return [k for _, k in cands]
+
+    def set_exec_goal(self, index: int) -> None:
+        """Stage 27 M1: commit the sampled executive goal (side channel).
+
+        ``index`` selects the slot-th candidate in the observation order;
+        ``index >= occluder_obs_slots`` (the "none" choice) or any
+        out-of-range value releases the commitment. The event key is
+        resolved ONCE here (slot order drifts as distances change).
+        """
+        if not self._exec_goal_enabled:
+            return
+        k = int(self._occluder_obs_slots)
+        if index < 0 or index >= k:
+            self._exec_goal_key = None
+            return
+        keys = self._active_occlusion_slot_keys()
+        self._exec_goal_key = keys[index] if index < len(keys) else None
 
     def _proprio(self) -> np.ndarray:
         """Return proprioceptive vector (12 or 16 dim depending on dev age)."""

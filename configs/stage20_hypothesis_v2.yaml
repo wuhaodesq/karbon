@@ -85,6 +85,13 @@ env:
   occluder_reveal_bonus: 2.0
   occluder_reveal_ratio: 0.70
   occluder_obs_slots: 3
+  # Stage 27 M1 (2026-11-13): executive goal layer (off by default = bit-exact
+  # behavior). Learned selection over the occlusion slots + commitment shaping
+  # + one-shot settlement; see docs/stage27_executive_design.md.
+  exec_goal_enabled: false
+  exec_goal_commit_weight: 0.15
+  exec_goal_settle_bonus: 10.0
+  exec_goal_freeze: false     # M1-B 控制臂: 头冻结均匀随机 (只检验塑形)
   # 2026-09-24: restore the Stage-20b op curriculum lock for the free-joint
   # physics. Ungated, the contact reward (min(contacts*0.05, 0.5)/step) became
   # farmable by pushing movable objects (~sustained 0.5/step; mean_ret spiked

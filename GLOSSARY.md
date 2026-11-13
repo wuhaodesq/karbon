@@ -49,6 +49,8 @@
 | 配置校验 | Config Schema Validation | — | 基于 dataclass 的 YAML 校验，防止 typo |
 | 检查点 | Checkpoint | ckpt | 组件状态序列化文件 |
 | 断点续训 | Resume Training | — | 从 ckpt 继续训练 |
+| 目标级执行层 | Executive Goal Layer | EGL | Stage 27 M1: 有界目标缓冲(K=3) + 学习选择头 + 承诺执行 + 一次性结算 (3-6y 执行功能) |
+| 执行目标承诺 | Executive Goal Commitment | — | 选择头采样一个槽位目标后 env 侧锁定事件 key，结算或失效前不换（`_exec_goal_key`） |
 
 ## Environment Variables / 环境变量
 

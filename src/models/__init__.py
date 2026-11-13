@@ -14,6 +14,7 @@ from .world_model import RSSM, RSSMConfig, RSSMState
 from .visual_analyzer import VisualAnalyzer
 from .hierarchical_policy import HierarchicalActorCritic, SubGoalHead, GoalConditionedActionHead
 from .goal_proposer import Goal, GoalProposer
+from .goal_executive import GoalExecutive, slot_features_from_proprio
 from .instruction_channel import InstructionChannel
 from .assertion_verifier import SceneFacts, SceneObject, verify as verify_assertion
 from .grounded_facts import AssertionGenerator, GroundedFactStore, ingest_scene
@@ -25,6 +26,8 @@ __all__ = [
     "GoalConditionedActionHead",
     "Goal",
     "GoalProposer",
+    "GoalExecutive",
+    "slot_features_from_proprio",
     "InstructionChannel",
     "SceneFacts",
     "SceneObject",

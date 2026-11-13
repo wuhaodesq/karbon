@@ -107,6 +107,11 @@ def _make_env(cfg: dict, num_objects: int, action_force: float, max_steps: int,
             camera_pos=tuple(cfg["env"].get("camera_pos", (0.0, -1.0, 0.8))),
             camera_fovy=float(cfg["env"].get("camera_fovy", 60.0)),
             force_task_type=str(cfg["env"].get("force_task_type", "")),
+            exec_goal_enabled=bool(cfg["env"].get("exec_goal_enabled", False)),
+            exec_goal_commit_weight=float(
+                cfg["env"].get("exec_goal_commit_weight", 0.0)),
+            exec_goal_settle_bonus=float(
+                cfg["env"].get("exec_goal_settle_bonus", 0.0)),
         )
         env._auto_reset = False
         return env
@@ -125,6 +130,11 @@ def _make_env(cfg: dict, num_objects: int, action_force: float, max_steps: int,
         camera_pos=tuple(cfg["env"].get("camera_pos", (0.0, -1.0, 0.8))),
         camera_fovy=float(cfg["env"].get("camera_fovy", 60.0)),
         force_task_type=str(cfg["env"].get("force_task_type", "")),
+        exec_goal_enabled=bool(cfg["env"].get("exec_goal_enabled", False)),
+        exec_goal_commit_weight=float(
+            cfg["env"].get("exec_goal_commit_weight", 0.0)),
+        exec_goal_settle_bonus=float(
+            cfg["env"].get("exec_goal_settle_bonus", 0.0)),
     )
     env._auto_reset = False
     return env
@@ -151,7 +161,10 @@ def _run_one_ckpt(ckpt_path: str, cfg: dict, args, device) -> dict:
         if model is None:
             model = _s18e.build_model(
                 env.observation_shape, env.action_space_n, cfg["model"], device,
-                n_layers, proprio_dim=int(getattr(env, "proprio_dim", 0)))
+                n_layers, proprio_dim=int(getattr(env, "proprio_dim", 0)),
+                exec_slots=(int(cfg["env"].get("occluder_obs_slots", 0))
+                            if bool(cfg["env"].get(
+                                "exec_goal_enabled", False)) else 0))
             model.load_state_dict(sd, strict=False)
             model.eval()
         rng = np.random.RandomState(args.seed + tid)
@@ -181,6 +194,7 @@ def _run_one_ckpt(ckpt_path: str, cfg: dict, args, device) -> dict:
                     action = int(rng.randint(0, env.action_space_n))
                 else:
                     action = int(torch.argmax(logits, dim=-1).item())
+                _s18e.exec_select_step(model, env, prop_t)
                 step_out = env.step(action)
                 obs = step_out.obs
                 done = bool(step_out.terminated) or bool(step_out.truncated)

@@ -371,6 +371,8 @@ class TransitionBatch:
     gru_state: torch.Tensor = None  # Stage 20v: (B, d_model) GRU hidden state
     goal: torch.Tensor = None  # Stage 24 M2: (B, goal_dim) active-goal vector
     objslots: torch.Tensor = None  # R3-b: (B, obj_slot_dim) attention-window slots
+    exec_actions: torch.Tensor = None  # Stage 27 M1: (B,) chosen slot index (K=none)
+    exec_logps: torch.Tensor = None  # Stage 27 M1: (B,) selection logp (joint PPO)
 
 
 class RolloutBuffer:
@@ -389,6 +391,7 @@ class RolloutBuffer:
         self, capacity: int, obs_shape: tuple[int, ...], device: torch.device,
         n_envs: int = 1, proprio_dim: int = 0, belief_slot_dim: int = 0,
         gru_dim: int = 0, goal_dim: int = 0, obj_slot_dim: int = 0,
+        exec_dim: int = 0,
     ) -> None:
         self._capacity = int(capacity)
         self.n_envs = int(n_envs)
@@ -397,6 +400,7 @@ class RolloutBuffer:
         self.gru_dim = int(gru_dim)
         self.goal_dim = int(goal_dim)
         self.obj_slot_dim = int(obj_slot_dim)
+        self.exec_dim = int(exec_dim)
         self.obs = torch.zeros(
             (capacity, self.n_envs, *obs_shape), dtype=torch.uint8, device=device
         )
@@ -419,6 +423,15 @@ class RolloutBuffer:
         )
         self.teach = torch.full(
             (capacity, max(1, self.n_envs)), -1, dtype=torch.long, device=device
+        )
+        # Stage 27 M1: executive goal selection (default = K, the "none" choice,
+        # so an un-supplied step is behaviorally neutral).
+        self.exec_actions = torch.full(
+            (capacity, max(1, self.n_envs)), self.exec_dim,
+            dtype=torch.long, device=device,
+        )
+        self.exec_logps = torch.zeros(
+            (capacity, max(1, self.n_envs)), dtype=torch.float32, device=device
         )
         self.actions = torch.zeros((capacity, self.n_envs), dtype=torch.long, device=device)
         self.logprobs = torch.zeros((capacity, self.n_envs), dtype=torch.float32, device=device)
@@ -454,6 +467,8 @@ class RolloutBuffer:
         gru_state: np.ndarray | None = None,
         goal: np.ndarray | None = None,
         obj_slots: np.ndarray | None = None,
+        exec_action: np.ndarray | None = None,
+        exec_logp: np.ndarray | None = None,
     ) -> None:
         """Add ``n_envs`` transitions for one collected timestep.
 
@@ -490,6 +505,12 @@ class RolloutBuffer:
         if obj_slots is not None and self.obj_slot_dim > 0:
             _ov = np.asarray(obj_slots, dtype=np.float32).reshape(self.n_envs, -1)
             self.objslots[i, :, : _ov.shape[1]] = torch.from_numpy(_ov)
+        if exec_action is not None and self.exec_dim > 0:
+            self.exec_actions[i, :] = torch.as_tensor(
+                np.asarray(exec_action)).to(self.exec_actions.dtype)
+        if exec_logp is not None and self.exec_dim > 0:
+            self.exec_logps[i, :] = torch.as_tensor(
+                np.asarray(exec_logp)).to(self.exec_logps.dtype)
         self.actions[i] = torch.as_tensor(np.asarray(action)).to(self.actions.dtype)
         self.logprobs[i] = torch.as_tensor(np.asarray(logprob)).to(self.logprobs.dtype)
         self.values[i] = torch.as_tensor(np.asarray(value)).to(self.values.dtype)
@@ -518,6 +539,10 @@ class RolloutBuffer:
             if self.goal_dim > 0 else None,
             objslots=self.objslots[:T].reshape(T * N, self.obj_slot_dim)
             if self.obj_slot_dim > 0 else None,
+            exec_actions=self.exec_actions[:T].reshape(T * N)
+            if self.exec_dim > 0 else None,
+            exec_logps=self.exec_logps[:T].reshape(T * N)
+            if self.exec_dim > 0 else None,
         )
 
 
@@ -1157,6 +1182,35 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
     else:
         model = ActorCritic(obs_shape, num_actions, hidden=int(model_cfg.get("hidden_size", 64))).to(device)
         logger.info("Model: ActorCritic (hidden=%d)", int(model_cfg.get("hidden_size", 64)))
+    # Stage 27 M1: executive-goal selection head. Attached BEFORE the optimizer
+    # is built so its parameters train with the joint PPO objective (joint
+    # logp = action logp + exec logp). Gate: hierarchical trunk + single env
+    # (the commitment side channel lives on one env instance).
+    _exec_slots = int(env_cfg.get("occluder_obs_slots", 0))
+    _exec_want = bool(env_cfg.get("exec_goal_enabled", False))
+    _exec_freeze = bool(env_cfg.get("exec_goal_freeze", False))
+    if _exec_want and _exec_slots > 0 and use_hierarchical and n_envs == 1:
+        from src.models.goal_executive import GoalExecutive
+        model.exec_head = GoalExecutive(
+            int(model.d_model), num_slots=_exec_slots, slot_dim=3).to(device)
+        if _exec_freeze:
+            # Control arm (Stage 27 M1-B): the head still samples (uniform at
+            # zero-init) but receives no gradient -> isolates "shaping alone".
+            for _p in model.exec_head.parameters():
+                _p.requires_grad_(False)
+            logger.info("[exec] head FROZEN (control arm: uniform sampling)")
+        logger.info(
+            "[exec] GoalExecutive enabled: slots=%d choices=%d "
+            "(commit=%.3f settle=%.2f)",
+            _exec_slots, _exec_slots + 1,
+            float(env_cfg.get("exec_goal_commit_weight", 0.0)),
+            float(env_cfg.get("exec_goal_settle_bonus", 0.0)))
+    else:
+        model.exec_head = None
+        if _exec_want:
+            logger.warning(
+                "[exec] exec_goal_enabled ignored (requires hierarchical trunk, "
+                "occluder_obs_slots>0 and n_envs==1)")
     optimizer = torch.optim.Adam(
         [p for p in model.parameters() if p.requires_grad],
         lr=float(config["train"]["learning_rate"]),
@@ -1177,7 +1231,13 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                            gru_dim=model.d_model if _use_gru else 0,
                            goal_dim=21,
                            obj_slot_dim=(56 if bool((config.get("advanced", {}) or {}).get(
-                               "obj_slot_input", False)) else 0))
+                               "obj_slot_input", False)) else 0),
+                           exec_dim=(_exec_slots if getattr(model, "exec_head", None)
+                                     is not None else 0))
+    # Stage 27 M1: bounded exec-choice telemetry (reset each log window).
+    _exec_counts = (np.zeros(_exec_slots + 1, dtype=np.int64)
+                    if getattr(model, "exec_head", None) is not None
+                    else np.zeros(0))
 
     # Hierarchical manager buffer (smaller: every K steps)
     _is_hierarchical = use_hierarchical
@@ -3135,6 +3195,35 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                     action = torch.tensor([_pa], device=action.device,
                                           dtype=action.dtype)
                 logprob = dist.log_prob(action)     # (N,)
+                # --- Stage 27 M1: executive goal selection -------------------
+                # Sample one candidate (occlusion slot) or "none" from the
+                # learned head; the env resolves it to an event key and pays
+                # commitment shaping / one-shot settlement for THAT event.
+                _exec_a_np = None
+                _exec_lp_np = None
+                if getattr(model, "exec_head", None) is not None and n_envs == 1:
+                    _exh = (hidden if (_collect_cognitive and n_envs == 1)
+                            else getattr(model, "_last_hidden", None))
+                    if _exh is not None and prop_t is not None:
+                        try:
+                            from src.models.goal_executive import (
+                                slot_features_from_proprio)
+                            _ef, _ev = slot_features_from_proprio(
+                                prop_t, model.exec_head.num_slots)
+                            _elogits = model.exec_head(_exh, _ef, _ev)
+                            _edist = torch.distributions.Categorical(
+                                logits=_elogits)
+                            _esel = _edist.sample()
+                            _elp = _edist.log_prob(_esel)
+                            _exec_a_np = _esel.detach().cpu().numpy()
+                            _exec_lp_np = _elp.detach().cpu().numpy()
+                            _esel_i = int(_esel.reshape(-1)[0].item())
+                            if hasattr(env, "set_exec_goal"):
+                                env.set_exec_goal(_esel_i)
+                            if _exec_counts.size > 0:
+                                _exec_counts[min(_esel_i, _exec_counts.size - 1)] += 1
+                        except Exception as _ee:  # noqa: BLE001 - loud, never fatal
+                            logger.warning("[exec] selection failed: %s", _ee)
                 # --- Stage 20: hypothesis-deduction occlusion loop ---
                 # Occlusion event -> propose hypothesis (obj at last_known) ->
                 # maybe probe (walk toward last_known) -> verify on reveal OR
@@ -3865,6 +3954,8 @@ def train(config: dict[str, Any], smoke_only: bool, resume: Path | None) -> int:
                 gru_state=_gru_state_to_store,
                 goal=_goal_np[None, :],
                 obj_slots=_oslots_np[None, :],
+                exec_action=_exec_a_np,
+                exec_logp=_exec_lp_np,
             )
             t_buf_end = time.perf_counter()
 
@@ -4705,12 +4796,28 @@ and state.step % 50000 < rollout_capacity):
                 logits = torch.clamp(logits, -10.0, 10.0)
                 dist = torch.distributions.Categorical(logits=logits)
                 new_logprobs = dist.log_prob(batch.actions[mb_idx])
+                # Stage 27 M1: joint logp — the executive selection action
+                # shares this PPO ratio (recomputed from the same hidden, so
+                # goal-level credit flows through the control update).
+                _old_lp = batch.logprobs[mb_idx]
+                if (getattr(model, "exec_head", None) is not None
+                        and getattr(batch, "exec_actions", None) is not None
+                        and _mb_prop is not None):
+                    from src.models.goal_executive import (
+                        slot_features_from_proprio)
+                    _ef, _ev = slot_features_from_proprio(
+                        _mb_prop[mb_idx], model.exec_head.num_slots)
+                    _elogits = model.exec_head(hidden, _ef, _ev)
+                    _edist = torch.distributions.Categorical(logits=_elogits)
+                    new_logprobs = new_logprobs + _edist.log_prob(
+                        batch.exec_actions[mb_idx])
+                    _old_lp = _old_lp + batch.exec_logps[mb_idx]
                 # Stage 20h#7: hard-cap the ratio (not just PPO clip) so a
                 # single wildly-overconfident new policy cannot blow the
                 # unclipped term (observed 1e41 policy losses 14:40-17:20
                 # while clipfrac hovered 0.9+; adv itself exploded via a
                 # diverging value net -> GAE -> normalized targets).
-                ratio = (new_logprobs - batch.logprobs[mb_idx]).exp().clamp(0.0, 5.0)
+                ratio = (new_logprobs - _old_lp).exp().clamp(0.0, 5.0)
                 unclipped = ratio * adv_norm[mb_idx]
                 clipped = torch.clamp(ratio, 1.0 - ppo_clip, 1.0 + ppo_clip) * adv_norm[mb_idx]
                 policy_loss = -torch.min(unclipped, clipped).mean()
@@ -4730,7 +4837,7 @@ and state.step % 50000 < rollout_capacity):
                     beta=5.0
                 )
                 entropy = dist.entropy().mean()
-                approx_kl = ((batch.logprobs[mb_idx] - new_logprobs).mean()).detach()
+                approx_kl = ((_old_lp - new_logprobs).mean()).detach()
                 clipfrac = ((ratio - 1.0).abs() > ppo_clip).float().mean().detach()
                 loss = policy_loss + value_coef * value_loss - entropy_coef * entropy
                 # Stage 20h: BC imitation loss on teacher-labeled steps
@@ -5395,6 +5502,10 @@ and state.step % 50000 < rollout_capacity):
                 extras.append(f"logic={len(logic_engine)}")
             if language_gen is not None:
                 extras.append("speak=on")
+            if _exec_counts.size > 0 and _exec_counts.sum() > 0:
+                extras.append(
+                    "exec=" + ",".join(str(int(c)) for c in _exec_counts))
+                _exec_counts[:] = 0
             logger.info(
                 "step=%d ep=%d mean_ret=%.3f loss=%.4f(p=%.2f v=%.2f ent=%.3f kl=%.4f cf=%.2f bc=%.4f belief=%.4f fade=%.2f) mem_used=%.2fGB slope=%s %s",
                 state.step,

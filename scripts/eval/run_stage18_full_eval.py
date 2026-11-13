@@ -77,8 +77,27 @@ def _prop_to_tensor(env, device: torch.device) -> torch.Tensor | None:
     return t.to(device)
 
 
-def build_model(obs_shape, num_actions, model_cfg, device, n_layers, proprio_dim=0):
-    return HierarchicalActorCritic(
+def exec_select_step(model, env, prop_t):
+    """Stage 27 M1: argmax executive goal choice + env commitment (eval)."""
+    head = getattr(model, "exec_head", None)
+    if head is None or prop_t is None or not hasattr(env, "set_exec_goal"):
+        return
+    try:
+        from src.models.goal_executive import slot_features_from_proprio
+        h = getattr(model, "_last_hidden", None)
+        if h is None:
+            return
+        feats, valid = slot_features_from_proprio(prop_t, head.num_slots)
+        with torch.no_grad():
+            logits = head(h, feats, valid)
+        env.set_exec_goal(int(torch.argmax(logits, dim=-1).reshape(-1)[0].item()))
+    except Exception as _e:  # noqa: BLE001 - loud: eval must not silently differ
+        print(f"[s18e] !! exec selection failed: {_e}")
+
+
+def build_model(obs_shape, num_actions, model_cfg, device, n_layers, proprio_dim=0,
+                exec_slots=0):
+    model = HierarchicalActorCritic(
         obs_shape=obs_shape,
         num_actions=num_actions,
         d_model=int(model_cfg.get("hidden_size", 128)),
@@ -97,6 +116,13 @@ def build_model(obs_shape, num_actions, model_cfg, device, n_layers, proprio_dim
         sub_goal_every=int(model_cfg.get("sub_goal_every", 10)),
         proprio_dim=int(proprio_dim),  # Stage 20f: proprio incl. occluder slots
     ).to(device)
+    if int(exec_slots) > 0:
+        from src.models.goal_executive import GoalExecutive
+        model.exec_head = GoalExecutive(
+            int(model.d_model), num_slots=int(exec_slots), slot_dim=3).to(device)
+    else:
+        model.exec_head = None
+    return model
 
 
 def measure_milestones(model, env, device, episodes=20, max_steps=300, epsilon=0.1,
@@ -126,6 +152,7 @@ def measure_milestones(model, env, device, episodes=20, max_steps=300, epsilon=0
                 action = int(rng.randint(0, env.action_space_n))
             else:
                 action = int(torch.argmax(logits, dim=-1).item())
+            exec_select_step(model, env, prop_t)
             step_out = env.step(action)
             obs = step_out.obs
             done = bool(step_out.terminated) or bool(step_out.truncated)
@@ -345,6 +372,11 @@ def main():
             camera_fovy=float(cfg["env"].get("camera_fovy", 60.0)),
             force_task_type=str(cfg["env"].get("force_task_type", "")),
             learner_spawn_radius=float(getattr(args, "op_spawn_radius", 0.0)),
+            exec_goal_enabled=bool(cfg["env"].get("exec_goal_enabled", False)),
+            exec_goal_commit_weight=float(
+                cfg["env"].get("exec_goal_commit_weight", 0.0)),
+            exec_goal_settle_bonus=float(
+                cfg["env"].get("exec_goal_settle_bonus", 0.0)),
         )
         if probe == "cross":
             # 20i C-probe: replay the training crossing curriculum (fixed
@@ -380,7 +412,10 @@ def main():
     if n_layers <= 0:
         n_layers = int(model_cfg.get("hybrid_n_layers", 7))
     model = build_model(env.observation_shape, env.action_space_n, model_cfg, device, n_layers,
-                        proprio_dim=int(getattr(env, "proprio_dim", 0)))
+                        proprio_dim=int(getattr(env, "proprio_dim", 0)),
+                        exec_slots=(int(cfg["env"].get("occluder_obs_slots", 0))
+                                    if bool(cfg["env"].get(
+                                        "exec_goal_enabled", False)) else 0))
     ck = torch.load(args.ckpt, map_location="cpu")
     sd = ck.get("model_state") if isinstance(ck, dict) else ck
     missing, unexpected = model.load_state_dict(sd, strict=False)

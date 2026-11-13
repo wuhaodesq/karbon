@@ -3,6 +3,42 @@
 All notable changes to this project are documented here.
 本项目所有值得记录的变更。
 
+### Stage 27 M1 实现完成 + 烟测通过 (2026-11-13) 🧠
+
+- **实现**: `src/models/goal_executive.py` (`GoalExecutive`: hidden+3槽 ->
+  4 logits, 零初始化; `slot_features_from_proprio`); env 侧
+  `set_exec_goal`/`_exec_goal_key`/commit 塑形/一次性结算
+  (复用 `_reveal_bonus_pending` 单槽 max 语义); RolloutBuffer 新增
+  `exec_actions`/`exec_logps` 两列, PPO **联合 logp** (选择信用经 GAE 回传);
+  eval 脚本 argmax 同构 (run_stage18_full_eval / op_failure_diag)。
+- **配置**: `env.exec_goal_enabled/commit_weight/settle_bonus`, 默认关
+  (= 与现状逐位一致); 本地 `configs/stage20_hypothesis_v2.yaml` 已镜像,
+  服务器配置未动 (烟测用独立 execsmoke 副本 + 独立 ckpt/log 目录)。
+- **烟测 (服务器, osmesa)**: 200 步 rollout + PPO 更新 EXIT=0, 选择失败 0;
+  期间抓到并修复 exec 头建在 CPU 的设备错位 (hidden 在 cuda)。
+  单测: 模块 5 + env 6, 服务器 10/10 通过 (本地 mujoco 不可用, env 组跳过)。
+- 待启动: 三臂 A/B/C 微调 (预注册于 docs/stage27_executive_design.md §5).
+- **三臂启动 (2026-11-13 07:30)**: 预注册修订 (开工前, 零数据): A 臂复用主链
+  同起点 eval (机制关路径逐位一致); B/C 各 1.2M 步, 从同一 checkpoint
+  (067601760) 分叉, 700K kill 线; B=冻结均匀随机头 (`exec_goal_freeze`),
+  C=PPO 联合 logp 训练。顺序队列 `/root/run_exec_arms.sh` (B→C), osmesa +
+  独立 ckpt/log 目录, 与主链共享 GPU (主链不中断)。
+
+### Stage 27 M1 设计: 目标级执行层 (2026-11-13) 🧠
+
+- **B10 窗口假设证伪**: 代码验证 `occluder_reach_hold_max_steps=15` 只限
+  圈内驻留; 远处事件的稠密 approach 项 (target 0.3 / shaping 0.3 /
+  orient 0.1) 按事件生命周期支付, 不受 cap 限制。OP 卡点不是奖励截断,
+  而是多事件场中缺少目标承诺 (commitment)。
+- **设计 (docs/stage27_executive_design.md)**: 有界目标缓冲 (K=3=观测槽) +
+  学习选择头 `GoalExecutive` (hidden+slots -> 4 logits, PPO 联合 logp) +
+  env 侧承诺状态机 (`set_exec_goal` -> 事件 key) + 执行塑形 (默认 0.15) +
+  结算一次性奖励 (复用 `_reveal_bonus_pending`, B10 安全)。
+- **三臂预注册**: A 基线 / B 冻结均匀随机 / C 训练; C 成功 = trained-world
+  OP ≥0.35 连续 3 次 full eval + 小世界 ≥0.5 + physics 回归 ≥0.85。
+  能力声明 = 执行级选择与维持 (非深思熟虑规划); chain 阶段目标留给 M2。
+
+
 ### P-A 判定: 多步链未学会 (2026-11-13) ↩️
 
 - 3 段强制 key_door 练习 + 携带势能塑形: door 0.05→**0.10** (判据 ≥0.5,
